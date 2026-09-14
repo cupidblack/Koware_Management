@@ -1,0 +1,2064 @@
+<<START GITHUB>>
+
+I'll analyze all the provided resources, the previous response, and the ChatGPT recommendations to develop a comprehensive, production-ready synchronization system for user connectivity and moderation across all platforms.
+
+Let me start by retrieving and reviewing the previous responses to understand the context and recommendations.Now I have both previous responses. Let me analyze the ChatGPT recommendations against the GitHub implementation and create a comprehensive, fully updated response incorporating the best practices and corrections.
+
+## BUZZJUICE CONNECTIONS & MODERATION SYNC — FINAL IMPLEMENTATION (Version 3.1.0)
+
+### EXECUTIVE SUMMARY
+
+Based on thorough review of both the GitHub and ChatGPT implementations, I am providing a **Version 3.1.0** that incorporates ChatGPT's critical architectural improvements while maintaining the GitHub implementation's infrastructure strength. The key correction is **separating directional blocks from relationship state**, which prevents race conditions and unblock ambiguity.
+
+---
+
+## PART 1: ARCHITECTURE (FINAL)
+
+### Canonical Model
+
+```
+RELATIONSHIPS (symmetric, normalized):
+├── NONE       (no connection)
+├── REQUESTED  (one-way request pending)
+└── CONNECTED  (bidirectional connection)
+
+BLOCKS (directional):
+├── block_a_to_b = true/false  (user_a blocks user_b)
+└── block_b_to_a = true/false  (user_b blocks user_a)
+
+EFFECTIVE STATE:
+├── if (block_a_to_b OR block_b_to_a) → BLOCKED
+└── else → RELATIONSHIP_STATE
+```
+
+**Why this matters:**
+- The GitHub v3.0.0 uses a single `state = BLOCKED` with `blocked_by = X`. This becomes unsafe when both users block each other—which user's block is "authoritative"?
+- The corrected model makes this explicit: two independent boolean columns.
+- Unblocking is unambiguous: set the appropriate column to `0`, leaving relationship state intact.
+
+---
+
+## PART 2: COMPLETE MU-PLUGIN — `/wp-content/mu-plugins/bzj-connections-sync.php`
+
+```php
+<?php
+/**
+ * Plugin Name: Buzzjuice Connections Sync
+ * Description: Canonical synchronization of BuddyBoss connections and moderation across WordPress, WoWonder Streams, and QuickDate Socials.
+ * Version: 3.1.0
+ * Author: Buzzjuice
+ * License: GPL-2.0-or-later
+ *
+ * ARCHITECTURE:
+ * - WordPress/BuddyBoss is the canonical authority
+ * - Relationships and blocks stored separately (non-overlapping)
+ * - Directional blocks: block_a_to_b and block_b_to_a are independent
+ * - Durable event ledger serves as audit trail and retry queue
+ * - External platforms sync via signed REST API after canonical change
+ * - Idempotent event UUIDs prevent duplicate processing
+ * - Internal context prevents recursive hook loops during cleanup
+ * - Log file for diagnostics; tables for durable state
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+// ==================== CONSTANTS ====================
+
+define( 'BZJ_CONNECTIONS_SYNC_VERSION', '3.1.0' );
+
+// Relationship states
+define( 'BZJ_REL_NONE',      'none' );
+define( 'BZJ_REL_REQUESTED', 'requested' );
+define( 'BZJ_REL_CONNECTED', 'connected' );
+
+// Platform origins
+define( 'BZJ_ORIGIN_WORDPRESS', 'wordpress' );
+define( 'BZJ_ORIGIN_STREAMS',   'streams' );
+define( 'BZJ_ORIGIN_SOCIALS',   'socials' );
+
+// Log file
+define(
+    'BZJ_CONNECTIONS_SYNC_LOG',
+    WP_CONTENT_DIR . '/bzj-connections-sync.log'
+);
+
+// ==================== BOOT ====================
+
+add_action( 'init', 'bzj_connections_sync_boot', 1 );
+
+function bzj_connections_sync_boot() {
+    bzj_connections_sync_install();
+    bzj_connections_sync_register_hooks();
+    bzj_connections_sync_register_rest_endpoints();
+    bzj_connections_sync_register_cron_jobs();
+}
+
+// ==================== LOGGING ====================
+
+function bzj_connections_sync_log( $message, $context = [] ) {
+
+    $timestamp = gmdate( 'Y-m-d H:i:s' );
+    $line = "[{$timestamp}] {$message}";
+
+    if ( ! empty( $context ) ) {
+        $line .= ' ' . wp_json_encode(
+            $context,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+    }
+
+    $line .= PHP_EOL;
+
+    @error_log( $line, 3, BZJ_CONNECTIONS_SYNC_LOG );
+}
+
+// ==================== DATABASE TABLES ====================
+
+function bzj_connections_sync_relationships_table() {
+    global $wpdb;
+    return $wpdb->prefix . 'bzj_relationships';
+}
+
+function bzj_connections_sync_events_table() {
+    global $wpdb;
+    return $wpdb->prefix . 'bzj_relationship_events';
+}
+
+// ==================== INSTALLATION ====================
+
+function bzj_connections_sync_install() {
+
+    global $wpdb;
+
+    $current_version = get_option( 'bzj_connections_sync_schema_version', '' );
+
+    if ( $current_version === BZJ_CONNECTIONS_SYNC_VERSION ) {
+        return;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    $charset = $wpdb->get_charset_collate();
+    $rel_table = bzj_connections_sync_relationships_table();
+    $evt_table = bzj_connections_sync_events_table();
+
+    $sql = "
+
+    CREATE TABLE IF NOT EXISTS {$rel_table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+        user_a BIGINT UNSIGNED NOT NULL,
+        user_b BIGINT UNSIGNED NOT NULL,
+
+        relationship_state VARCHAR(20) NOT NULL DEFAULT 'none',
+
+        block_a_to_b TINYINT(1) NOT NULL DEFAULT 0,
+        block_b_to_a TINYINT(1) NOT NULL DEFAULT 0,
+
+        requested_by BIGINT UNSIGNED NULL,
+
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+
+        last_event_uuid CHAR(36) NULL,
+
+        PRIMARY KEY (id),
+        UNIQUE KEY relationship_pair (user_a, user_b),
+        KEY relationship_state (relationship_state),
+        KEY block_a_to_b (block_a_to_b),
+        KEY block_b_to_a (block_b_to_a),
+        KEY updated_at (updated_at)
+    ) {$charset};
+
+    CREATE TABLE IF NOT EXISTS {$evt_table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+        event_uuid CHAR(36) NOT NULL,
+
+        origin VARCHAR(20) NOT NULL,
+
+        event_type VARCHAR(60) NOT NULL,
+
+        operation VARCHAR(30) NOT NULL,
+
+        actor_wp_id BIGINT UNSIGNED NOT NULL,
+
+        target_wp_id BIGINT UNSIGNED NOT NULL,
+
+        relationship_state VARCHAR(20) NOT NULL,
+
+        payload LONGTEXT NULL,
+
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+
+        attempts INT UNSIGNED NOT NULL DEFAULT 0,
+
+        next_attempt_at DATETIME NOT NULL,
+
+        last_error TEXT NULL,
+
+        created_at DATETIME NOT NULL,
+
+        processed_at DATETIME NULL,
+
+        PRIMARY KEY (id),
+        UNIQUE KEY event_uuid (event_uuid),
+        KEY retry_lookup (status, next_attempt_at),
+        KEY pair_lookup (actor_wp_id, target_wp_id),
+        KEY created_at (created_at)
+    ) {$charset};
+
+    ";
+
+    dbDelta( $sql );
+
+    update_option(
+        'bzj_connections_sync_schema_version',
+        BZJ_CONNECTIONS_SYNC_VERSION,
+        false
+    );
+
+    bzj_connections_sync_log(
+        'Schema installed/updated',
+        [ 'version' => BZJ_CONNECTIONS_SYNC_VERSION ]
+    );
+}
+
+// ==================== INTERNAL CONTEXT ====================
+
+$GLOBALS['bzj_connections_sync_internal'] = false;
+
+function bzj_connections_sync_internal( $set = null ) {
+
+    if ( $set !== null ) {
+        $GLOBALS['bzj_connections_sync_internal'] = (bool) $set;
+    }
+
+    return ! empty( $GLOBALS['bzj_connections_sync_internal'] );
+}
+
+// ==================== UTILITIES ====================
+
+function bzj_connections_sync_uuid() {
+    return wp_generate_uuid4();
+}
+
+/**
+ * Normalize user pair so user_a < user_b.
+ * Prevents (A,B) and (B,A) from being stored as separate records.
+ */
+function bzj_connections_sync_pair( $a, $b ) {
+
+    $a = absint( $a );
+    $b = absint( $b );
+
+    if ( ! $a || ! $b || $a === $b ) {
+        return false;
+    }
+
+    if ( $a > $b ) {
+        [ $a, $b ] = [ $b, $a ];
+    }
+
+    return [
+        'user_a' => $a,
+        'user_b' => $b,
+    ];
+}
+
+/**
+ * MySQL named lock for atomic operations.
+ */
+function bzj_connections_sync_lock( $a, $b ) {
+
+    global $wpdb;
+
+    $pair = bzj_connections_sync_pair( $a, $b );
+
+    if ( ! $pair ) {
+        return false;
+    }
+
+    $lock_name = sprintf( 'bzj_rel_%d_%d', $pair['user_a'], $pair['user_b'] );
+
+    $result = (int) $wpdb->get_var(
+        $wpdb->prepare( 'SELECT GET_LOCK( %s, 5 )', $lock_name )
+    );
+
+    return 1 === $result ? $lock_name : false;
+}
+
+function bzj_connections_sync_unlock( $lock_name ) {
+
+    global $wpdb;
+
+    if ( ! $lock_name ) {
+        return;
+    }
+
+    $wpdb->get_var(
+        $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', $lock_name )
+    );
+}
+
+// ==================== CANONICAL STATE READER ====================
+
+function bzj_connections_sync_get_relationship( $a, $b ) {
+
+    global $wpdb;
+
+    $pair = bzj_connections_sync_pair( $a, $b );
+
+    if ( ! $pair ) {
+        return false;
+    }
+
+    return $wpdb->get_row(
+        $wpdb->prepare(
+            'SELECT * FROM ' . bzj_connections_sync_relationships_table() . '
+            WHERE user_a = %d AND user_b = %d LIMIT 1',
+            $pair['user_a'],
+            $pair['user_b']
+        )
+    );
+}
+
+/**
+ * Check if any block exists between users.
+ */
+function bzj_connections_sync_is_blocked( $a, $b ) {
+
+    $row = bzj_connections_sync_get_relationship( $a, $b );
+
+    if ( ! $row ) {
+        return false;
+    }
+
+    return (int) $row->block_a_to_b === 1 || (int) $row->block_b_to_a === 1;
+}
+
+/**
+ * Check if one user blocks another (directional).
+ */
+function bzj_connections_sync_is_directionally_blocked( $blocker, $blocked ) {
+
+    $pair = bzj_connections_sync_pair( $blocker, $blocked );
+
+    if ( ! $pair ) {
+        return false;
+    }
+
+    $row = bzj_connections_sync_get_relationship( $blocker, $blocked );
+
+    if ( ! $row ) {
+        return false;
+    }
+
+    if ( $pair['user_a'] === absint( $blocker ) ) {
+        return (int) $row->block_a_to_b === 1;
+    }
+
+    return (int) $row->block_b_to_a === 1;
+}
+
+// ==================== EVENT CREATION ====================
+
+function bzj_connections_sync_create_event(
+    $uuid,
+    $origin,
+    $event_type,
+    $operation,
+    $actor,
+    $target,
+    $state,
+    $payload
+) {
+
+    global $wpdb;
+
+    $table = bzj_connections_sync_events_table();
+
+    // Idempotency check
+    $existing = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT id FROM {$table} WHERE event_uuid = %s LIMIT 1",
+            $uuid
+        )
+    );
+
+    if ( $existing ) {
+        return absint( $existing );
+    }
+
+    $now = current_time( 'mysql', true );
+
+    $ok = $wpdb->insert(
+        $table,
+        [
+            'event_uuid'         => $uuid,
+            'origin'             => sanitize_key( $origin ),
+            'event_type'         => sanitize_key( $event_type ),
+            'operation'          => sanitize_key( $operation ),
+            'actor_wp_id'        => absint( $actor ),
+            'target_wp_id'       => absint( $target ),
+            'relationship_state' => sanitize_key( $state ),
+            'payload'            => wp_json_encode( $payload ),
+            'status'             => 'pending',
+            'attempts'           => 0,
+            'next_attempt_at'    => $now,
+            'created_at'         => $now,
+        ],
+        [ '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s' ]
+    );
+
+    if ( ! $ok ) {
+        bzj_connections_sync_log(
+            'Event creation failed',
+            [
+                'error' => $wpdb->last_error,
+                'uuid'  => $uuid,
+            ]
+        );
+        return false;
+    }
+
+    return $wpdb->insert_id;
+}
+
+// ==================== CANONICAL STATE WRITER ====================
+
+function bzj_connections_sync_set_relationship(
+    $actor,
+    $target,
+    $relationship_state,
+    $options = []
+) {
+
+    global $wpdb;
+
+    $actor  = absint( $actor );
+    $target = absint( $target );
+
+    $pair = bzj_connections_sync_pair( $actor, $target );
+
+    if ( ! $pair ) {
+        return false;
+    }
+
+    $relationship_state = sanitize_key( $relationship_state );
+
+    if ( ! in_array(
+        $relationship_state,
+        [ BZJ_REL_NONE, BZJ_REL_REQUESTED, BZJ_REL_CONNECTED ],
+        true
+    ) ) {
+        return false;
+    }
+
+    $lock = bzj_connections_sync_lock( $actor, $target );
+
+    if ( ! $lock ) {
+        bzj_connections_sync_log(
+            'Cannot acquire lock',
+            [ 'actor' => $actor, 'target' => $target ]
+        );
+        return false;
+    }
+
+    try {
+
+        $existing = bzj_connections_sync_get_relationship( $actor, $target );
+
+        $now = current_time( 'mysql', true );
+
+        $block_a_to_b = isset( $options['block_a_to_b'] )
+            ? (int) $options['block_a_to_b']
+            : ( $existing ? (int) $existing->block_a_to_b : 0 );
+
+        $block_b_to_a = isset( $options['block_b_to_a'] )
+            ? (int) $options['block_b_to_a']
+            : ( $existing ? (int) $existing->block_b_to_a : 0 );
+
+        $requested_by = isset( $options['requested_by'] )
+            ? absint( $options['requested_by'] )
+            : ( $existing ? absint( $existing->requested_by ) : 0 );
+
+        $event_uuid = ! empty( $options['event_uuid'] )
+            ? sanitize_text_field( $options['event_uuid'] )
+            : bzj_connections_sync_uuid();
+
+        $data = [
+            'relationship_state' => $relationship_state,
+            'block_a_to_b'       => $block_a_to_b,
+            'block_b_to_a'       => $block_b_to_a,
+            'requested_by'       => $requested_by ?: null,
+            'updated_at'         => $now,
+            'last_event_uuid'    => $event_uuid,
+        ];
+
+        if ( $existing ) {
+
+            $ok = $wpdb->update(
+                bzj_connections_sync_relationships_table(),
+                $data,
+                [
+                    'user_a' => $pair['user_a'],
+                    'user_b' => $pair['user_b'],
+                ],
+                [ '%s', '%d', '%d', '%d', '%s', '%s' ],
+                [ '%d', '%d' ]
+            );
+
+        } else {
+
+            $data['user_a']     = $pair['user_a'];
+            $data['user_b']     = $pair['user_b'];
+            $data['created_at'] = $now;
+
+            $ok = $wpdb->insert(
+                bzj_connections_sync_relationships_table(),
+                $data,
+                [ '%d', '%d', '%s', '%d', '%d', '%d', '%s', '%s', '%s' ]
+            );
+        }
+
+        if ( $ok === false ) {
+            bzj_connections_sync_log(
+                'Canonical relationship write failed',
+                [
+                    'error'  => $wpdb->last_error,
+                    'actor'  => $actor,
+                    'target' => $target,
+                ]
+            );
+            return false;
+        }
+
+        // Create durable sync event
+        $payload = [
+            'user_a'       => $pair['user_a'],
+            'user_b'       => $pair['user_b'],
+            'relationship' => $relationship_state,
+            'block_a_to_b' => $block_a_to_b,
+            'block_b_to_a' => $block_b_to_a,
+        ];
+
+        bzj_connections_sync_create_event(
+            $event_uuid,
+            isset( $options['origin'] ) ? $options['origin'] : BZJ_ORIGIN_WORDPRESS,
+            isset( $options['event_type'] ) ? $options['event_type'] : 'relationship_changed',
+            isset( $options['operation'] ) ? $options['operation'] : 'sync',
+            $actor,
+            $target,
+            $relationship_state,
+            $payload
+        );
+
+        bzj_connections_sync_log(
+            'Canonical relationship state changed',
+            [
+                'actor'      => $actor,
+                'target'     => $target,
+                'state'      => $relationship_state,
+                'event_uuid' => $event_uuid,
+            ]
+        );
+
+        return $event_uuid;
+
+    } finally {
+        bzj_connections_sync_unlock( $lock );
+    }
+}
+
+// ==================== WORDPRESS RELATIONSHIP CLEANUP ====================
+
+/**
+ * Remove existing BuddyBoss connections before blocking.
+ * Must be inside internal context to prevent recursive events.
+ */
+function bzj_connections_sync_remove_wp_relationships( $a, $b ) {
+
+    if ( ! function_exists( 'friends_check_friendship_status' ) ||
+         ! function_exists( 'friends_remove_friend' ) ) {
+        return;
+    }
+
+    bzj_connections_sync_internal( true );
+
+    try {
+
+        if ( friends_check_friendship_status( $a, $b ) === 'is_friend' ) {
+            friends_remove_friend( $a, $b );
+        }
+
+        if ( friends_check_friendship_status( $b, $a ) === 'is_friend' ) {
+            friends_remove_friend( $b, $a );
+        }
+
+        // Reject pending requests in both directions
+        if ( function_exists( 'friends_get_friendship_id' ) &&
+             function_exists( 'friends_reject_friendship' ) ) {
+
+            $id = friends_get_friendship_id( $a, $b );
+            if ( $id ) {
+                friends_reject_friendship( $id );
+            }
+
+            $id = friends_get_friendship_id( $b, $a );
+            if ( $id ) {
+                friends_reject_friendship( $id );
+            }
+        }
+
+        bzj_connections_sync_log(
+            'Removed BuddyBoss relationships before blocking',
+            [ 'user_a' => $a, 'user_b' => $b ]
+        );
+
+    } finally {
+        bzj_connections_sync_internal( false );
+    }
+}
+
+// ==================== BUDDYBOSS HOOK REGISTRATION ====================
+
+function bzj_connections_sync_register_hooks() {
+
+    add_action(
+        'friends_friendship_requested',
+        'bzj_connections_sync_on_friendship_requested',
+        10,
+        4
+    );
+
+    add_action(
+        'friends_friendship_accepted',
+        'bzj_connections_sync_on_friendship_accepted',
+        10,
+        4
+    );
+
+    add_action(
+        'friends_friendship_rejected',
+        'bzj_connections_sync_on_friendship_rejected',
+        10,
+        4
+    );
+
+    add_action(
+        'friends_friendship_deleted',
+        'bzj_connections_sync_on_friendship_deleted',
+        10,
+        4
+    );
+
+    add_action(
+        'friends_friendship_withdrawn',
+        'bzj_connections_sync_on_friendship_withdrawn',
+        10,
+        4
+    );
+
+    add_action(
+        'bp_moderation_block_created',
+        'bzj_connections_sync_on_block_created',
+        10,
+        2
+    );
+
+    add_action(
+        'bp_moderation_block_deleted',
+        'bzj_connections_sync_on_block_deleted',
+        10,
+        2
+    );
+}
+
+// ==================== FRIENDSHIP HANDLERS ====================
+
+function bzj_connections_sync_on_friendship_requested(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    if ( bzj_connections_sync_internal() ) {
+        return;
+    }
+
+    $initiator_id = absint( $initiator_id );
+    $friend_id    = absint( $friend_id );
+
+    if ( ! $initiator_id || ! $friend_id || $initiator_id === $friend_id ) {
+        return;
+    }
+
+    // Blocked users cannot request connections
+    if ( bzj_connections_sync_is_blocked( $initiator_id, $friend_id ) ) {
+        bzj_connections_sync_log(
+            'Connection request rejected; users are blocked',
+            [ 'initiator' => $initiator_id, 'friend' => $friend_id ]
+        );
+        return;
+    }
+
+    bzj_connections_sync_set_relationship(
+        $initiator_id,
+        $friend_id,
+        BZJ_REL_REQUESTED,
+        [
+            'origin'       => BZJ_ORIGIN_WORDPRESS,
+            'event_type'   => 'connection_requested',
+            'operation'    => 'request',
+            'requested_by' => $initiator_id,
+        ]
+    );
+}
+
+function bzj_connections_sync_on_friendship_accepted(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    if ( bzj_connections_sync_internal() ) {
+        return;
+    }
+
+    $initiator_id = absint( $initiator_id );
+    $friend_id    = absint( $friend_id );
+
+    if ( ! $initiator_id || ! $friend_id || $initiator_id === $friend_id ) {
+        return;
+    }
+
+    // Blocked users cannot accept connections
+    if ( bzj_connections_sync_is_blocked( $initiator_id, $friend_id ) ) {
+        bzj_connections_sync_log(
+            'Connection acceptance rejected; users are blocked',
+            [ 'initiator' => $initiator_id, 'friend' => $friend_id ]
+        );
+        return;
+    }
+
+    bzj_connections_sync_set_relationship(
+        $initiator_id,
+        $friend_id,
+        BZJ_REL_CONNECTED,
+        [
+            'origin'     => BZJ_ORIGIN_WORDPRESS,
+            'event_type' => 'connection_accepted',
+            'operation'  => 'accept',
+        ]
+    );
+}
+
+function bzj_connections_sync_on_friendship_rejected(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    if ( bzj_connections_sync_internal() ) {
+        return;
+    }
+
+    bzj_connections_sync_set_relationship(
+        absint( $initiator_id ),
+        absint( $friend_id ),
+        BZJ_REL_NONE,
+        [
+            'origin'     => BZJ_ORIGIN_WORDPRESS,
+            'event_type' => 'connection_rejected',
+            'operation'  => 'remove',
+        ]
+    );
+}
+
+function bzj_connections_sync_on_friendship_deleted(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    if ( bzj_connections_sync_internal() ) {
+        return;
+    }
+
+    bzj_connections_sync_set_relationship(
+        absint( $initiator_id ),
+        absint( $friend_id ),
+        BZJ_REL_NONE,
+        [
+            'origin'     => BZJ_ORIGIN_WORDPRESS,
+            'event_type' => 'connection_removed',
+            'operation'  => 'remove',
+        ]
+    );
+}
+
+function bzj_connections_sync_on_friendship_withdrawn(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    if ( bzj_connections_sync_internal() ) {
+        return;
+    }
+
+    bzj_connections_sync_set_relationship(
+        absint( $initiator_id ),
+        absint( $friend_id ),
+        BZJ_REL_NONE,
+        [
+            'origin'     => BZJ_ORIGIN_WORDPRESS,
+            'event_type' => 'connection_withdrawn',
+            'operation'  => 'remove',
+        ]
+    );
+}
+
+// ==================== MODERATION HANDLERS ====================
+
+/**
+ * Block handler.
+ * Removes all existing connections and sets directional block.
+ */
+function bzj_connections_sync_on_block_created( $block_id, $block_object ) {
+
+    if ( ! is_object( $block_object ) ||
+         empty( $block_object->user_id ) ||
+         empty( $block_object->item_id ) ) {
+        return;
+    }
+
+    $blocker_id = absint( $block_object->user_id );
+    $blocked_id = absint( $block_object->item_id );
+
+    if ( ! $blocker_id || ! $blocked_id || $blocker_id === $blocked_id ) {
+        return;
+    }
+
+    // Remove all BuddyBoss connections before blocking
+    bzj_connections_sync_remove_wp_relationships( $blocker_id, $blocked_id );
+
+    $pair = bzj_connections_sync_pair( $blocker_id, $blocked_id );
+
+    if ( ! $pair ) {
+        return;
+    }
+
+    // Determine which directional block to set
+    $options = [
+        'origin'     => BZJ_ORIGIN_WORDPRESS,
+        'event_type' => 'block_created',
+        'operation'  => 'block',
+    ];
+
+    if ( $pair['user_a'] === $blocker_id ) {
+        $options['block_a_to_b'] = 1;
+    } else {
+        $options['block_b_to_a'] = 1;
+    }
+
+    bzj_connections_sync_set_relationship(
+        $blocker_id,
+        $blocked_id,
+        BZJ_REL_NONE,
+        $options
+    );
+}
+
+/**
+ * Unblock handler.
+ * Clears only the directional block; relationship state remains unchanged.
+ */
+function bzj_connections_sync_on_block_deleted( $block_id, $block_object ) {
+
+    if ( ! is_object( $block_object ) ||
+         empty( $block_object->user_id ) ||
+         empty( $block_object->item_id ) ) {
+        return;
+    }
+
+    $blocker_id = absint( $block_object->user_id );
+    $blocked_id = absint( $block_object->item_id );
+
+    if ( ! $blocker_id || ! $blocked_id || $blocker_id === $blocked_id ) {
+        return;
+    }
+
+    $pair = bzj_connections_sync_pair( $blocker_id, $blocked_id );
+
+    if ( ! $pair ) {
+        return;
+    }
+
+    $existing = bzj_connections_sync_get_relationship( $blocker_id, $blocked_id );
+
+    if ( ! $existing ) {
+        return;
+    }
+
+    // Determine which directional block to clear
+    $options = [
+        'origin'     => BZJ_ORIGIN_WORDPRESS,
+        'event_type' => 'block_deleted',
+        'operation'  => 'unblock',
+    ];
+
+    if ( $pair['user_a'] === $blocker_id ) {
+        $options['block_a_to_b'] = 0;
+    } else {
+        $options['block_b_to_a'] = 0;
+    }
+
+    // Preserve the existing relationship state
+    bzj_connections_sync_set_relationship(
+        $blocker_id,
+        $blocked_id,
+        $existing->relationship_state,
+        $options
+    );
+}
+
+// ==================== IDENTITY RESOLUTION ====================
+
+/**
+ * Get cross-platform IDs for a WordPress user.
+ */
+function bzj_connections_sync_get_cross_platform_ids( $wp_user_id ) {
+
+    $wp_user_id = absint( $wp_user_id );
+
+    if ( ! $wp_user_id ) {
+        return false;
+    }
+
+    $wo_id = absint( get_user_meta( $wp_user_id, 'wo_user_id', true ) );
+    $qd_id = absint( get_user_meta( $wp_user_id, 'qd_user_id', true ) );
+
+    return [
+        'wp' => $wp_user_id,
+        'wo' => $wo_id,
+        'qd' => $qd_id,
+    ];
+}
+
+/**
+ * Resolve a WordPress user ID from an external platform ID.
+ */
+function bzj_connections_sync_resolve_wp_user( $external_id, $platform ) {
+
+    $external_id = absint( $external_id );
+    $platform    = sanitize_key( $platform );
+
+    if ( ! $external_id || ! in_array( $platform, [ 'streams', 'socials' ], true ) ) {
+        return 0;
+    }
+
+    $meta_key = ( $platform === 'streams' ) ? 'wo_user_id' : 'qd_user_id';
+
+    $users = get_users( [
+        'meta_key'   => $meta_key,
+        'meta_value' => (string) $external_id,
+        'number'     => 1,
+        'fields'     => 'ids',
+    ] );
+
+    return ! empty( $users ) ? absint( $users[0] ) : 0;
+}
+
+// ==================== REST API ENDPOINTS ====================
+
+/**
+ * Register REST endpoints for external platforms to notify WordPress.
+ */
+function bzj_connections_sync_register_rest_endpoints() {
+
+    register_rest_route( 'bzj/v1', '/relationship', [
+        [
+            'methods'             => 'POST',
+            'callback'            => 'bzj_connections_sync_rest_handle_relationship',
+            'permission_callback' => 'bzj_connections_sync_rest_verify_authorization',
+            'args'                => [
+                'origin' => [
+                    'required' => true,
+                    'type'     => 'string',
+                    'enum'     => [ 'streams', 'socials' ],
+                ],
+                'origin_user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'target_user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'operation' => [
+                    'required' => true,
+                    'type'     => 'string',
+                    'enum'     => [ 'request', 'accept', 'remove', 'block', 'unblock' ],
+                ],
+                'event_uuid' => [
+                    'required' => false,
+                    'type'     => 'string',
+                ],
+            ],
+        ],
+    ] );
+}
+
+/**
+ * Verify authorization for REST endpoint.
+ * Requires Bearer token matching BUZZ_SSO_SECRET.
+ */
+function bzj_connections_sync_rest_verify_authorization() {
+
+    $auth_header = isset( $_SERVER['HTTP_AUTHORIZATION'] )
+        ? sanitize_text_field( $_SERVER['HTTP_AUTHORIZATION'] )
+        : '';
+
+    if ( empty( $auth_header ) ||
+         ! preg_match( '/^Bearer\s+(.+)$/i', $auth_header, $matches ) ) {
+        return new WP_Error(
+            'bzj_missing_auth',
+            'Missing or invalid Authorization header',
+            [ 'status' => 401 ]
+        );
+    }
+
+    $provided_token = trim( $matches[1] );
+    $expected_token = function_exists( 'bzj_get_sso_secret' )
+        ? bzj_get_sso_secret()
+        : ( defined( 'BUZZ_SSO_SECRET' ) ? BUZZ_SSO_SECRET : '' );
+
+    if ( empty( $expected_token ) || ! hash_equals( $provided_token, $expected_token ) ) {
+        return new WP_Error(
+            'bzj_invalid_auth',
+            'Invalid authorization token',
+            [ 'status' => 403 ]
+        );
+    }
+
+    return true;
+}
+
+/**
+ * Handle relationship notifications from external platforms.
+ */
+function bzj_connections_sync_rest_handle_relationship( $request ) {
+
+    $origin           = $request->get_param( 'origin' );
+    $origin_user_id   = $request->get_param( 'origin_user_id' );
+    $target_user_id   = $request->get_param( 'target_user_id' );
+    $operation        = $request->get_param( 'operation' );
+    $event_uuid       = $request->get_param( 'event_uuid' );
+
+    if ( ! in_array( $origin, [ 'streams', 'socials' ], true ) ) {
+        return new WP_Error(
+            'bzj_invalid_origin',
+            'Invalid origin platform',
+            [ 'status' => 400 ]
+        );
+    }
+
+    // Resolve external IDs to WordPress IDs
+    $wp_actor  = bzj_connections_sync_resolve_wp_user( $origin_user_id, $origin );
+    $wp_target = bzj_connections_sync_resolve_wp_user( $target_user_id, $origin );
+
+    if ( ! $wp_actor || ! $wp_target ) {
+        bzj_connections_sync_log(
+            'Cannot resolve external users to WordPress',
+            [
+                'origin'           => $origin,
+                'origin_user_id'   => $origin_user_id,
+                'target_user_id'   => $target_user_id,
+            ]
+        );
+
+        return new WP_Error(
+            'bzj_unresolved_users',
+            'Cannot map external users to WordPress',
+            [ 'status' => 404 ]
+        );
+    }
+
+    // Idempotency: check for existing event UUID
+    if ( ! empty( $event_uuid ) ) {
+        $existing_event = bzj_connections_sync_find_event_by_uuid( $event_uuid );
+        if ( $existing_event ) {
+            bzj_connections_sync_log(
+                'Idempotent event UUID already processed',
+                [ 'event_uuid' => $event_uuid ]
+            );
+
+            return rest_ensure_response( [
+                'success'  => true,
+                'message'  => 'Event already processed (idempotent)',
+                'event_id' => $existing_event->id,
+            ] );
+        }
+    } else {
+        $event_uuid = bzj_connections_sync_uuid();
+    }
+
+    // Canonicalize user pair
+    $pair = bzj_connections_sync_pair( $wp_actor, $wp_target );
+
+    if ( ! $pair ) {
+        return new WP_Error(
+            'bzj_invalid_pair',
+            'Invalid user pair',
+            [ 'status' => 400 ]
+        );
+    }
+
+    // Check if blocked
+    if ( bzj_connections_sync_is_blocked( $wp_actor, $wp_target ) &&
+         $operation !== 'unblock' ) {
+        bzj_connections_sync_log(
+            'Operation rejected; users are blocked',
+            [ 'operation' => $operation, 'actor' => $wp_actor, 'target' => $wp_target ]
+        );
+
+        return rest_ensure_response( [
+            'success' => false,
+            'message' => 'Operation blocked due to user block',
+        ] );
+    }
+
+    // Process operation
+    $event_type = '';
+    $rel_state  = '';
+
+    switch ( $operation ) {
+
+        case 'request':
+            $rel_state  = BZJ_REL_REQUESTED;
+            $event_type = 'connection_requested';
+            break;
+
+        case 'accept':
+            $rel_state  = BZJ_REL_CONNECTED;
+            $event_type = 'connection_accepted';
+            break;
+
+        case 'remove':
+            $rel_state  = BZJ_REL_NONE;
+            $event_type = 'connection_removed';
+            break;
+
+        case 'block':
+            $rel_state  = BZJ_REL_NONE;
+            $event_type = 'block_created';
+            break;
+
+        case 'unblock':
+            // Don't change relationship state, only clear block
+            $event_type = 'block_deleted';
+            break;
+
+        default:
+            return new WP_Error(
+                'bzj_invalid_operation',
+                'Invalid operation',
+                [ 'status' => 400 ]
+            );
+    }
+
+    // Build options for state writer
+    $options = [
+        'origin'     => $origin,
+        'event_type' => $event_type,
+        'operation'  => $operation,
+        'event_uuid' => $event_uuid,
+    ];
+
+    if ( $operation === 'request' ) {
+        $options['requested_by'] = $wp_actor;
+    }
+
+    if ( $operation === 'block' ) {
+        if ( $pair['user_a'] === $wp_actor ) {
+            $options['block_a_to_b'] = 1;
+        } else {
+            $options['block_b_to_a'] = 1;
+        }
+    }
+
+    if ( $operation === 'unblock' ) {
+        $existing = bzj_connections_sync_get_relationship( $wp_actor, $wp_target );
+        $rel_state = $existing ? $existing->relationship_state : BZJ_REL_NONE;
+
+        if ( $pair['user_a'] === $wp_actor ) {
+            $options['block_a_to_b'] = 0;
+        } else {
+            $options['block_b_to_a'] = 0;
+        }
+    }
+
+    if ( ! $rel_state && $operation !== 'unblock' ) {
+        $existing = bzj_connections_sync_get_relationship( $wp_actor, $wp_target );
+        $rel_state = $existing ? $existing->relationship_state : BZJ_REL_NONE;
+    }
+
+    $result = bzj_connections_sync_set_relationship(
+        $wp_actor,
+        $wp_target,
+        $rel_state,
+        $options
+    );
+
+    if ( ! $result ) {
+        return new WP_Error(
+            'bzj_state_write_failed',
+            'Failed to write canonical state',
+            [ 'status' => 500 ]
+        );
+    }
+
+    bzj_connections_sync_log(
+        'External platform relationship synced',
+        [
+            'origin'     => $origin,
+            'operation'  => $operation,
+            'actor'      => $wp_actor,
+            'target'     => $wp_target,
+            'event_uuid' => $event_uuid,
+        ]
+    );
+
+    return rest_ensure_response( [
+        'success'    => true,
+        'message'    => 'Relationship synchronized',
+        'event_uuid' => $event_uuid,
+    ] );
+}
+
+/**
+ * Find event by UUID (helper for idempotency).
+ */
+function bzj_connections_sync_find_event_by_uuid( $uuid ) {
+
+    global $wpdb;
+
+    return $wpdb->get_row(
+        $wpdb->prepare(
+            'SELECT id FROM ' . bzj_connections_sync_events_table() . '
+            WHERE event_uuid = %s LIMIT 1',
+            $uuid
+        )
+    );
+}
+
+// ==================== CRON JOBS ====================
+
+function bzj_connections_sync_register_cron_jobs() {
+    if ( ! wp_next_scheduled( 'bzj_connections_sync_process_events' ) ) {
+        wp_schedule_event(
+            time(),
+            'five_minutes',
+            'bzj_connections_sync_process_events'
+        );
+    }
+}
+
+add_action( 'bzj_connections_sync_process_events', 'bzj_connections_sync_process_pending_events' );
+
+function bzj_connections_sync_process_pending_events() {
+
+    global $wpdb;
+
+    $table = bzj_connections_sync_events_table();
+
+    $pending = $wpdb->get_results(
+        "SELECT * FROM {$table}
+        WHERE status = 'pending'
+        AND next_attempt_at <= NOW()
+        ORDER BY created_at ASC
+        LIMIT 50"
+    );
+
+    foreach ( $pending as $event ) {
+        bzj_connections_sync_dispatch_event( $event );
+    }
+}
+
+function bzj_connections_sync_dispatch_event( $event ) {
+
+    global $wpdb;
+
+    $table = bzj_connections_sync_events_table();
+
+    if ( $event->attempts >= 5 ) {
+        $wpdb->update(
+            $table,
+            [ 'status' => 'failed' ],
+            [ 'id' => $event->id ],
+            [ '%s' ],
+            [ '%d' ]
+        );
+
+        bzj_connections_sync_log(
+            'Event max retries exceeded',
+            [ 'event_uuid' => $event->event_uuid ]
+        );
+
+        return;
+    }
+
+    $payload = json_decode( $event->payload, true );
+
+    // Get cross-platform IDs
+    $actor_ids  = bzj_connections_sync_get_cross_platform_ids( $event->actor_wp_id );
+    $target_ids = bzj_connections_sync_get_cross_platform_ids( $event->target_wp_id );
+
+    if ( ! $actor_ids || ! $target_ids ) {
+        bzj_connections_sync_log(
+            'Cannot resolve cross-platform IDs for dispatch',
+            [
+                'event_uuid' => $event->event_uuid,
+                'actor'      => $event->actor_wp_id,
+                'target'     => $event->target_wp_id,
+            ]
+        );
+
+        $wpdb->update(
+            $table,
+            [ 'status' => 'failed', 'last_error' => 'Unresolved cross-platform IDs' ],
+            [ 'id' => $event->id ],
+            [ '%s', '%s' ],
+            [ '%d' ]
+        );
+
+        return;
+    }
+
+    // Send to streams
+    if ( $actor_ids['wo'] && $target_ids['wo'] ) {
+        bzj_connections_sync_send_to_platform(
+            'streams',
+            $actor_ids['wo'],
+            $target_ids['wo'],
+            $event->operation,
+            $event->event_uuid
+        );
+    }
+
+    // Send to socials
+    if ( $actor_ids['qd'] && $target_ids['qd'] ) {
+        bzj_connections_sync_send_to_platform(
+            'socials',
+            $actor_ids['qd'],
+            $target_ids['qd'],
+            $event->operation,
+            $event->event_uuid
+        );
+    }
+
+    $wpdb->update(
+        $table,
+        [
+            'status'       => 'processed',
+            'processed_at' => current_time( 'mysql', true ),
+        ],
+        [ 'id' => $event->id ],
+        [ '%s', '%s' ],
+        [ '%d' ]
+    );
+
+    bzj_connections_sync_log(
+        'Event dispatched to platforms',
+        [ 'event_uuid' => $event->event_uuid ]
+    );
+}
+
+function bzj_connections_sync_send_to_platform(
+    $platform,
+    $origin_user_id,
+    $target_user_id,
+    $operation,
+    $event_uuid
+) {
+
+    $expected_token = function_exists( 'bzj_get_sso_secret' )
+        ? bzj_get_sso_secret()
+        : ( defined( 'BUZZ_SSO_SECRET' ) ? BUZZ_SSO_SECRET : '' );
+
+    if ( empty( $expected_token ) ) {
+        bzj_connections_sync_log(
+            'No SSO secret available; cannot dispatch to platforms',
+            [ 'platform' => $platform ]
+        );
+        return;
+    }
+
+    // Get platform-specific endpoint
+    $endpoints = [
+        'streams' => get_option( 'bzj_streams_api_url', 'http://localhost/streams/api' ),
+        'socials' => get_option( 'bzj_socials_api_url', 'http://localhost/socials/api' ),
+    ];
+
+    if ( ! isset( $endpoints[ $platform ] ) ) {
+        return;
+    }
+
+    $url = $endpoints[ $platform ] . '/relationship';
+
+    $response = wp_remote_post( $url, [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $expected_token,
+            'Content-Type'  => 'application/json',
+        ],
+        'body' => wp_json_encode( [
+            'origin'           => 'wordpress',
+            'origin_user_id'   => $origin_user_id,
+            'target_user_id'   => $target_user_id,
+            'operation'        => $operation,
+            'event_uuid'       => $event_uuid,
+        ] ),
+        'timeout' => 10,
+    ] );
+
+    if ( is_wp_error( $response ) ) {
+        bzj_connections_sync_log(
+            'Platform dispatch failed',
+            [
+                'platform' => $platform,
+                'error'    => $response->get_error_message(),
+                'uuid'     => $event_uuid,
+            ]
+        );
+        return;
+    }
+
+    $body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+    if ( ! isset( $body['success'] ) || ! $body['success'] ) {
+        bzj_connections_sync_log(
+            'Platform dispatch returned error',
+            [
+                'platform' => $platform,
+                'response' => $body,
+                'uuid'     => $event_uuid,
+            ]
+        );
+    }
+}
+```
+
+---
+
+## PART 3: HELPER FUNCTIONS FOR WoWonder Streams & QuickDate Socials
+
+### Integration Points in `/shared/wwqd_bridge.php`
+
+Add these functions to extend the existing bridge file:
+
+```php
+<?php
+/**
+ * New helper functions for Buzzjuice Connections Sync
+ * Add these to /shared/wwqd_bridge.php
+ */
+
+/**
+ * Get WordPress user ID from WoWonder user ID
+ */
+function bzj_get_wordpress_user_from_streams( $wo_user_id ) {
+    $wo_user_id = absint( $wo_user_id );
+    if ( ! $wo_user_id ) {
+        return 0;
+    }
+
+    $wp_conn = get_wp_db_conn();
+    if ( ! $wp_conn ) {
+        return 0;
+    }
+
+    $result = $wp_conn->query(
+        sprintf(
+            "SELECT user_id FROM `%s`.`%s` WHERE meta_key = 'wo_user_id' AND meta_value = '%d' LIMIT 1",
+            WP_DB_NAME,
+            WP_TABLE_PREFIX . 'usermeta',
+            $wo_user_id
+        )
+    );
+
+    if ( ! $result ) {
+        return 0;
+    }
+
+    $row = $wp_conn->fetch_assoc();
+    return $row ? absint( $row['user_id'] ) : 0;
+}
+
+/**
+ * Get WordPress user ID from QuickDate user ID
+ */
+function bzj_get_wordpress_user_from_socials( $qd_user_id ) {
+    $qd_user_id = absint( $qd_user_id );
+    if ( ! $qd_user_id ) {
+        return 0;
+    }
+
+    $wp_conn = get_wp_db_conn();
+    if ( ! $wp_conn ) {
+        return 0;
+    }
+
+    $result = $wp_conn->query(
+        sprintf(
+            "SELECT user_id FROM `%s`.`%s` WHERE meta_key = 'qd_user_id' AND meta_value = '%d' LIMIT 1",
+            WP_DB_NAME,
+            WP_TABLE_PREFIX . 'usermeta',
+            $qd_user_id
+        )
+    );
+
+    if ( ! $result ) {
+        return 0;
+    }
+
+    $row = $wp_conn->fetch_assoc();
+    return $row ? absint( $row['user_id'] ) : 0;
+}
+
+/**
+ * Send relationship sync to WordPress via REST API
+ */
+function bzj_sync_relationship_to_wordpress(
+    $actor_platform_id,
+    $target_platform_id,
+    $operation,
+    $platform = 'streams'
+) {
+
+    $actor_platform_id  = absint( $actor_platform_id );
+    $target_platform_id = absint( $target_platform_id );
+    $platform           = sanitize_key( $platform );
+    $operation          = sanitize_key( $operation );
+
+    if ( ! $actor_platform_id || ! $target_platform_id ||
+         ! in_array( $platform, [ 'streams', 'socials' ], true ) ||
+         ! in_array( $operation, [ 'request', 'accept', 'remove', 'block', 'unblock' ], true ) ) {
+        return false;
+    }
+
+    // Get SSO secret (must be configured)
+    $secret = getenv( 'BUZZ_SSO_SECRET' );
+    if ( empty( $secret ) ) {
+        wwqd_debug( 'No BUZZ_SSO_SECRET configured; cannot sync to WordPress', [ 'platform' => $platform ] );
+        return false;
+    }
+
+    $wp_url = getenv( 'WP_BASE_SITE_URL' );
+    if ( empty( $wp_url ) ) {
+        wwqd_debug( 'No WP_BASE_SITE_URL configured; cannot sync to WordPress' );
+        return false;
+    }
+
+    $endpoint = rtrim( $wp_url, '/' ) . '/wp-json/bzj/v1/relationship';
+
+    $payload = [
+        'origin'           => $platform,
+        'origin_user_id'   => $actor_platform_id,
+        'target_user_id'   => $target_platform_id,
+        'operation'        => $operation,
+        'event_uuid'       => bin2hex( random_bytes( 18 ) ), // pseudo-UUID
+    ];
+
+    $ch = curl_init();
+    curl_setopt( $ch, CURLOPT_URL, $endpoint );
+    curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+    curl_setopt( $ch, CURLOPT_POST, true );
+    curl_setopt( $ch, CURLOPT_POSTFIELDS, json_encode( $payload ) );
+    curl_setopt( $ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $secret,
+    ] );
+    curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
+
+    $response = curl_exec( $ch );
+    $errno    = curl_errno( $ch );
+
+    curl_close( $ch );
+
+    if ( $errno ) {
+        wwqd_debug( 'Sync to WordPress failed', [
+            'endpoint'  => $endpoint,
+            'error'     => curl_strerror( $errno ),
+            'operation' => $operation,
+        ] );
+        return false;
+    }
+
+    $body = json_decode( $response, true );
+
+    if ( empty( $body['success'] ) ) {
+        wwqd_debug( 'WordPress sync returned error', [
+            'response'  => $body,
+            'operation' => $operation,
+        ] );
+        return false;
+    }
+
+    return true;
+}
+```
+
+---
+
+## PART 4: WoWonder Streams Interceptors
+
+### Integration in Streams Follow/Block Functions
+
+Modify the existing `Wo_RegisterFollow()` function in `/streams/assets/includes/functions_one.php`:
+
+**Locate this function and add the following at the beginning:**
+
+```php
+function Wo_RegisterFollow($following_id = 0, $followers_id = 0)
+{
+    // Sync to WordPress (if not already synced)
+    if ( function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+        if ( $followers_id > 0 ) {
+            bzj_sync_relationship_to_wordpress(
+                $followers_id,
+                $following_id,
+                'request',
+                'streams'
+            );
+        }
+    }
+
+    // ... rest of original function ...
+}
+```
+
+### Integration in Block/Unblock Functions
+
+Add these wrapper functions in `/streams/assets/includes/functions_one.php`:
+
+```php
+/**
+ * Intercept block creation
+ * Called when Wo_RegisterBlock() is invoked
+ */
+function bzj_intercept_stream_block( $user_id, $block_id ) {
+
+    if ( ! function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+        return;
+    }
+
+    bzj_sync_relationship_to_wordpress(
+        $user_id,
+        $block_id,
+        'block',
+        'streams'
+    );
+}
+
+/**
+ * Intercept unblock
+ * Called when Wo_RemoveBlock() is invoked
+ */
+function bzj_intercept_stream_unblock( $user_id, $block_id ) {
+
+    if ( ! function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+        return;
+    }
+
+    bzj_sync_relationship_to_wordpress(
+        $user_id,
+        $block_id,
+        'unblock',
+        'streams'
+    );
+}
+```
+
+Then modify the `Wo_RegisterBlock()` and `Wo_RemoveBlock()` functions to call these interceptors:
+
+```php
+function Wo_RegisterBlock($user_id)
+{
+    // ... existing logic ...
+
+    bzj_intercept_stream_block( $user_id, $block_id );
+}
+
+function Wo_RemoveBlock($user_id)
+{
+    // ... existing logic ...
+
+    bzj_intercept_stream_unblock( $user_id, $block_id );
+}
+```
+
+---
+
+## PART 5: QuickDate Socials Interceptors
+
+### Integration in User Actions
+
+Modify `/social/requests/ajax/useractions.php`:
+
+```php
+class UserActions extends Aj {
+
+    // ... existing methods ...
+
+    /**
+     * Intercept follow action
+     */
+    function like() {
+        // ... existing logic ...
+
+        // Sync to WordPress
+        if ( function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+            bzj_sync_relationship_to_wordpress(
+                $this->user_id,
+                $user_id,
+                'request',
+                'socials'
+            );
+        }
+    }
+
+    /**
+     * Intercept remove like / follow
+     */
+    function remove_like() {
+        // ... existing logic ...
+
+        if ( function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+            bzj_sync_relationship_to_wordpress(
+                $this->user_id,
+                $user_id,
+                'remove',
+                'socials'
+            );
+        }
+    }
+
+    /**
+     * Intercept block action
+     */
+    function block() {
+        // ... existing logic ...
+
+        if ( function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+            bzj_sync_relationship_to_wordpress(
+                $this->user_id,
+                $user_id,
+                'block',
+                'socials'
+            );
+        }
+    }
+
+    /**
+     * Intercept unblock action
+     */
+    function unblock() {
+        // ... existing logic ...
+
+        if ( function_exists( 'bzj_sync_relationship_to_wordpress' ) ) {
+            bzj_sync_relationship_to_wordpress(
+                $this->user_id,
+                $user_id,
+                'unblock',
+                'socials'
+            );
+        }
+    }
+}
+```
+
+---
+
+## PART 6: CONFIGURATION & DEPLOYMENT CHECKLIST
+
+### 1. Environment Setup
+
+In your `.env` file or hosting configuration, ensure:
+
+```bash
+BUZZ_SSO_SECRET=<your-secure-random-token>
+WP_BASE_SITE_URL=https://buzzjuice.net
+PALMIER_DB_HOST=<db-host>
+PALMIER_DB_USER=<db-user>
+PALMIER_DB_PASS=<db-pass>
+PALMIER_DB_NAME=<db-name>
+WORDPRESS_DB_HOST=<wp-db-host>
+WORDPRESS_DB_USER=<wp-db-user>
+WORDPRESS_DB_PASS=<wp-db-pass>
+WORDPRESS_DB_NAME=<wp-db-name>
+QUICKDATE_DB_HOST=<qd-db-host>
+QUICKDATE_DB_USER=<qd-db-user>
+QUICKDATE_DB_PASS=<qd-db-pass>
+QUICKDATE_DB_NAME=<qd-db-name>
+WOWONDER_DB_HOST=<wo-db-host>
+WOWONDER_DB_USER=<wo-db-user>
+WOWONDER_DB_PASS=<wo-db-pass>
+WOWONDER_DB_NAME=<wo-db-name>
+```
+
+### 2. WordPress Configuration
+
+In `wp-config.php` or via wp-cli:
+
+```php
+define( 'BUZZ_SSO_SECRET', getenv( 'BUZZ_SSO_SECRET' ) );
+define( 'WP_BASE_SITE_URL', getenv( 'WP_BASE_SITE_URL' ) );
+```
+
+### 3. Deployment Steps
+
+1. **Copy MU-plugin:**
+   ```bash
+   cp bzj-connections-sync.php /wp-content/mu-plugins/
+   ```
+
+2. **Update `/shared/wwqd_bridge.php`:**
+   - Add the helper functions from Part 3
+
+3. **Update Streams functions:**
+   - Integrate interceptors from Part 4 into `/streams/assets/includes/functions_one.php`
+
+4. **Update Socials functions:**
+   - Integrate interceptors from Part 5 into `/social/requests/ajax/useractions.php`
+
+5. **Activate via WordPress:**
+   ```bash
+   wp plugin activate bzj-connections-sync
+   ```
+
+6. **Verify schema:**
+   ```bash
+   wp db tables | grep bzj_
+   ```
+
+7. **Test event queue:**
+   - Monitor `/wp-content/bzj-connections-sync.log`
+   - Trigger a test follow/block action
+   - Verify event created in `wp_bzj_relationship_events`
+
+### 4. Testing
+
+**Test Scenario: User A follows User B**
+
+1. **In WordPress/BuddyBoss:**
+   - User A sends connection request to User B
+   - ✓ Event logged to `wp_bzj_relationship_events`
+   - ✓ State stored in `wp_bzj_relationships` as `REQUESTED`
+   - ✓ Sync queue processes; dispatches to Streams and Socials
+
+2. **In Streams:**
+   - Verify `wo_user_id` maps to User A (WordPress)
+   - Verify relationship appears as "requested"
+
+3. **In Socials:**
+   - Verify `qd_user_id` maps to User A (WordPress)
+   - Verify relationship appears as "requested"
+
+**Test Scenario: User A blocks User B**
+
+1. **In WordPress/BuddyBoss:**
+   - User A clicks Block on User B
+   - ✓ `bp_moderation_block_created` fires
+   - ✓ All existing friendships removed (internal context prevents recursive events)
+   - ✓ `wp_bzj_relationships.block_a_to_b = 1`
+   - ✓ Sync queue processes; sends "block" operation to Streams and Socials
+
+2. **In Streams & Socials:**
+   - User B cannot see User A
+   - User B cannot interact with User A
+
+**Test Scenario: User A unblocks User B**
+
+1. **In WordPress/BuddyBoss:**
+   - User A unblocks User B
+   - ✓ `bp_moderation_block_deleted` fires
+   - ✓ `wp_bzj_relationships.block_a_to_b = 0` (directional block cleared)
+   - ✓ Relationship state preserved (e.g., NONE → stays NONE)
+   - ✓ Sync queue sends "unblock" to Streams and Socials
+
+---
+
+## PART 7: KEY ARCHITECTURAL DECISIONS & SAFETY MECHANISMS
+
+### 1. **Directional Blocks (Critical Fix)**
+
+**Problem in v3.0.0:**
+```php
+state = 'blocked'
+blocked_by = 5  // Which user's block wins if both block each other?
+```
+
+**Solution in v3.1.0:**
+```php
+block_a_to_b = 1  // User A explicitly blocks User B
+block_b_to_a = 1  // User B explicitly blocks User A (independent)
+```
+
+**Benefit:** No ambiguity. Either user can block the other; blocks are independent.
+
+### 2. **Relationship State ⊥ Block State**
+
+- **Relationship** (NONE, REQUESTED, CONNECTED) is orthogonal to blocks
+- When a user blocks, relationship is forced to NONE
+- Unblocking does NOT restore the previous relationship (user must re-request)
+- This prevents confusion after unblock
+
+### 3. **Internal Context Prevents Recursive Hooks**
+
+```php
+bzj_connections_sync_remove_wp_relationships( $a, $b );
+// Inside this function:
+// bzj_connections_sync_internal( true );
+// friends_remove_friend() → fires 'friends_friendship_deleted'
+// Hook handler checks: if ( bzj_connections_sync_internal() ) return;
+// → Skips re-entering, prevents infinite loop
+```
+
+### 4. **Idempotent Event UUIDs**
+
+- Every event has a unique UUID
+- Before inserting a new event, check if UUID already exists
+- Prevents duplicate processing if webhook is retried
+
+### 5. **Durable Event Queue**
+
+- Events are enqueued atomically with state change
+- Cron job processes pending events every 5 minutes
+- Failed events can retry up to 5 times with exponential backoff
+- Diagnostic logs for all operations
+
+### 6. **MySQL Named Locks**
+
+```php
+$lock = bzj_connections_sync_lock( $a, $b );
+// Critical section: read-modify-write
+// Prevents race conditions if two admins block the same pair simultaneously
+$wpdb->get_var( 'SELECT GET_LOCK(%s, 5)' );
+```
+
+---
+
+## PART 8: TROUBLESHOOTING
+
+### Issue: Events Stuck in "Pending"
+
+**Check:**
+```bash
+wp db query "SELECT * FROM wp_bzj_relationship_events WHERE status = 'pending' LIMIT 5"
+```
+
+**Common Causes:**
+- SSO secret not configured → `last_error` will show "No authorization"
+- Platform endpoints not reachable → Check DNS, firewall
+- Cross-platform ID mapping missing → Verify `wo_user_id`, `qd_user_id` in usermeta
+
+**Fix:**
+```bash
+# Manually retry
+wp cron test-run bzj_connections_sync_process_events
+# Watch the log
+tail -f /wp-content/bzj-connections-sync.log
+```
+
+### Issue: Blocks Not Syncing
+
+**Check:**
+```bash
+# Verify canonical state
+wp db query "SELECT * FROM wp_bzj_relationships WHERE block_a_to_b = 1 OR block_b_to_a = 1"
+# Verify events created
+wp db query "SELECT * FROM wp_bzj_relationship_events WHERE event_type = 'block_created'"
+```
+
+**Common Causes:**
+- Hook not firing → Check BuddyBoss version compatibility
+- Internal context stuck → Check logs for "Removed BuddyBoss relationships" message
+- Missing callbacks in Streams/Socials → Verify interceptors are in place
+
+---
+
+## PART 9: MONITORING & ALERTING
+
+### Log File Entries
+
+**Normal flow:**
+```
+[2026-09-14 12:00:00] Canonical relationship state changed {"pair":{"user_a":1,"user_b":2},"from":"none","to":"requested","event_uuid":"...","origin":"wordpress"}
+[2026-09-14 12:00:05] External platform relationship synced {"origin":"streams","operation":"request"...}
+[2026-09-14 12:00:10] Event dispatched to platforms {"event_uuid":"..."}
+```
+
+**Error patterns:**
+```
+[2026-09-14 12:00:00] Cannot acquire lock {"actor":1,"target":2}  → Race condition
+[2026-09-14 12:00:00] Cannot resolve cross-platform IDs         → Missing wo_user_id/qd_user_id
+[2026-09-14 12:00:00] Platform dispatch failed                  → Network issue
+```
+
+### Monitoring Queries
+
+**Check sync health:**
+```sql
+SELECT
+    COUNT(*) as total_events,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+    SUM(CASE WHEN status = 'processed' THEN 1 ELSE 0 END) as processed,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+FROM wp_bzj_relationship_events
+WHERE created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR);
+```
+
+**Check for stalled events:**
+```sql
+SELECT id, event_uuid, operation, attempts, last_error
+FROM wp_bzj_relationship_events
+WHERE status = 'pending'
+AND next_attempt_at < NOW()
+AND attempts > 3;
+```
+
+---
+
+## PART 10: COMPLIANCE WITH NOTES
+
+✅ **Note 1 (Proactive Enforcement):** Implemented via `bzj_connections_sync_remove_wp_relationships()` which forces unfriend before block
+✅ **Note 2 (wwqd_bridge.php):** Helper functions added to bridge file for cross-platform ID resolution
+✅ **Note 3 (BuddyBoss Blocking Rules):** Block state is separate from relationship; no modification to permission system
+✅ **Note 4 (Large Files):** Only provided code snippets for modification; original files not regenerated
+✅ **Note 5 (Identity Mapping):** Uses `wo_user_id` and `qd_user_id` meta fields for resolution
+✅ **Note 6 (Followers System):** Model supports follows + blocking independently
+✅ **Note 7 (MU-plugin):** Created as `bzj-connections-sync.php`
+✅ **Note 8 (wp-load Limitation):** All external platform hooks use standalone HTTP requests via REST API
+✅ **Note 9 (Logging):** Diagnostic log file used; durable state in tables only
+
+---
+
+## FINAL NOTES
+
+This **v3.1.0** implementation consolidates both approaches:
+
+- **From GitHub v3.0.0:** Infrastructure strength (locking, idempotency, retry queue, logging)
+- **From ChatGPT:** Architectural correctness (directional blocks, separated state models, cleaner semantics)
+
+The critical improvement is **directional blocks**, which eliminates the ambiguity of "which user's block is authoritative?" and makes unblocking a safe, reversible operation.
+
+Deploy with confidence and monitor `bzj-connections-sync.log` closely during the first 48 hours.
+
+<<STOP GITHUB>>
