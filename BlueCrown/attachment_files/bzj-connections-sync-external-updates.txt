@@ -1,0 +1,265 @@
+BUZZJUICE CONNECTIONS SYNC 4.0.1 — EXISTING FILE UPDATES
+
+IMPORTANT: Do not regenerate wwqd_bridge.php, functions_one.php, core.php or useractions.php. Apply the targeted changes below.
+
+1) /shared/wwqd_bridge.php
+--------------------------------
+The MU plugin loads this file from WordPress for DB fan-out. Streams already loads wwqd_bridge.php.
+Add the following client helper near the end of wwqd_bridge.php. It is used by Streams/Socials to REPORT a completed local action to WordPress.
+
+```php
+if (!function_exists('bzj_connections_sync_report_to_wordpress')) {
+    function bzj_connections_sync_report_to_wordpress($origin, $origin_user_id, $target_user_id, $operation, $event_uuid = '') {
+        $origin = preg_replace('/[^a-z_]/', '', strtolower((string)$origin));
+        if (!in_array($origin, array('streams','socials'), true)) return false;
+        $operation = preg_replace('/[^a-z_]/', '', strtolower((string)$operation));
+        if (!in_array($operation, array('request','accept','remove','block','unblock'), true)) return false;
+
+        $secret = function_exists('bzj_get_sso_secret') ? bzj_get_sso_secret() : getenv('BUZZ_SSO_SECRET');
+        $base   = getenv('WP_BASE_SITE_URL');
+        if (!$secret || !$base) return false;
+
+        $payload = array(
+            'origin'         => $origin,
+            'origin_user_id' => absint($origin_user_id),
+            'target_user_id' => absint($target_user_id),
+            'operation'      => $operation,
+            'event_uuid'     => $event_uuid ?: (function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : bin2hex(random_bytes(16))),
+        );
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $ts   = (string)time();
+        $sig  = hash_hmac('sha256', $ts . '.' . $body, $secret);
+        $url  = rtrim($base, '/') . '/wp-json/bzj/v2/relationship';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $body,
+            CURLOPT_HTTPHEADER     => array(
+                'Content-Type: application/json',
+                'X-BZJ-Timestamp: ' . $ts,
+                'X-BZJ-Signature: ' . $sig,
+            ),
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 12,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ));
+        $response = curl_exec($ch);
+        $errno    = curl_errno($ch);
+        $http     = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($errno || $http < 200 || $http >= 300) {
+            if (function_exists('wwqd_debug')) {
+                wwqd_debug('connections_sync_report_failed', array('origin'=>$origin,'operation'=>$operation,'http'=>$http,'errno'=>$errno));
+            }
+            return false;
+        }
+        $decoded = json_decode($response, true);
+        return !empty($decoded['success']);
+    }
+}
+```
+
+2) STREAMS: /streams/assets/includes/functions_one.php
+--------------------------------------------------------
+This file already loads /shared/wwqd_bridge.php around the existing bridge section.
+
+A. Wo_RegisterFollow()
+At the successful end of the foreach iteration in Wo_RegisterFollow(), after the INSERT succeeds, report:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        ($active == 1 ? 'accept' : 'request')
+    );
+}
+```
+
+Do not report before the local INSERT succeeds.
+
+B. Wo_DeleteFollow()
+Immediately after the DELETE succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+C. Wo_AcceptFollowRequest()
+Immediately after the UPDATE/accept operation succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'accept'
+    );
+}
+```
+
+D. Wo_RegisterBlock($user_id)
+After the INSERT into T_BLOCKS succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'block'
+    );
+}
+```
+
+E. Wo_RemoveBlock($user_id)
+After the DELETE succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'unblock'
+    );
+}
+```
+
+Do NOT replace the original functions. Only add the reporting calls after successful local DB operations.
+
+3) SOCIALS: /social/requests/ajax/useractions.php
+---------------------------------------------------
+At the top, after palmier_logger.php, load the bridge:
+
+```php
+require_once __DIR__ . '/../../../shared/wwqd_bridge.php';
+```
+
+A. block()
+After the blocks INSERT succeeds:
+
+```php
+if ($saved && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)self::ActiveUser()->id,
+        (int)$userid,
+        'block'
+    );
+}
+```
+
+B. unblock()
+After the DELETE succeeds:
+
+```php
+if ($deleted && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$target_id,
+        (int)$userid,
+        'unblock'
+    );
+}
+```
+
+The existing targetuid logic must remain intact.
+
+4) SOCIALS: /social/core.php
+------------------------------
+Add the bridge once near the top, after the existing shared logger include:
+
+```php
+require_once __DIR__ . '/../shared/wwqd_bridge.php';
+```
+
+A. Wo_RegisterFollow()
+After a successful INSERT into followers, report the relationship. The function's argument order is following_id, followers_id, so the actor is followers_id:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        ($active === 1 ? 'accept' : 'request')
+    );
+}
+```
+
+B. Wo_DeleteFollow()
+After the DELETE succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+C. Wo_AcceptFollowRequest()
+After the UPDATE succeeds:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'accept'
+    );
+}
+```
+
+Do not modify Wo_IsFollowing(), Wo_IsFollowRequested() or Wo_IsBlocked(). They remain read/query functions. The synchronization must occur at the write operations.
+
+5) WHY THE EXTERNAL PATH IS REPORT-AFTER-WRITE
+----------------------------------------------
+The external platforms do not load WordPress. Their local write functions therefore cannot directly execute BuddyBoss APIs. They complete their native operation, report it through the signed endpoint, and WordPress becomes authoritative immediately afterward. WordPress then fans the canonical state back to both platforms.
+
+The fan-out is idempotent: the pair is deleted and rebuilt from canonical state, so reporting the same operation again does not accumulate stale relationship rows.
+
+6) BLOCK SEMANTICS
+------------------
+A block is directional. If A blocks B, only A->B is set. If B also blocks A, both directional flags can coexist. Any block forces relationship_state=none.
+
+Unblock clears only the direction that was unblocked and DOES NOT restore a previous connection/request. A new connection must be requested through the normal BuddyBoss policy path.
+
+7) BUDDYBOSS POLICY
+-------------------
+External 'request' is converted into a BuddyBoss friendship request with force_accept=false. This is deliberate. It prevents Streams/Socials from bypassing BuddyBoss connection-request restrictions.
+
+8) IMPORTANT DIFFERENCE FROM THE 3.1.0 GITHUB VERSION
+-------------------------------------------------------
+Do not use the 3.1.0 implementation's Bearer-token endpoint or its generic /relationship platform endpoints as the primary design. The 4.0.1 design uses timestamped HMAC authentication for external reports and direct DB fan-out from WordPress through the existing shared bridge.
+
+9) TEST ORDER
+-------------
+1. WP A -> WP B connection request.
+2. WP B accepts.
+3. Streams A -> B follow.
+4. Socials A -> B follow.
+5. Remove from Streams; verify WP + Socials removed.
+6. Block from Socials; verify WP + Streams blocked and all relationship rows removed.
+7. Unblock from Streams; verify no connection is restored.
+8. Create a fresh connection after unblock.
+9. Test simultaneous opposite-direction blocks.
+10. Temporarily disable one external DB connection and verify retry events remain pending/retry rather than being marked processed.
