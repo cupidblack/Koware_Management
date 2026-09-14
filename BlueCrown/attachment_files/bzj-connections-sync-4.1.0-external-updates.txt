@@ -1,0 +1,406 @@
+BUZZJUICE CONNECTIONS SYNC 4.1.0 — TARGETED EXTERNAL PLATFORM UPDATES
+==========================================================================
+
+DO NOT regenerate these long files:
+- /shared/wwqd_bridge.php
+- /streams/assets/includes/functions_one.php
+- /social/core.php
+- /social/requests/ajax/useractions.php
+
+The MU plugin performs WordPress-side fan-out directly through the existing
+database helpers. The external platforms only need a small reporting helper
+and reporting calls after successful local writes.
+
+IMPORTANT:
+- Do not use wp-load in Streams or Socials.
+- Do not use QuickDate like() for connectivity.
+- Do not replace the existing functions.
+- Keep BuddyBoss request restrictions intact.
+- External reporting happens AFTER the local external DB write succeeds.
+- A report failure must not undo the user's already-successful local action;
+  the failure should be logged and retried by the platform-side queue helper
+  if that helper is later enabled.
+
+1. /shared/wwqd_bridge.php
+--------------------------
+Add the following helper near the end of the file:
+
+```php
+if (!function_exists('bzj_connections_sync_report_to_wordpress')) {
+    function bzj_connections_sync_report_to_wordpress(
+        $origin,
+        $origin_user_id,
+        $target_user_id,
+        $operation,
+        $event_uuid = ''
+    ) {
+        $origin = preg_replace('/[^a-z_]/', '', strtolower((string)$origin));
+        $operation = preg_replace('/[^a-z_]/', '', strtolower((string)$operation));
+
+        if (!in_array($origin, array('streams','socials'), true)) return false;
+        if (!in_array($operation, array('request','accept','remove','block','unblock'), true)) return false;
+
+        $secret = function_exists('bzj_get_sso_secret')
+            ? bzj_get_sso_secret()
+            : getenv('BUZZ_SSO_SECRET');
+
+        $base = getenv('WP_BASE_SITE_URL');
+        if (!$secret || !$base) return false;
+
+        if (!$event_uuid) {
+            $event_uuid = function_exists('wp_generate_uuid4')
+                ? wp_generate_uuid4()
+                : sprintf(
+                    '%s-%s-%s-%s-%s',
+                    bin2hex(random_bytes(4)),
+                    bin2hex(random_bytes(2)),
+                    bin2hex(random_bytes(2)),
+                    bin2hex(random_bytes(2)),
+                    bin2hex(random_bytes(6))
+                );
+        }
+
+        $payload = array(
+            'origin'         => $origin,
+            'origin_user_id' => absint($origin_user_id),
+            'target_user_id' => absint($target_user_id),
+            'operation'      => $operation,
+            'event_uuid'     => $event_uuid,
+        );
+
+        $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $timestamp = (string)time();
+        $signature = hash_hmac('sha256', $timestamp . '.' . $body, $secret);
+
+        $url = rtrim($base, '/') . '/wp-json/bzj/v3/relationship';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $body,
+            CURLOPT_HTTPHEADER     => array(
+                'Content-Type: application/json',
+                'X-BZJ-Timestamp: ' . $timestamp,
+                'X-BZJ-Signature: ' . $signature,
+            ),
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 12,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ));
+
+        $response = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($errno || $http < 200 || $http >= 300) {
+            if (function_exists('wwqd_debug')) {
+                wwqd_debug('connections_sync_report_failed', array(
+                    'origin'    => $origin,
+                    'operation' => $operation,
+                    'http'      => $http,
+                    'errno'     => $errno,
+                ));
+            }
+            return false;
+        }
+
+        $decoded = json_decode($response, true);
+        return !empty($decoded['success']);
+    }
+}
+```
+
+2. STREAMS — /streams/assets/includes/functions_one.php
+--------------------------------------------------------
+Add the bridge include once, if this file does not already load it:
+
+```php
+require_once __DIR__ . '/../../../shared/wwqd_bridge.php';
+```
+
+Then add the following calls ONLY after successful local DB operations.
+
+A. Wo_RegisterFollow()
+The actual function uses:
+- $following_id = target
+- $follower_id  = actor
+- $active       = 1 or 0
+
+After the successful INSERT:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        ($active == 1 ? 'accept' : 'request')
+    );
+}
+```
+
+B. Wo_DeleteFollow()
+
+After successful DELETE:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+C. Wo_AcceptFollowRequest()
+
+The current function changes the existing pending follower row to active.
+After the successful UPDATE:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$following_id,
+        (int)$follower_id,
+        'accept'
+    );
+}
+```
+
+D. Wo_RegisterBlock($user_id)
+
+After successful INSERT:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'block'
+    );
+}
+```
+
+E. Wo_RemoveBlock($user_id)
+
+After successful DELETE:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'unblock'
+    );
+}
+```
+
+3. SOCIALS — /social/core.php
+-----------------------------
+Add once near the existing shared includes:
+
+```php
+require_once __DIR__ . '/../shared/wwqd_bridge.php';
+```
+
+A. Wo_RegisterFollow()
+
+The current function uses:
+- $following_id = target
+- $follower_id = actor
+- $active = 1 or 0
+
+After successful INSERT:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        ($active === 1 ? 'accept' : 'request')
+    );
+}
+```
+
+B. Wo_DeleteFollow()
+
+After successful DELETE:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+C. Wo_AcceptFollowRequest()
+
+After successful UPDATE:
+
+```php
+if ($query && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$following_id,
+        (int)$follower_id,
+        'accept'
+    );
+}
+```
+
+4. SOCIALS — /social/requests/ajax/useractions.php
+---------------------------------------------------
+Add once after the existing include block:
+
+```php
+require_once __DIR__ . '/../../../shared/wwqd_bridge.php';
+```
+
+A. block()
+
+The current block INSERT is:
+
+```php
+$saved = $db->insert('blocks', array(
+    'user_id'      => self::ActiveUser()->id,
+    'block_userid' => $userid,
+    'created_at'   => date('Y-m-d H:i:s')
+));
+```
+
+Immediately after the successful INSERT:
+
+```php
+if ($saved && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)self::ActiveUser()->id,
+        (int)$userid,
+        'block'
+    );
+}
+```
+
+B. unblock()
+
+IMPORTANT: preserve the existing $target_id / targetuid logic exactly.
+
+Immediately after the successful DELETE:
+
+```php
+if ($deleted && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$target_id,
+        (int)$userid,
+        'unblock'
+    );
+}
+```
+
+5. PLATFORM TABLE DEFAULTS USED BY THE WORDPRESS FAN-OUT
+---------------------------------------------------------
+Streams:
+    followers: Wo_Followers
+    blocks:    Wo_Blocks
+
+Socials:
+    followers: followers
+    blocks:    blocks
+
+If the live Streams database uses different table names, set these environment
+variables instead of modifying the MU plugin:
+
+    BUZZ_STREAMS_FOLLOWERS_TABLE
+    BUZZ_STREAMS_BLOCKS_TABLE
+    BUZZ_SOCIALS_FOLLOWERS_TABLE
+    BUZZ_SOCIALS_BLOCKS_TABLE
+
+The plugin validates table names before using them.
+
+6. WHY THE EXTERNAL REPORTING IS AFTER THE LOCAL WRITE
+-------------------------------------------------------
+The external platform completes its native operation first:
+
+    local INSERT/UPDATE/DELETE
+              ↓
+    report to WordPress
+              ↓
+    BuddyBoss becomes canonical
+              ↓
+    WordPress queues reconciliation
+              ↓
+    Streams + Socials are rebuilt from canonical state
+
+This avoids re-entering a platform function while it is already inside the
+same operation.
+
+7. IMPORTANT CORRECTIONS FROM THE EARLIER 4.0.2 DRAFT
+-------------------------------------------------------
+- Do NOT set the internal recursion flag while processing an external report.
+  Doing so suppresses the BuddyBoss hooks that are required to make WordPress
+  canonical.
+- Do NOT call friends_accept_friendship() with arbitrary user IDs. It expects
+  the actual friendship ID.
+- Do NOT invent BuddyBoss block-create/delete function names.
+  External block/unblock therefore use the filter adapter documented below.
+- Do NOT use generic /relationship endpoints on Streams or Socials.
+- Do NOT use QuickDate like() as the connection mechanism.
+- Do NOT mark a queue event processed merely because an attempt was made.
+- Reconciliation always reads the CURRENT canonical pair state.
+- Unblocking never restores a previous relationship.
+- A block always removes follower/connection rows on all external platforms.
+- Directional blocks remain independent: A→B and B→A can both exist.
+
+8. OPTIONAL BUDDYBOSS BLOCK ADAPTER
+-----------------------------------
+The MU plugin exposes these filters because BuddyBoss block APIs can differ
+by installed version:
+
+    bzj_connections_sync_external_block
+    bzj_connections_sync_external_unblock
+
+If the installed BuddyBoss version exposes a supported PHP API, add a small
+adapter in a separate MU plugin (or in this plugin) that returns true after
+calling the installed API. Do not guess the API name from this document.
+
+The adapter receives:
+
+    $handled, $blocker_wp_id, $blocked_wp_id, $origin
+
+and:
+
+    $handled, $blocker_wp_id, $blocked_wp_id, $origin
+
+respectively.
+
+If no supported API is available, an external block report is rejected rather
+than silently making WordPress inconsistent.
+
+9. NO OTHER FILES SHOULD BE REGENERATED
+---------------------------------------
+Only these files should be newly created/changed for this release:
+
+NEW:
+    /wp-content/mu-plugins/bzj-connections-sync.php
+
+TARGETED CHANGES:
+    /shared/wwqd_bridge.php
+    /streams/assets/includes/functions_one.php
+    /social/core.php
+    /social/requests/ajax/useractions.php
+
+No wp-load is added to Streams or Socials.

@@ -1,0 +1,359 @@
+<<START CHATGPT>>
+
+## Final assessment
+
+I reviewed the latest GitHub revision, the earlier 4.0.1 proposal, the existing Buzzjuice bridge, and the actual Streams/Socials relationship functions.
+
+The GitHub **4.0.2 architecture was directionally correct**, particularly its:
+
+* directional block model;
+* WordPress canonical state;
+* durable event queue;
+* HMAC authentication;
+* MySQL pair locking;
+* retry strategy;
+* separation of relationship state from moderation state.
+
+However, I would **not deploy 4.0.2 as written**. There were several important implementation problems.
+
+### Critical corrections made in 4.1.0
+
+1. **Fixed the external-operation recursion problem.**
+   The previous implementation set its internal/suppression flag while calling BuddyBoss for an external request. That suppressed the very BuddyBoss hooks needed to establish canonical WordPress state.
+
+2. **Fixed BuddyBoss acceptance handling.**
+   `friends_accept_friendship()` expects the **friendship ID**, not two user IDs. The new implementation resolves the actual friendship first. ([buddyboss.com][1])
+
+3. **BuddyBoss request restrictions remain authoritative.**
+   External follows call `friends_add_friend(..., false)` rather than force-accepting them. This preserves the normal BuddyBoss request pathway. BuddyBoss itself uses `friends_add_friend()` for creating connections. ([buddyboss.com][2])
+
+4. **Removed the incomplete placeholder fan-out.**
+   The previous 4.0.2 code claimed to reconcile Streams/Socials but the actual reconciliation functions simply returned `true`. 
+   4.1.0 actually reconciles the external follower/block tables.
+
+5. **Canonical reconciliation is state-based rather than event-payload-based.**
+   This is important for race conditions. If A follows B and immediately blocks B, an older queued follow event cannot resurrect the relationship: the retry reads the current canonical block state and applies the block.
+
+6. **Blocks dominate relationships.**
+
+   * Block → connection/follow rows removed.
+   * Block remains directional.
+   * A→B and B→A can coexist.
+   * Unblock **does not restore** the old relationship.
+
+7. **QuickDate `like()` is completely excluded.**
+   The synchronization uses the actual QuickDate follower system in `core.php`, consistent with the existing implementation. The actual `Wo_RegisterFollow()`, `Wo_DeleteFollow()` and `Wo_AcceptFollowRequest()` functions operate on the `followers` table. 
+
+8. **External platform changes occur first, then report to WordPress.**
+   This avoids trying to modify a platform while its native relationship function is still executing.
+
+9. **HMAC authentication is retained.**
+   The external report endpoint uses timestamp + request-body HMAC rather than a simple bearer secret.
+
+10. **No `wp-load` is introduced into Streams or Socials.**
+
+11. **No unnecessary synchronization database is introduced.**
+    The two WordPress tables are operational state:
+
+    * `wp_bzj_relationships` = canonical current state
+    * `wp_bzj_relationship_events` = durable delivery/retry queue
+
+    Diagnostics remain in `/wp-content/bzj-connections-sync.log`.
+
+---
+
+# Files generated
+
+### 1. New MU plugin
+
+[Download `bzj-connections-sync-4.1.0.php`](sandbox:/mnt/data/bzj-connections-sync-4.1.0.php)
+
+Target:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+I also PHP-lint checked it:
+
+```text
+No syntax errors detected
+```
+
+### 2. Targeted external-file modifications
+
+[Download `bzj-connections-sync-4.1.0-external-updates.txt`](sandbox:/mnt/data/bzj-connections-sync-4.1.0-external-updates.txt)
+
+This contains the exact additions for:
+
+```text
+/shared/wwqd_bridge.php
+
+/streams/assets/includes/functions_one.php
+
+/social/core.php
+
+/social/requests/ajax/useractions.php
+```
+
+I have **not regenerated those long files**, as requested.
+
+---
+
+# Final architecture
+
+```text
+                 ┌───────────────────────────────┐
+                 │ WORDPRESS + BUDDYBOSS         │
+                 │                               │
+                 │     CANONICAL AUTHORITY       │
+                 │                               │
+                 │ BuddyBoss connections         │
+                 │ BuddyBoss blocks              │
+                 │                               │
+                 │ wp_bzj_relationships          │
+                 │ wp_bzj_relationship_events   │
+                 └──────────────┬────────────────┘
+                                │
+                         canonical state
+                           reconciliation
+                                │
+               ┌────────────────┴────────────────┐
+               │                                 │
+               ▼                                 ▼
+     ┌────────────────────┐           ┌────────────────────┐
+     │ BUZZJUICE STREAMS  │           │ BUZZJUICE SOCIALS  │
+     │ WoWonder           │           │ QuickDate           │
+     │                    │           │                    │
+     │ followers          │           │ followers           │
+     │ blocks             │           │ blocks              │
+     └─────────┬──────────┘           └──────────┬─────────┘
+               │                                 │
+               │ successful local operation      │
+               │                                 │
+               └──────────────┬──────────────────┘
+                              │
+                       HMAC signed report
+                              │
+                              ▼
+                 ┌────────────────────────┐
+                 │ WordPress REST endpoint│
+                 │ /wp-json/bzj/v3/...    │
+                 └────────────┬───────────┘
+                              │
+                              ▼
+                    BuddyBoss canonical
+                         operation
+                              │
+                              ▼
+                     event queue / retry
+                              │
+                              ▼
+                     external reconciliation
+```
+
+The important architectural principle is therefore:
+
+> **External platforms can initiate an action, but they cannot determine the final relationship state. WordPress does.**
+
+---
+
+# Relationship behavior
+
+| Action             | WordPress                | Streams                  | Socials                  |
+| ------------------ | ------------------------ | ------------------------ | ------------------------ |
+| WP request         | Requested                | Pending follow           | Pending follow           |
+| WP accepts         | Connected                | Mutual active connection | Mutual active connection |
+| WP removes         | None                     | Removed                  | Removed                  |
+| Streams follows    | BuddyBoss request/policy | Local action             | Reconciled               |
+| Socials follows    | BuddyBoss request/policy | Reconciled               | Local action             |
+| WP blocks A→B      | None + A→B block         | Blocked                  | Blocked                  |
+| Streams blocks A→B | BuddyBoss A→B block      | Local                    | Reconciled               |
+| Socials blocks A→B | BuddyBoss A→B block      | Reconciled               | Local                    |
+| Unblock            | None                     | Unblocked                | Unblocked                |
+| Double block       | None + A→B + B→A         | Both directions          | Both directions          |
+
+The existing Streams functions confirm that its native relationship model uses `following_id`, `follower_id`, and `active`, while its block model uses `blocker` and `blocked`. 
+
+Socials similarly uses `following_id`, `follower_id`, `active`, and its blocks table uses `user_id` / `block_userid`. 
+
+---
+
+## One deliberate limitation: external-originated blocks
+
+I deliberately **did not invent a BuddyBoss block API function**.
+
+The earlier GitHub implementation used:
+
+```php
+bp_moderation_add_moderator_block()
+bp_moderation_delete_moderator_block()
+```
+
+without establishing that those functions actually exist in the installed BuddyBoss version.
+
+That is too risky for a production synchronization layer.
+
+Instead, 4.1.0 exposes:
+
+```text
+bzj_connections_sync_external_block
+bzj_connections_sync_external_unblock
+```
+
+as adapter filters.
+
+So the architecture is ready, but the exact BuddyBoss block-create/delete adapter should be connected to the **actual block API available in your installed BuddyBoss version**, rather than guessing.
+
+This is particularly important because your requirement is that the existing BuddyBoss blocking/request-policy system remain authoritative.
+
+---
+
+# Implementation order
+
+### Stage 1 — install the MU plugin
+
+Copy:
+
+```text
+bzj-connections-sync-4.1.0.php
+```
+
+to:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+The plugin will create/update:
+
+```text
+wp_bzj_relationships
+wp_bzj_relationship_events
+```
+
+automatically.
+
+### Stage 2 — update `wwqd_bridge.php`
+
+Add only:
+
+```php
+bzj_connections_sync_report_to_wordpress()
+```
+
+using the supplied update document.
+
+### Stage 3 — update Streams
+
+Modify only:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+The actual source confirms these are the native relationship/block operations, so this is the correct integration point rather than modifying the UI link in `content.phtml`. 
+
+### Stage 4 — update Socials
+
+Modify:
+
+```text
+/social/core.php
+```
+
+for:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+```
+
+and:
+
+```text
+/social/requests/ajax/useractions.php
+```
+
+for:
+
+```text
+block()
+unblock()
+```
+
+The existing `targetuid` behavior in Socials should remain untouched. 
+
+### Stage 5 — test WordPress first
+
+Test:
+
+```text
+A → request → B
+B → accept
+A → remove
+A → block B
+A → unblock B
+```
+
+### Stage 6 — test Streams
+
+```text
+A → follow B
+B → accept where applicable
+A → remove B
+A → block B
+A → unblock B
+```
+
+### Stage 7 — test Socials
+
+Repeat the same matrix.
+
+### Stage 8 — test race/moderation cases
+
+Especially:
+
+```text
+A blocks B while connected
+A blocks B while request is pending
+A blocks B on Streams
+B blocks A on Socials
+A and B block each other
+Unblock after a block
+External DB temporarily unavailable
+Missing wo_user_id
+Missing qd_user_id
+Repeated HMAC event UUID
+```
+
+---
+
+## Bigger-picture recommendation
+
+I would treat **4.1.0 as the synchronization core**, not merely a connector between three databases.
+
+The architecture now gives Buzzjuice a proper canonical relationship layer:
+
+```text
+BuddyBoss
+    ↓
+Canonical relationship state
+    ↓
+Deterministic platform reconciliation
+```
+
+That is the right foundation for the Socials work you are currently prioritizing because future features such as **matching, collaboration discovery, profile recommendations, events, clubs/groups and social-card filtering** can query one authoritative relationship/moderation model instead of independently trying to understand three different relationship systems.
+
+The next implementation step should therefore be **deployment of the 4.1.0 MU plugin + targeted external updates, followed by the BuddyBoss block adapter and controlled integration testing**.
+
+[1]: https://www.buddyboss.com/resources/reference/functions/friends_accept_friendship/?utm_source=chatgpt.com "friends_accept_friendship - Functions | BuddyBoss Resources"
+[2]: https://buddyboss.com/resources/reference/classes/bp_rest_friends_endpoint/create_item/?utm_source=chatgpt.com "BP_REST_Friends_Endpoint::create_item - Methods | BuddyBoss Resources"
+
+
+<<STOP CHATGPT>>
