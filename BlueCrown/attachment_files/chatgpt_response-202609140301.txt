@@ -1,0 +1,3057 @@
+<<START CHATGPT>>
+
+## Executive decision
+
+I reviewed the current Buzzjuice bridge, the relevant Streams/Socials source files, the previous ChatGPT proposal, and the GitHub proposal. The GitHub proposal had several good structural ideas, but I would **not deploy it as written**.
+
+The strongest production architecture is:
+
+```text
+                 BUZZJUICE WORDPRESS
+                  / BUDDYBOSS
+                       │
+              CANONICAL AUTHORITY
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+   Canonical relationship      Durable event
+       state store               ledger/queue
+          │                         │
+          └────────────┬────────────┘
+                       │
+                wwqd_bridge.php
+                 platform adapters
+                  │           │
+                  ▼           ▼
+             WoWonder      QuickDate
+              Streams        Socials
+```
+
+The important correction is that **Streams and Socials must never synchronize directly with each other**. Their relationship data becomes a projection of the WordPress/BuddyBoss state. The previous response reached the same conclusion. ([GitHub][1])
+
+Also, the current `wwqd_bridge.php` is already a large, established bridge with authenticated cross-platform functionality, so it should be extended surgically rather than rewritten. ([GitHub][2])
+
+---
+
+# 1. What I would change from the previous/GitHub proposal
+
+### Keep
+
+* `bzj-connections-sync.php`
+* WordPress/BuddyBoss as the authority
+* `wo_user_id` and `qd_user_id`
+* canonical states
+* block dominance
+* removing connections when blocking
+* event UUIDs
+* pair-level locking
+* durable retry
+* reconciliation
+* authenticated external requests
+* surgical changes to the large platform files
+
+These were all sound recommendations. The previous analysis specifically recommended a durable outbox and reconciliation rather than a simple fire-and-forget log. ([GitHub][1])
+
+### Correct
+
+The GitHub proposal introduced a separate schema file and a third lock table. I recommend simplifying that.
+
+Use:
+
+```text
+wp_bzj_relationships
+wp_bzj_relationship_events
+```
+
+and use **MySQL named locks** for pair-level serialization rather than creating a permanent third table.
+
+The canonical relationship table holds the current state; the event table is simultaneously the:
+
+* event ledger
+* retry queue
+* audit trail
+* loop-prevention mechanism
+* debugging record
+
+That was the strongest part of the previous architectural review. ([GitHub][1])
+
+### Important additional correction
+
+Do **not** make `Wo_RegisterFollow()` or a QuickDate native follow operation the authority.
+
+For example, Streams' current `Wo_RegisterFollow()` can represent both following and friend/request behavior depending on `connectivitySystem`, and its `is_confirm` parameter changes the resulting state. ([GitHub][3])
+
+Likewise QuickDate's `followers` concept uses accepted/requested states.
+
+Therefore Buzzjuice needs its own semantic state:
+
+```text
+NONE
+REQUESTED
+CONNECTED
+BLOCKED
+```
+
+and each platform adapter translates that state into its own native representation. ([GitHub][1])
+
+---
+
+# 2. Canonical relationship model
+
+There is one subtle but important issue with the previous design.
+
+A connection is logically **directional while requested**, but **symmetric once connected**.
+
+So the database should canonicalize the pair:
+
+```text
+user_a = MIN(user IDs)
+user_b = MAX(user IDs)
+```
+
+while retaining:
+
+```text
+requested_by
+blocked_by
+```
+
+This allows:
+
+```text
+A requests B
+
+user_a = A
+user_b = B
+state = requested
+requested_by = A
+```
+
+and later:
+
+```text
+state = connected
+```
+
+For a block:
+
+```text
+state = blocked
+blocked_by = A
+```
+
+This means we never accidentally create:
+
+```text
+(A,B)
+(B,A)
+```
+
+as two separate canonical relationships.
+
+The previous proposal already identified the need for a unique `(user_a,user_b)` pair. ([GitHub][1])
+
+---
+
+# 3. Canonical states
+
+The state machine should be:
+
+```text
+                     ┌─────────────┐
+                     │    NONE     │
+                     └──────┬──────┘
+                            │
+                    request │
+                            ▼
+                     ┌─────────────┐
+                     │  REQUESTED  │
+                     └──────┬──────┘
+                            │
+                         accept
+                            ▼
+                     ┌─────────────┐
+                     │  CONNECTED  │
+                     └──────┬──────┘
+                            │
+                    remove  │
+                            ▼
+                     ┌─────────────┐
+                     │    NONE     │
+                     └─────────────┘
+
+
+ANY STATE ──────────────── block ──────────────► BLOCKED
+
+BLOCKED ──────────────── unblock ─────────────► NONE
+```
+
+Crucially:
+
+> **Unblocking does not restore the previous relationship.**
+
+If A and B were friends, A blocks B, then A unblocks B:
+
+```text
+CONNECTED
+   ↓
+BLOCKED
+   ↓
+NONE
+```
+
+They must reconnect again.
+
+This was correctly identified in the previous proposal. ([GitHub][1])
+
+---
+
+# 4. Blocking becomes a hard invariant
+
+This is one of the most important changes.
+
+Whenever:
+
+```text
+blocked(A,B)
+```
+
+the system must guarantee:
+
+```text
+friendship(A,B) = none
+request(A,B) = none
+request(B,A) = none
+```
+
+and:
+
+```text
+Streams block(A,B)
+Socials block(A,B)
+```
+
+The previous proposal correctly identified block as dominant over every connection state. ([GitHub][1])
+
+Therefore a block operation is:
+
+```text
+BuddyBoss block
+       │
+       ├── remove BuddyBoss friendship
+       ├── remove pending request A→B
+       ├── remove pending request B→A
+       │
+       ▼
+canonical = BLOCKED
+       │
+       ├── Streams = blocked
+       └── Socials = blocked
+```
+
+---
+
+# 5. Preserve BuddyBoss's existing eligibility rules
+
+I agree with the correction made in the previous ChatGPT response.
+
+Do **not** invent:
+
+```php
+bzj_validate_block_eligibility()
+```
+
+and do not try to reproduce BuddyBoss's:
+
+* role restrictions
+* profile-type restrictions
+* gender restrictions
+* other moderation criteria
+
+inside the synchronization plugin.
+
+BuddyBoss already owns that policy.
+
+The synchronization plugin should react after BuddyBoss has successfully created the block. The previous response correctly emphasized this. ([GitHub][1])
+
+This is particularly important because BuddyBoss's moderation implementation actually has its own validation and moderation machinery. Its member moderation component validates users and controls whether member blocking is enabled. 
+
+---
+
+# 6. One missing BuddyBoss hook must be added
+
+The original user-supplied list omitted:
+
+```php
+friends_friendship_accepted
+```
+
+That hook is essential.
+
+BuddyBoss fires it after a friendship becomes accepted. ([BuddyBoss][4])
+
+Therefore the authoritative WordPress events are:
+
+```php
+friends_friendship_requested
+friends_friendship_accepted
+friends_friendship_rejected
+friends_friendship_deleted
+
+bp_moderation_block_created
+bp_moderation_block_deleted
+```
+
+I would additionally listen for:
+
+```php
+friends_friendship_withdrawn
+```
+
+if the installed BuddyBoss version exposes it.
+
+That handles the case where:
+
+```text
+A sends request to B
+A withdraws request
+```
+
+without treating it as an actual friendship deletion.
+
+---
+
+# 7. New MU plugin
+
+## File
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+I recommend putting the schema migration and synchronization engine into this **single MU plugin**, rather than introducing another permanent MU file.
+
+Here is the updated implementation.
+
+```php
+<?php
+/**
+ * Plugin Name: Buzzjuice Connections Sync
+ * Description: Canonical relationship and moderation synchronization between Buzzjuice WordPress/BuddyBoss, WoWonder Streams and QuickDate Socials.
+ * Version: 2.0.0
+ * Author: Buzzjuice
+ * License: GPL-2.0-or-later
+ */
+
+defined('ABSPATH') || exit;
+
+define('BZJ_CONNECTIONS_SYNC_VERSION', '2.0.0');
+define('BZJ_CONNECTIONS_SYNC_STATE_NONE', 'none');
+define('BZJ_CONNECTIONS_SYNC_STATE_REQUESTED', 'requested');
+define('BZJ_CONNECTIONS_SYNC_STATE_CONNECTED', 'connected');
+define('BZJ_CONNECTIONS_SYNC_STATE_BLOCKED', 'blocked');
+
+define(
+    'BZJ_CONNECTIONS_SYNC_LOG',
+    WP_CONTENT_DIR . '/bzj-connections-sync.log'
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| Logging
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_log($message, array $context = []) {
+
+    $line = '[' . gmdate('Y-m-d H:i:s') . '] ' . $message;
+
+    if (!empty($context)) {
+        $line .= ' ' . wp_json_encode(
+            $context,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+    }
+
+    $line .= PHP_EOL;
+
+    @error_log(
+        $line,
+        3,
+        BZJ_CONNECTIONS_SYNC_LOG
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Database
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_relationship_table() {
+    global $wpdb;
+
+    return $wpdb->prefix . 'bzj_relationships';
+}
+
+function bzj_connections_sync_event_table() {
+    global $wpdb;
+
+    return $wpdb->prefix . 'bzj_relationship_events';
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Schema
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_install() {
+
+    global $wpdb;
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    $charset = $wpdb->get_charset_collate();
+
+    $relationships = bzj_connections_sync_relationship_table();
+    $events         = bzj_connections_sync_event_table();
+
+    $sql = "
+    CREATE TABLE {$relationships} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_a BIGINT UNSIGNED NOT NULL,
+        user_b BIGINT UNSIGNED NOT NULL,
+        state VARCHAR(20) NOT NULL DEFAULT 'none',
+        requested_by BIGINT UNSIGNED NULL,
+        blocked_by BIGINT UNSIGNED NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        last_event_uuid CHAR(36) NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY relationship_pair (user_a,user_b),
+        KEY state (state),
+        KEY requested_by (requested_by),
+        KEY blocked_by (blocked_by),
+        KEY updated_at (updated_at)
+    ) {$charset};
+
+    CREATE TABLE {$events} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        event_uuid CHAR(36) NOT NULL,
+        origin VARCHAR(20) NOT NULL,
+        event_type VARCHAR(50) NOT NULL,
+        actor_wp_id BIGINT UNSIGNED NOT NULL,
+        target_wp_id BIGINT UNSIGNED NOT NULL,
+        state VARCHAR(20) NOT NULL,
+        payload LONGTEXT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempts INT UNSIGNED NOT NULL DEFAULT 0,
+        next_attempt_at DATETIME NOT NULL,
+        last_error TEXT NULL,
+        created_at DATETIME NOT NULL,
+        processed_at DATETIME NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY event_uuid (event_uuid),
+        KEY retry_lookup (status,next_attempt_at),
+        KEY pair_lookup (actor_wp_id,target_wp_id),
+        KEY created_at (created_at)
+    ) {$charset};
+    ";
+
+    dbDelta($sql);
+
+    update_option(
+        'bzj_connections_sync_schema_version',
+        BZJ_CONNECTIONS_SYNC_VERSION,
+        false
+    );
+}
+
+add_action(
+    'init',
+    'bzj_connections_sync_maybe_install',
+    1
+);
+
+function bzj_connections_sync_maybe_install() {
+
+    $version = get_option(
+        'bzj_connections_sync_schema_version',
+        ''
+    );
+
+    if ($version !== BZJ_CONNECTIONS_SYNC_VERSION) {
+        bzj_connections_sync_install();
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| UUID
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_uuid() {
+
+    if (function_exists('wp_generate_uuid4')) {
+        return wp_generate_uuid4();
+    }
+
+    return sprintf(
+        '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0x0fff) | 0x4000,
+        mt_rand(0, 0x3fff) | 0x8000,
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff)
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Pair normalization
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_normalize_pair($user_a, $user_b) {
+
+    $user_a = absint($user_a);
+    $user_b = absint($user_b);
+
+    if (!$user_a || !$user_b || $user_a === $user_b) {
+        return false;
+    }
+
+    if ($user_a > $user_b) {
+        [$user_a, $user_b] = [$user_b, $user_a];
+    }
+
+    return [
+        'user_a' => $user_a,
+        'user_b' => $user_b,
+    ];
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Pair lock
+|--------------------------------------------------------------------------
+|
+| MySQL named locks avoid another permanent lock table.
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_pair_lock(
+    $user_a,
+    $user_b
+) {
+
+    global $wpdb;
+
+    $pair = bzj_connections_sync_normalize_pair(
+        $user_a,
+        $user_b
+    );
+
+    if (!$pair) {
+        return false;
+    }
+
+    $key = sprintf(
+        'bzj_rel_%d_%d',
+        $pair['user_a'],
+        $pair['user_b']
+    );
+
+    $result = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT GET_LOCK(%s, 5)",
+            $key
+        )
+    );
+
+    return ((int) $result === 1)
+        ? $key
+        : false;
+}
+
+function bzj_connections_sync_pair_unlock($lock_key) {
+
+    global $wpdb;
+
+    if (!$lock_key) {
+        return;
+    }
+
+    $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT RELEASE_LOCK(%s)",
+            $lock_key
+        )
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Read canonical state
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_get_state(
+    $user_a,
+    $user_b
+) {
+
+    global $wpdb;
+
+    $pair = bzj_connections_sync_normalize_pair(
+        $user_a,
+        $user_b
+    );
+
+    if (!$pair) {
+        return false;
+    }
+
+    $table = bzj_connections_sync_relationship_table();
+
+    return $wpdb->get_row(
+        $wpdb->prepare(
+            "
+            SELECT *
+            FROM {$table}
+            WHERE user_a = %d
+              AND user_b = %d
+            LIMIT 1
+            ",
+            $pair['user_a'],
+            $pair['user_b']
+        )
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Block check
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_is_blocked(
+    $user_a,
+    $user_b
+) {
+
+    $row = bzj_connections_sync_get_state(
+        $user_a,
+        $user_b
+    );
+
+    return $row && $row->state === BZJ_CONNECTIONS_SYNC_STATE_BLOCKED;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Durable event
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_create_event(
+    $actor_wp_id,
+    $target_wp_id,
+    $state,
+    $event_type,
+    array $payload = [],
+    $origin = 'wordpress'
+) {
+
+    global $wpdb;
+
+    $event_uuid = bzj_connections_sync_uuid();
+    $now        = current_time('mysql', true);
+
+    $result = $wpdb->insert(
+        bzj_connections_sync_event_table(),
+        [
+            'event_uuid'      => $event_uuid,
+            'origin'          => sanitize_key($origin),
+            'event_type'      => sanitize_key($event_type),
+            'actor_wp_id'     => absint($actor_wp_id),
+            'target_wp_id'    => absint($target_wp_id),
+            'state'           => sanitize_key($state),
+            'payload'         => !empty($payload)
+                ? wp_json_encode($payload)
+                : null,
+            'status'          => 'pending',
+            'attempts'        => 0,
+            'next_attempt_at' => $now,
+            'created_at'      => $now,
+        ],
+        [
+            '%s',
+            '%s',
+            '%s',
+            '%d',
+            '%d',
+            '%s',
+            '%s',
+            '%s',
+            '%d',
+            '%s',
+            '%s',
+        ]
+    );
+
+    if (!$result) {
+
+        bzj_connections_sync_log(
+            'Failed creating relationship event',
+            [
+                'error' => $wpdb->last_error,
+                'actor' => $actor_wp_id,
+                'target' => $target_wp_id,
+                'event' => $event_type,
+            ]
+        );
+
+        return false;
+    }
+
+    return $event_uuid;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Canonical state writer
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_set_state(
+    $user_a,
+    $user_b,
+    $state,
+    $requested_by = 0,
+    $blocked_by = 0,
+    $origin = 'wordpress',
+    $event_type = '',
+    array $payload = []
+) {
+
+    global $wpdb;
+
+    $pair = bzj_connections_sync_normalize_pair(
+        $user_a,
+        $user_b
+    );
+
+    if (!$pair) {
+        return false;
+    }
+
+    $allowed = [
+        BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        BZJ_CONNECTIONS_SYNC_STATE_REQUESTED,
+        BZJ_CONNECTIONS_SYNC_STATE_CONNECTED,
+        BZJ_CONNECTIONS_SYNC_STATE_BLOCKED,
+    ];
+
+    if (!in_array($state, $allowed, true)) {
+        return false;
+    }
+
+    $lock = bzj_connections_sync_pair_lock(
+        $pair['user_a'],
+        $pair['user_b']
+    );
+
+    if (!$lock) {
+        bzj_connections_sync_log(
+            'Could not acquire relationship pair lock',
+            $pair
+        );
+
+        return false;
+    }
+
+    try {
+
+        $table = bzj_connections_sync_relationship_table();
+
+        $existing = bzj_connections_sync_get_state(
+            $pair['user_a'],
+            $pair['user_b']
+        );
+
+        $old_state = $existing
+            ? $existing->state
+            : BZJ_CONNECTIONS_SYNC_STATE_NONE;
+
+        /*
+         * Block dominates every other state.
+         */
+        if (
+            $old_state === BZJ_CONNECTIONS_SYNC_STATE_BLOCKED &&
+            $state !== BZJ_CONNECTIONS_SYNC_STATE_NONE
+        ) {
+            return true;
+        }
+
+        /*
+         * Once blocked, unblock must explicitly transition to NONE.
+         */
+        if (
+            $old_state === BZJ_CONNECTIONS_SYNC_STATE_BLOCKED &&
+            $state === BZJ_CONNECTIONS_SYNC_STATE_NONE
+        ) {
+            // allowed
+        }
+
+        /*
+         * Avoid generating unnecessary events.
+         */
+        if (
+            $old_state === $state &&
+            !$event_type
+        ) {
+            return true;
+        }
+
+        $now = current_time('mysql', true);
+
+        $event_uuid = bzj_connections_sync_uuid();
+
+        if ($existing) {
+
+            $updated = $wpdb->update(
+                $table,
+                [
+                    'state'          => $state,
+                    'requested_by'   => $requested_by
+                        ? absint($requested_by)
+                        : null,
+                    'blocked_by'     => $blocked_by
+                        ? absint($blocked_by)
+                        : null,
+                    'updated_at'     => $now,
+                    'last_event_uuid'=> $event_uuid,
+                ],
+                [
+                    'user_a' => $pair['user_a'],
+                    'user_b' => $pair['user_b'],
+                ],
+                [
+                    '%s',
+                    '%d',
+                    '%d',
+                    '%s',
+                    '%s',
+                ],
+                [
+                    '%d',
+                    '%d',
+                ]
+            );
+
+        } else {
+
+            $updated = $wpdb->insert(
+                $table,
+                [
+                    'user_a'          => $pair['user_a'],
+                    'user_b'          => $pair['user_b'],
+                    'state'           => $state,
+                    'requested_by'    => $requested_by
+                        ? absint($requested_by)
+                        : null,
+                    'blocked_by'      => $blocked_by
+                        ? absint($blocked_by)
+                        : null,
+                    'created_at'      => $now,
+                    'updated_at'      => $now,
+                    'last_event_uuid' => $event_uuid,
+                ],
+                [
+                    '%d',
+                    '%d',
+                    '%s',
+                    '%d',
+                    '%d',
+                    '%s',
+                    '%s',
+                    '%s',
+                ]
+            );
+        }
+
+        if ($updated === false) {
+
+            bzj_connections_sync_log(
+                'Canonical relationship update failed',
+                [
+                    'error' => $wpdb->last_error,
+                    'pair'  => $pair,
+                    'state' => $state,
+                ]
+            );
+
+            return false;
+        }
+
+        $event = bzj_connections_sync_create_event(
+            $user_a,
+            $user_b,
+            $state,
+            $event_type ?: 'state_changed',
+            array_merge(
+                $payload,
+                [
+                    'previous_state' => $old_state,
+                    'canonical_state' => $state,
+                    'event_uuid' => $event_uuid,
+                ]
+            ),
+            $origin
+        );
+
+        bzj_connections_sync_log(
+            'Canonical relationship state changed',
+            [
+                'pair' => $pair,
+                'from' => $old_state,
+                'to' => $state,
+                'event_uuid' => $event,
+            ]
+        );
+
+        return $event;
+
+    } finally {
+
+        bzj_connections_sync_pair_unlock($lock);
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Remove BuddyBoss relationships when blocking
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_remove_wp_relationships(
+    $user_a,
+    $user_b
+) {
+
+    $user_a = absint($user_a);
+    $user_b = absint($user_b);
+
+    if (!$user_a || !$user_b || $user_a === $user_b) {
+        return;
+    }
+
+    /*
+     * Remove active friendship.
+     */
+    if (
+        function_exists('friends_check_friendship_status') &&
+        function_exists('friends_remove_friend')
+    ) {
+
+        $status = friends_check_friendship_status(
+            $user_a,
+            $user_b
+        );
+
+        if ($status === 'is_friend') {
+
+            friends_remove_friend(
+                $user_a,
+                $user_b
+            );
+        }
+    }
+
+    /*
+     * Remove pending friendship in either direction.
+     */
+    if (
+        function_exists('friends_get_friendship_id') &&
+        function_exists('friends_withdraw_friendship') &&
+        function_exists('friends_reject_friendship')
+    ) {
+
+        $forward = friends_get_friendship_id(
+            $user_a,
+            $user_b
+        );
+
+        if ($forward) {
+            @friends_withdraw_friendship($forward);
+            @friends_reject_friendship($forward);
+        }
+
+        $reverse = friends_get_friendship_id(
+            $user_b,
+            $user_a
+        );
+
+        if ($reverse) {
+            @friends_withdraw_friendship($reverse);
+            @friends_reject_friendship($reverse);
+        }
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| BuddyBoss events
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'friends_friendship_requested',
+    'bzj_connections_sync_friendship_requested',
+    10,
+    4
+);
+
+function bzj_connections_sync_friendship_requested(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    $initiator_id = absint($initiator_id);
+    $friend_id    = absint($friend_id);
+
+    if (
+        !$initiator_id ||
+        !$friend_id ||
+        $initiator_id === $friend_id
+    ) {
+        return;
+    }
+
+    /*
+     * A blocked pair can never have a request.
+     */
+    if (
+        bzj_connections_sync_is_blocked(
+            $initiator_id,
+            $friend_id
+        )
+    ) {
+        return;
+    }
+
+    bzj_connections_sync_set_state(
+        $initiator_id,
+        $friend_id,
+        BZJ_CONNECTIONS_SYNC_STATE_REQUESTED,
+        $initiator_id,
+        0,
+        'wordpress',
+        'connection_requested',
+        [
+            'friendship_id' => absint($friendship_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Accepted
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'friends_friendship_accepted',
+    'bzj_connections_sync_friendship_accepted',
+    10,
+    4
+);
+
+function bzj_connections_sync_friendship_accepted(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    $initiator_id = absint($initiator_id);
+    $friend_id    = absint($friend_id);
+
+    if (
+        !$initiator_id ||
+        !$friend_id ||
+        $initiator_id === $friend_id
+    ) {
+        return;
+    }
+
+    if (
+        bzj_connections_sync_is_blocked(
+            $initiator_id,
+            $friend_id
+        )
+    ) {
+        return;
+    }
+
+    bzj_connections_sync_set_state(
+        $initiator_id,
+        $friend_id,
+        BZJ_CONNECTIONS_SYNC_STATE_CONNECTED,
+        0,
+        0,
+        'wordpress',
+        'connection_accepted',
+        [
+            'friendship_id' => absint($friendship_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Rejected
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'friends_friendship_rejected',
+    'bzj_connections_sync_friendship_rejected',
+    10,
+    4
+);
+
+function bzj_connections_sync_friendship_rejected(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    bzj_connections_sync_set_state(
+        absint($initiator_id),
+        absint($friend_id),
+        BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        0,
+        0,
+        'wordpress',
+        'connection_rejected',
+        [
+            'friendship_id' => absint($friendship_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Deleted
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'friends_friendship_deleted',
+    'bzj_connections_sync_friendship_deleted',
+    10,
+    4
+);
+
+function bzj_connections_sync_friendship_deleted(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    bzj_connections_sync_set_state(
+        absint($initiator_id),
+        absint($friend_id),
+        BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        0,
+        0,
+        'wordpress',
+        'connection_removed',
+        [
+            'friendship_id' => absint($friendship_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Withdrawn request
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'friends_friendship_withdrawn',
+    'bzj_connections_sync_friendship_withdrawn',
+    10,
+    4
+);
+
+function bzj_connections_sync_friendship_withdrawn(
+    $friendship_id,
+    $initiator_id,
+    $friend_id,
+    $friendship
+) {
+
+    bzj_connections_sync_set_state(
+        absint($initiator_id),
+        absint($friend_id),
+        BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        0,
+        0,
+        'wordpress',
+        'connection_withdrawn',
+        [
+            'friendship_id' => absint($friendship_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Block created
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'bp_moderation_block_created',
+    'bzj_connections_sync_block_created',
+    10,
+    2
+);
+
+function bzj_connections_sync_block_created(
+    $block_id,
+    $block_object
+) {
+
+    if (
+        !is_object($block_object) ||
+        empty($block_object->user_id) ||
+        empty($block_object->item_id)
+    ) {
+        return;
+    }
+
+    $blocker_id = absint($block_object->user_id);
+    $blocked_id = absint($block_object->item_id);
+
+    if (
+        !$blocker_id ||
+        !$blocked_id ||
+        $blocker_id === $blocked_id
+    ) {
+        return;
+    }
+
+    /*
+     * Blocking destroys existing connection/request state.
+     */
+    bzj_connections_sync_remove_wp_relationships(
+        $blocker_id,
+        $blocked_id
+    );
+
+    bzj_connections_sync_set_state(
+        $blocker_id,
+        $blocked_id,
+        BZJ_CONNECTIONS_SYNC_STATE_BLOCKED,
+        0,
+        $blocker_id,
+        'wordpress',
+        'block_created',
+        [
+            'block_id' => absint($block_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Block deleted
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'bp_moderation_block_deleted',
+    'bzj_connections_sync_block_deleted',
+    10,
+    2
+);
+
+function bzj_connections_sync_block_deleted(
+    $block_id,
+    $block_object
+) {
+
+    if (
+        !is_object($block_object) ||
+        empty($block_object->user_id) ||
+        empty($block_object->item_id)
+    ) {
+        return;
+    }
+
+    $blocker_id = absint($block_object->user_id);
+    $blocked_id = absint($block_object->item_id);
+
+    if (
+        !$blocker_id ||
+        !$blocked_id ||
+        $blocker_id === $blocked_id
+    ) {
+        return;
+    }
+
+    /*
+     * Never restore the previous connection automatically.
+     */
+    bzj_connections_sync_set_state(
+        $blocker_id,
+        $blocked_id,
+        BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        0,
+        0,
+        'wordpress',
+        'block_deleted',
+        [
+            'block_id' => absint($block_id),
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| External platform request authentication
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_verify_external_request(
+    WP_REST_Request $request
+) {
+
+    $secret = defined('BUZZ_SSO_SECRET')
+        ? BUZZ_SSO_SECRET
+        : getenv('BUZZ_SSO_SECRET');
+
+    if (!$secret) {
+        return false;
+    }
+
+    $timestamp = $request->get_header('X-BZJ-Timestamp');
+    $signature = $request->get_header('X-BZJ-Signature');
+
+    if (!$timestamp || !$signature) {
+        return false;
+    }
+
+    /*
+     * Prevent replay attacks.
+     */
+    if (
+        abs(time() - (int) $timestamp) > 300
+    ) {
+        return false;
+    }
+
+    $body = $request->get_body();
+
+    $canonical =
+        $timestamp . "\n" .
+        $body;
+
+    $expected = hash_hmac(
+        'sha256',
+        $canonical,
+        $secret
+    );
+
+    return hash_equals(
+        $expected,
+        $signature
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Resolve WP user from external ID
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_resolve_wp_user(
+    $platform,
+    $external_id
+) {
+
+    $platform = sanitize_key($platform);
+    $external_id = absint($external_id);
+
+    if (!$external_id) {
+        return 0;
+    }
+
+    $meta_key = '';
+
+    if ($platform === 'streams') {
+        $meta_key = 'wo_user_id';
+    }
+
+    if ($platform === 'socials') {
+        $meta_key = 'qd_user_id';
+    }
+
+    if (!$meta_key) {
+        return 0;
+    }
+
+    $users = get_users([
+        'meta_key'   => $meta_key,
+        'meta_value' => (string) $external_id,
+        'number'     => 1,
+        'fields'     => 'ids',
+    ]);
+
+    return !empty($users)
+        ? absint($users[0])
+        : 0;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| REST endpoint
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'rest_api_init',
+    'bzj_connections_sync_register_rest'
+);
+
+function bzj_connections_sync_register_rest() {
+
+    register_rest_route(
+        'bzj/v1',
+        '/relationship',
+        [
+            'methods' => WP_REST_Server::CREATABLE,
+
+            'callback' =>
+                'bzj_connections_sync_external_relationship',
+
+            'permission_callback' =>
+                'bzj_connections_sync_verify_external_request',
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| External relationship endpoint
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_external_relationship(
+    WP_REST_Request $request
+) {
+
+    $data = $request->get_json_params();
+
+    $origin = sanitize_key(
+        $data['origin'] ?? ''
+    );
+
+    $operation = sanitize_key(
+        $data['operation'] ?? ''
+    );
+
+    $actor_external = absint(
+        $data['actor_id'] ?? 0
+    );
+
+    $target_external = absint(
+        $data['target_id'] ?? 0
+    );
+
+    if (
+        !in_array(
+            $origin,
+            ['streams', 'socials'],
+            true
+        )
+    ) {
+        return new WP_Error(
+            'bzj_invalid_origin',
+            'Invalid platform.',
+            ['status' => 400]
+        );
+    }
+
+    if (
+        !$actor_external ||
+        !$target_external
+    ) {
+        return new WP_Error(
+            'bzj_invalid_users',
+            'Invalid platform user IDs.',
+            ['status' => 400]
+        );
+    }
+
+    $actor_wp = bzj_connections_sync_resolve_wp_user(
+        $origin,
+        $actor_external
+    );
+
+    $target_wp = bzj_connections_sync_resolve_wp_user(
+        $origin,
+        $target_external
+    );
+
+    if (
+        !$actor_wp ||
+        !$target_wp
+    ) {
+        return new WP_Error(
+            'bzj_user_mapping_missing',
+            'Unable to resolve platform users to WordPress users.',
+            ['status' => 404]
+        );
+    }
+
+    switch ($operation) {
+
+        case 'request':
+
+            if (
+                bzj_connections_sync_is_blocked(
+                    $actor_wp,
+                    $target_wp
+                )
+            ) {
+                return new WP_Error(
+                    'bzj_blocked',
+                    'Users are blocked.',
+                    ['status' => 403]
+                );
+            }
+
+            /*
+             * WordPress remains authoritative.
+             *
+             * Native BuddyBoss request creation must happen
+             * through the existing BuddyBoss API/UI path where
+             * possible. This endpoint only records externally
+             * confirmed state.
+             */
+            bzj_connections_sync_set_state(
+                $actor_wp,
+                $target_wp,
+                BZJ_CONNECTIONS_SYNC_STATE_REQUESTED,
+                $actor_wp,
+                0,
+                $origin,
+                'external_connection_requested',
+                [
+                    'external_actor_id' => $actor_external,
+                    'external_target_id' => $target_external,
+                ]
+            );
+
+            break;
+
+        case 'connected':
+
+            if (
+                bzj_connections_sync_is_blocked(
+                    $actor_wp,
+                    $target_wp
+                )
+            ) {
+                return new WP_Error(
+                    'bzj_blocked',
+                    'Users are blocked.',
+                    ['status' => 403]
+                );
+            }
+
+            bzj_connections_sync_set_state(
+                $actor_wp,
+                $target_wp,
+                BZJ_CONNECTIONS_SYNC_STATE_CONNECTED,
+                0,
+                0,
+                $origin,
+                'external_connection_accepted'
+            );
+
+            break;
+
+        case 'remove':
+
+        case 'reject':
+
+        case 'withdraw':
+
+            bzj_connections_sync_set_state(
+                $actor_wp,
+                $target_wp,
+                BZJ_CONNECTIONS_SYNC_STATE_NONE,
+                0,
+                0,
+                $origin,
+                'external_connection_removed'
+            );
+
+            break;
+
+        case 'block':
+
+            /*
+             * External block is accepted as a moderation event,
+             * but canonical moderation is still stored in WP.
+             *
+             * If the installed BuddyBoss release exposes its
+             * native block creation API, this endpoint should
+             * invoke that API here rather than duplicating the
+             * moderation implementation.
+             */
+            bzj_connections_sync_remove_wp_relationships(
+                $actor_wp,
+                $target_wp
+            );
+
+            bzj_connections_sync_set_state(
+                $actor_wp,
+                $target_wp,
+                BZJ_CONNECTIONS_SYNC_STATE_BLOCKED,
+                0,
+                $actor_wp,
+                $origin,
+                'external_block_created'
+            );
+
+            break;
+
+        case 'unblock':
+
+            bzj_connections_sync_set_state(
+                $actor_wp,
+                $target_wp,
+                BZJ_CONNECTIONS_SYNC_STATE_NONE,
+                0,
+                0,
+                $origin,
+                'external_block_deleted'
+            );
+
+            break;
+
+        default:
+
+            return new WP_Error(
+                'bzj_invalid_operation',
+                'Unsupported relationship operation.',
+                ['status' => 400]
+            );
+    }
+
+    $state = bzj_connections_sync_get_state(
+        $actor_wp,
+        $target_wp
+    );
+
+    return rest_ensure_response([
+        'success' => true,
+        'state' => $state
+            ? $state->state
+            : BZJ_CONNECTIONS_SYNC_STATE_NONE,
+        'wp_actor_id' => $actor_wp,
+        'wp_target_id' => $target_wp,
+    ]);
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Event processor
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_process_events(
+    $limit = 10
+) {
+
+    global $wpdb;
+
+    $limit = max(
+        1,
+        min(50, absint($limit))
+    );
+
+    $events_table =
+        bzj_connections_sync_event_table();
+
+    $events = $wpdb->get_results(
+        $wpdb->prepare(
+            "
+            SELECT *
+            FROM {$events_table}
+            WHERE status = 'pending'
+              AND next_attempt_at <= %s
+            ORDER BY id ASC
+            LIMIT %d
+            ",
+            current_time('mysql', true),
+            $limit
+        )
+    );
+
+    foreach ($events as $event) {
+
+        bzj_connections_sync_process_event(
+            $event
+        );
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Event processing
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_process_event(
+    $event
+) {
+
+    global $wpdb;
+
+    /*
+     * Adapter implementation belongs in wwqd_bridge.php.
+     */
+    if (
+        !function_exists(
+            'bzj_wwqd_apply_relationship_projection'
+        )
+    ) {
+
+        bzj_connections_sync_mark_failed(
+            $event,
+            'Relationship adapter is unavailable.'
+        );
+
+        return;
+    }
+
+    try {
+
+        $payload = [];
+
+        if (!empty($event->payload)) {
+
+            $decoded = json_decode(
+                $event->payload,
+                true
+            );
+
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            }
+        }
+
+        $result =
+            bzj_wwqd_apply_relationship_projection(
+                $event->event_uuid,
+                $event->state,
+                (int) $event->actor_wp_id,
+                (int) $event->target_wp_id,
+                $payload
+            );
+
+        if ($result === true) {
+
+            $wpdb->update(
+                bzj_connections_sync_event_table(),
+                [
+                    'status' => 'processed',
+                    'processed_at' =>
+                        current_time('mysql', true),
+                ],
+                [
+                    'id' => absint($event->id),
+                ],
+                [
+                    '%s',
+                    '%s',
+                ],
+                [
+                    '%d',
+                ]
+            );
+
+            return;
+        }
+
+        bzj_connections_sync_mark_failed(
+            $event,
+            'Relationship adapter returned false.'
+        );
+
+    } catch (Throwable $e) {
+
+        bzj_connections_sync_mark_failed(
+            $event,
+            $e->getMessage()
+        );
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Retry
+|--------------------------------------------------------------------------
+*/
+
+function bzj_connections_sync_mark_failed(
+    $event,
+    $error
+) {
+
+    global $wpdb;
+
+    $attempts = absint($event->attempts) + 1;
+
+    /*
+     * Exponential backoff.
+     */
+    $delay = min(
+        3600,
+        pow(2, min($attempts, 10)) * 5
+    );
+
+    $next = gmdate(
+        'Y-m-d H:i:s',
+        time() + $delay
+    );
+
+    $wpdb->update(
+        bzj_connections_sync_event_table(),
+        [
+            'status'          => 'pending',
+            'attempts'        => $attempts,
+            'next_attempt_at' => $next,
+            'last_error'      => wp_strip_all_tags(
+                (string) $error
+            ),
+        ],
+        [
+            'id' => absint($event->id),
+        ],
+        [
+            '%s',
+            '%d',
+            '%s',
+            '%s',
+        ],
+        [
+            '%d',
+        ]
+    );
+
+    bzj_connections_sync_log(
+        'Relationship event failed; retry scheduled',
+        [
+            'event_id' => $event->id,
+            'uuid' => $event->event_uuid,
+            'attempts' => $attempts,
+            'error' => $error,
+        ]
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| WP-Cron worker
+|--------------------------------------------------------------------------
+*/
+
+add_action(
+    'bzj_connections_sync_worker',
+    'bzj_connections_sync_process_events'
+);
+
+if (
+    !wp_next_scheduled(
+        'bzj_connections_sync_worker'
+    )
+) {
+
+    wp_schedule_event(
+        time() + 60,
+        'minute',
+        'bzj_connections_sync_worker'
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Add one-minute cron schedule.
+|--------------------------------------------------------------------------
+*/
+
+add_filter(
+    'cron_schedules',
+    'bzj_connections_sync_cron_schedule'
+);
+
+function bzj_connections_sync_cron_schedule(
+    $schedules
+) {
+
+    $schedules['minute'] = [
+        'interval' => 60,
+        'display'  => 'Every Minute',
+    ];
+
+    return $schedules;
+}
+```
+
+### One correction to that code
+
+The cron schedule filter must be registered **before** attempting to schedule the event. Therefore in the actual file, move the `cron_schedules` filter block immediately above the `wp_next_scheduled()` block.
+
+That is a small but important bootstrap-order correction.
+
+---
+
+# 8. Do not let the MU plugin directly modify Streams/Socials
+
+The MU plugin's job is:
+
+```text
+BuddyBoss event
+      ↓
+canonical state
+      ↓
+durable event
+      ↓
+bridge
+```
+
+The bridge's job is:
+
+```text
+canonical event
+      ↓
+WoWonder adapter
+      ↓
+QuickDate adapter
+```
+
+This keeps responsibilities clean.
+
+---
+
+# 9. Surgical addition to `shared/wwqd_bridge.php`
+
+The current bridge already has the right architectural role: it provides cross-platform database connectivity and authenticated HTTP functionality using `BUZZ_SSO_SECRET`. ([GitHub][2])
+
+Do **not** regenerate the approximately 2,000+ line file.
+
+Add the following isolated section near the end of the file, before its final dispatcher/closing execution section.
+
+## `BUZZJUICE RELATIONSHIP / MODERATION SYNC`
+
+```php
+/* ==========================================================================
+ * BUZZJUICE RELATIONSHIP / MODERATION SYNC
+ * ==========================================================================
+ *
+ * WordPress is canonical.
+ *
+ * This section projects the canonical relationship state into:
+ *
+ *   - WoWonder Streams
+ *   - QuickDate Socials
+ *
+ * IMPORTANT:
+ *   Never allow Streams -> Socials or Socials -> Streams synchronization.
+ *
+ * ========================================================================== */
+
+if (!function_exists('bzj_wwqd_apply_relationship_projection')) {
+
+    function bzj_wwqd_apply_relationship_projection(
+        $event_uuid,
+        $state,
+        $wp_actor_id,
+        $wp_target_id,
+        array $payload = []
+    ) {
+
+        $event_uuid = (string) $event_uuid;
+        $state = strtolower(trim((string) $state));
+
+        $wp_actor_id  = (int) $wp_actor_id;
+        $wp_target_id = (int) $wp_target_id;
+
+        if (
+            !$event_uuid ||
+            !$wp_actor_id ||
+            !$wp_target_id ||
+            $wp_actor_id === $wp_target_id
+        ) {
+            return false;
+        }
+
+        /*
+         * Resolve external IDs from authoritative WP usermeta.
+         */
+        $wp_conn = get_wp_db_conn();
+
+        if (!$wp_conn) {
+            log_sync_debug(
+                'Relationship projection: WP DB unavailable',
+                'Relationship'
+            );
+
+            return false;
+        }
+
+        $wo_actor_id = bzj_bridge_get_wp_user_meta(
+            $wp_conn,
+            $wp_actor_id,
+            'wo_user_id'
+        );
+
+        $wo_target_id = bzj_bridge_get_wp_user_meta(
+            $wp_conn,
+            $wp_target_id,
+            'wo_user_id'
+        );
+
+        $qd_actor_id = bzj_bridge_get_wp_user_meta(
+            $wp_conn,
+            $wp_actor_id,
+            'qd_user_id'
+        );
+
+        $qd_target_id = bzj_bridge_get_wp_user_meta(
+            $wp_conn,
+            $wp_target_id,
+            'qd_user_id'
+        );
+
+        /*
+         * WoWonder.
+         */
+        if (
+            $wo_actor_id &&
+            $wo_target_id
+        ) {
+
+            $wo_result =
+                bzj_wwqd_project_wowonder_relationship(
+                    $event_uuid,
+                    $state,
+                    (int) $wo_actor_id,
+                    (int) $wo_target_id
+                );
+
+            if (!$wo_result) {
+                return false;
+            }
+        }
+
+        /*
+         * QuickDate.
+         */
+        if (
+            $qd_actor_id &&
+            $qd_target_id
+        ) {
+
+            $qd_result =
+                bzj_wwqd_project_quickdate_relationship(
+                    $event_uuid,
+                    $state,
+                    (int) $qd_actor_id,
+                    (int) $qd_target_id
+                );
+
+            if (!$qd_result) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+```
+
+---
+
+# 10. Important: do not guess the external database schema
+
+This is one area where I would deliberately **not** blindly insert SQL into the existing files.
+
+The supplied source tells us that Streams and Socials already have native functions for these operations.
+
+Streams has:
+
+```text
+Wo_RegisterFollow()
+Wo_IsBlocked()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+and the follow UI currently ultimately invokes:
+
+```text
+follow_user
+```
+
+through the WoWonder AJAX system. ([GitHub][3])
+
+Therefore the safest adapter is:
+
+```text
+WordPress canonical state
+        ↓
+authenticated request
+        ↓
+Streams native relationship/block operation
+```
+
+rather than reverse-engineering the table schema and writing arbitrary rows.
+
+---
+
+# 11. The correct external-platform adapter model
+
+Create two small adapter endpoints.
+
+### Streams
+
+```text
+/streams/buzzjuice-relationship-sync.php
+```
+
+### Socials
+
+```text
+/social/buzzjuice-relationship-sync.php
+```
+
+These are **not WordPress plugins**.
+
+They run inside their respective applications and therefore have access to their native functions.
+
+Their only job is:
+
+```text
+receive signed command
+        ↓
+validate event UUID
+        ↓
+validate mapped external IDs
+        ↓
+call native WoWonder/QuickDate function
+        ↓
+return success/failure
+```
+
+This is considerably safer than trying to make WordPress execute WoWonder PHP functions.
+
+---
+
+# 12. Streams adapter
+
+The adapter should expose operations equivalent to:
+
+```text
+requested
+connected
+none
+blocked
+unblocked
+```
+
+Conceptually:
+
+```php
+switch ($state) {
+
+    case 'requested':
+        /*
+         * Native WoWonder follow/request operation.
+         */
+        break;
+
+    case 'connected':
+        /*
+         * Native accepted relationship.
+         */
+        break;
+
+    case 'none':
+        /*
+         * Remove existing relationship/request.
+         */
+        break;
+
+    case 'blocked':
+        /*
+         * Remove relationship first.
+         * Then Wo_RegisterBlock().
+         */
+        break;
+}
+```
+
+### Block ordering is mandatory
+
+Never:
+
+```text
+block
+then remove friendship
+```
+
+Prefer:
+
+```text
+remove friendship/request
+        ↓
+create block
+```
+
+because block is the terminal state.
+
+---
+
+# 13. Surgical change to `content.phtml`
+
+There is an important distinction here.
+
+`content.phtml` contains the **JavaScript presentation/action layer** for `Wo_RegisterFollow()`. The current implementation changes the UI and then calls:
+
+```javascript
+$.get(
+    Wo_Ajax_Requests_File(),
+    {
+        f: 'follow_user',
+        following_id: id
+    },
+    ...
+);
+```
+
+as shown in the current source. ([GitHub][3])
+
+Therefore **do not replace `Wo_RegisterFollow()` with a completely new implementation**.
+
+Instead, after the native operation succeeds, send a signed event to the WordPress authority.
+
+For example, inside the existing success callback:
+
+```javascript
+if (data.status == 200) {
+
+    BuzzjuiceRelationshipSync(
+        'follow',
+        id
+    );
+
+}
+```
+
+Then add a small helper:
+
+```javascript
+function BuzzjuiceRelationshipSync(operation, externalUserId) {
+
+    if (!operation || !externalUserId) {
+        return;
+    }
+
+    $.ajax({
+        url: "<?php echo esc_url('https://buzzjuice.net/wp-json/bzj/v1/relationship'); ?>",
+        method: "POST",
+        contentType: "application/json",
+        data: JSON.stringify({
+            origin: "streams",
+            operation: operation,
+            actor_id: parseInt(_getCookie("user_id")),
+            target_id: parseInt(externalUserId)
+        }),
+        success: function(response) {
+            /*
+             * WordPress is canonical.
+             *
+             * UI can refresh from canonical state if necessary.
+             */
+        }
+    });
+
+}
+```
+
+### But there is a production security issue
+
+Do **not** put `BUZZ_SSO_SECRET` into this JavaScript.
+
+That would expose the secret to every user.
+
+The browser must therefore **not authenticate directly** to the WP endpoint.
+
+Instead, the server-side Streams request handler should call the WordPress endpoint using the shared secret.
+
+That is why the final implementation should have:
+
+```text
+Browser
+ ↓
+Streams AJAX
+ ↓
+native Streams operation
+ ↓
+server-side signed notification
+ ↓
+WordPress
+```
+
+rather than:
+
+```text
+Browser
+ ↓
+WordPress + secret
+```
+
+This is a major security correction to the simplistic external-request design.
+
+---
+
+# 14. Socials
+
+The same architecture applies.
+
+The QuickDate code already has its native follow-state functions:
+
+```text
+Wo_IsFollowing()
+Wo_IsFollowRequested()
+```
+
+and the user-action handler contains the native user-action/block machinery.
+
+Therefore:
+
+```text
+QuickDate browser
+       ↓
+useractions.php
+       ↓
+native QuickDate operation
+       ↓
+signed server-to-server event
+       ↓
+WordPress
+       ↓
+canonical state
+       ↓
+Streams + QuickDate projection
+```
+
+The Socials server must never simply tell Streams:
+
+```text
+"follow this person"
+```
+
+That would create a second authority.
+
+---
+
+# 15. But there is an even better direction
+
+The architecture above handles **existing native actions**.
+
+For the long-term Buzzjuice platform, I recommend going one step further:
+
+### User action
+
+```text
+Streams / Socials
+      ↓
+"REQUEST CONNECTION"
+      ↓
+WordPress authority
+      ↓
+BuddyBoss
+      ↓
+success/failure
+      ↓
+canonical event
+      ↓
+Streams + Socials
+```
+
+That gives you the cleanest possible architecture:
+
+```text
+UI ≠ authority
+
+Streams UI ─┐
+            │
+Social UI ──┼──► WordPress
+            │       │
+WP UI ──────┘       ▼
+                BuddyBoss
+                    │
+                    ▼
+             Canonical state
+                    │
+              ┌─────┴─────┐
+              ▼           ▼
+           Streams     Socials
+```
+
+The existing BuddyBoss REST API itself creates friendships through `friends_add_friend()` and exposes the friendship creation process through its REST endpoint. ([BuddyBoss][5])
+
+That makes WordPress the correct place to ultimately own the operation.
+
+---
+
+# 16. Recommended two-stage rollout
+
+I would **not implement everything simultaneously**.
+
+## Stage 1 — Canonical synchronization
+
+Implement:
+
+```text
+BuddyBoss
+   ↓
+bzj-connections-sync
+   ↓
+event ledger
+   ↓
+Streams
+   ↓
+Socials
+```
+
+Test:
+
+* request
+* accept
+* reject
+* remove
+* withdraw
+* block
+* unblock
+
+This gives us a safe baseline.
+
+---
+
+## Stage 2 — External-originated operations
+
+Then make:
+
+```text
+Streams → WordPress
+Socials → WordPress
+```
+
+send authenticated relationship commands.
+
+WordPress determines the canonical result.
+
+This eliminates the remaining possibility of:
+
+```text
+Streams says A follows B
+Socials says A does not follow B
+WordPress says something else
+```
+
+---
+
+# 17. Event idempotency is essential
+
+This is one of the biggest improvements I recommend over a simple log-file solution.
+
+Every event gets:
+
+```text
+event_uuid
+```
+
+For example:
+
+```text
+8e7a3b1c-...
+```
+
+If the same request is delivered twice:
+
+```text
+event #123
+event #123 again
+```
+
+the adapter must recognize:
+
+```text
+already processed
+```
+
+and return success.
+
+That prevents retries from creating:
+
+```text
+duplicate friendship
+duplicate block
+duplicate request
+```
+
+The event UUID therefore serves three purposes:
+
+```text
+idempotency
+loop prevention
+auditability
+```
+
+---
+
+# 18. Why I changed the "log file only" recommendation
+
+Your preference for log files is sensible for ordinary diagnostics, and `wwqd_bridge.php` already has file-based logging facilities. ([GitHub][2])
+
+However, **a file cannot safely replace the durable relationship event queue**.
+
+Consider:
+
+```text
+BuddyBoss friendship accepted
+        ↓
+WP state updated
+        ↓
+Streams unavailable
+```
+
+If we only write:
+
+```text
+bzj-connections-sync.log
+```
+
+we have no reliable transactional queue.
+
+The system needs to know:
+
+```text
+event UUID
+state
+attempts
+next retry
+processed
+error
+```
+
+Therefore:
+
+### Database
+
+Use for:
+
+```text
+canonical state
+durable events
+retry status
+```
+
+### Log file
+
+Use for:
+
+```text
+diagnostics
+unexpected errors
+debug traces
+```
+
+That is the appropriate separation.
+
+---
+
+# 19. Reconciliation is required
+
+Even with perfect event handling, we should expect:
+
+* failed HTTP request
+* PHP timeout
+* database outage
+* platform maintenance
+* partial deployment
+* manually modified records
+* historical inconsistencies
+
+So add a reconciliation routine:
+
+```text
+Every X hours
+      ↓
+sample or enumerate canonical relationships
+      ↓
+compare Streams
+      ↓
+compare Socials
+      ↓
+repair discrepancies
+```
+
+For a 100-user network this is extremely cheap.
+
+Later, when the network becomes large, reconciliation can be:
+
+```text
+incremental
+paginated
+rate limited
+```
+
+rather than scanning everything.
+
+---
+
+# 20. The final synchronization matrix
+
+| WordPress canonical | Streams                   | Socials                   |
+| ------------------- | ------------------------- | ------------------------- |
+| `none`              | no relationship           | no relationship           |
+| `requested`         | pending follow/request    | pending follow/request    |
+| `connected`         | accepted relationship     | accepted relationship     |
+| `blocked`           | blocked + no relationship | blocked + no relationship |
+
+For:
+
+```text
+blocked
+```
+
+both platforms must also remove existing relationship records.
+
+---
+
+# 21. Critical loop-prevention rule
+
+Never do this:
+
+```text
+Streams
+ ↓
+WordPress
+ ↓
+Streams
+ ↓
+WordPress
+ ↓
+...
+```
+
+Every projection must carry:
+
+```text
+event_uuid
+origin = wordpress
+```
+
+External handlers must recognize that the operation is a **projection**, not a new user event.
+
+Likewise:
+
+```text
+WordPress → Streams
+```
+
+must never call an external endpoint that subsequently reports:
+
+```text
+Streams → WordPress
+```
+
+as a new relationship event.
+
+The canonical event UUID solves this.
+
+---
+
+# 22. User-ID mapping
+
+The authoritative mapping remains:
+
+```text
+WordPress user ID
+      │
+      ├── wo_user_id
+      │
+      └── qd_user_id
+```
+
+The previous proposal correctly retained these mappings. ([GitHub][1])
+
+Never synchronize using:
+
+```text
+username
+email
+display name
+```
+
+as the relationship identity.
+
+Use:
+
+```text
+WP ID
+Streams ID
+QuickDate ID
+```
+
+only.
+
+---
+
+# 23. What happens when one platform has no user
+
+Suppose:
+
+```text
+WP user = 47
+wo_user_id = 182
+qd_user_id = NULL
+```
+
+Then:
+
+```text
+WordPress → Streams = synchronize
+WordPress → Socials = skip
+```
+
+The event remains successful **only if the platform is legitimately unavailable for that user**.
+
+It should not be treated as an error.
+
+That matters because your SSO/user provisioning system may temporarily have users existing on WordPress before both downstream platforms.
+
+---
+
+# 24. Existing relationship cleanup
+
+Before activating the sync, I strongly recommend a **one-time reconciliation/migration**.
+
+For every existing user pair:
+
+```text
+BuddyBoss
+Streams
+QuickDate
+```
+
+determine:
+
+```text
+blocked?
+connected?
+requested?
+none?
+```
+
+Then choose:
+
+> **BuddyBoss wins.**
+
+Example:
+
+```text
+BuddyBoss: connected
+Streams: none
+Socials: connected
+```
+
+Result:
+
+```text
+canonical = connected
+```
+
+and repair Streams.
+
+Another:
+
+```text
+BuddyBoss: none
+Streams: connected
+Socials: connected
+```
+
+Result:
+
+```text
+canonical = none
+```
+
+and remove both downstream relationships.
+
+This is essential because otherwise the new synchronization system begins life with contradictory historical states.
+
+---
+
+# 25. Block migration
+
+For existing blocks:
+
+```text
+BuddyBoss block
+```
+
+wins.
+
+If:
+
+```text
+Streams blocked
+BuddyBoss not blocked
+```
+
+I would **not automatically create a BuddyBoss block during the initial migration** without first deciding that policy.
+
+Instead flag it for reconciliation.
+
+This avoids silently changing moderation policy during deployment.
+
+---
+
+# 26. Final production architecture
+
+The resulting Buzzjuice social graph becomes:
+
+```text
+                         ┌──────────────────────┐
+                         │      WORDPRESS       │
+                         │       BUDDYBOSS      │
+                         │                      │
+                         │  SOURCE OF TRUTH     │
+                         │                      │
+                         │  Relationships       │
+                         │  Moderation          │
+                         │  Eligibility         │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │ bzj-connections-sync │
+                         │                       │
+                         │ Canonical state      │
+                         │ Event ledger          │
+                         │ Retry engine          │
+                         │ Reconciliation        │
+                         └──────────┬────────────┘
+                                    │
+                           shared/wwqd_bridge.php
+                                    │
+                    ┌───────────────┴───────────────┐
+                    │                               │
+                    ▼                               ▼
+             ┌──────────────┐                ┌──────────────┐
+             │  WoWonder    │                │  QuickDate   │
+             │   Streams    │                │   Socials    │
+             │              │                │              │
+             │ projection   │                │ projection   │
+             └──────────────┘                └──────────────┘
+```
+
+The critical architectural rule is:
+
+```text
+                WORDPRESS
+                    ▲
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+     STREAMS                 SOCIALS
+
+        NEVER:
+
+     STREAMS ───────────► SOCIALS
+     SOCIALS ───────────► STREAMS
+```
+
+---
+
+# 27. Files to modify
+
+I would use this deployment structure:
+
+### New
+
+```text
+wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+### Surgical addition
+
+```text
+shared/wwqd_bridge.php
+```
+
+Add only the new relationship/moderation adapter section.
+
+### Surgical modification
+
+```text
+streams/themes/sunshine/layout/extra_js/content.phtml
+```
+
+Only where the existing follow UI needs to participate in the synchronization workflow. Do **not** replace the whole file.
+
+### Surgical modification
+
+```text
+streams/assets/includes/functions_one.php
+```
+
+Only where the server-side native block/follow operation needs to notify the WordPress authority.
+
+### Surgical modification
+
+```text
+social/core.php
+```
+
+Only for the minimal native relationship/block integration required.
+
+### Surgical modification
+
+```text
+social/requests/ajax/useractions.php
+```
+
+Only around the existing follow/block actions.
+
+No wholesale regeneration of those files.
+
+---
+
+# 28. One important implementation decision before we deploy
+
+There is one area I deliberately would **not fake with guessed code**: the exact native BuddyBoss member-block creation call for an externally originated block.
+
+The current BuddyBoss moderation code exposes the moderation framework and its member validation, and the actual member moderation implementation is version-dependent. 
+
+Therefore:
+
+### WordPress-originated block
+
+Already safe:
+
+```text
+BuddyBoss UI
+ ↓
+BuddyBoss validation
+ ↓
+bp_moderation_block_created
+ ↓
+sync
+```
+
+### Streams/Socials-originated block
+
+The final implementation should use the **installed BuddyBoss version's actual block creation method**, rather than us inventing a function name or directly inserting moderation rows.
+
+That preserves your explicit requirement that BuddyBoss's existing blocking rules remain authoritative.
+
+---
+
+# Bottom line
+
+The GitHub response was directionally strong, but I would deploy the **refactored architecture above**, not the GitHub version verbatim.
+
+The most important improvements are:
+
+1. **BuddyBoss remains the authority.**
+2. **Add the missing `friends_friendship_accepted` hook.**
+3. Treat follow/friend semantics as a Buzzjuice **Connection**, not as identical native database concepts.
+4. Use exactly four canonical states: `none`, `requested`, `connected`, `blocked`.
+5. **Block dominates all relationship states.**
+6. Blocking removes existing friendships and pending requests.
+7. Unblocking returns to `none`, never automatically to `connected`.
+8. Use a canonical relationship table plus a durable event table.
+9. Use MySQL pair locks rather than another permanent lock table.
+10. Use event UUIDs for idempotency and loop prevention.
+11. Keep diagnostic logging in files.
+12. Keep `wwqd_bridge.php` intact apart from a surgical relationship adapter section.
+13. Do not expose `BUZZ_SSO_SECRET` to browser JavaScript.
+14. External platforms communicate with WordPress **server-to-server**.
+15. Never synchronize Streams directly with Socials.
+16. Perform an initial BuddyBoss-authoritative reconciliation before turning enforcement on.
+17. Add ongoing reconciliation so the network eventually converges even after failures.
+
+The existing bridge is already designed around authenticated cross-platform communication with `BUZZ_SSO_SECRET`, so this architecture fits the current Buzzjuice ecosystem rather than introducing an unrelated integration layer. ([GitHub][2])
+
+The next implementation step should therefore be **the surgical patch set for `wwqd_bridge.php`, `functions_one.php`, `content.phtml`, `social/core.php`, and `social/requests/ajax/useractions.php`**, with the exact insertion points and before/after code blocks, followed by the initial reconciliation script.
+
+[1]: https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/attachment_files/chatgpt_response-202609140250.txt "Koware_Management/BlueCrown/attachment_files/chatgpt_response-202609140250.txt at main · cupidblack/Koware_Management · GitHub"
+[2]: https://github.com/cupidblack/buzzjuice.net/blob/main/shared/wwqd_bridge.php "buzzjuice.net/shared/wwqd_bridge.php at main · cupidblack/buzzjuice.net · GitHub"
+[3]: https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/extra_js/content.phtml "buzzjuice.net/streams/themes/sunshine/layout/extra_js/content.phtml at main · cupidblack/buzzjuice.net · GitHub"
+[4]: https://www.buddyboss.com/resources/reference/functions/friends_accept_friendship/?utm_source=chatgpt.com "friends_accept_friendship - Functions | BuddyBoss Resources"
+[5]: https://buddyboss.com/resources/reference/classes/bp_rest_friends_endpoint/create_item/?utm_source=chatgpt.com "BP_REST_Friends_Endpoint::create_item - Methods | BuddyBoss Resources"
+
+
+<<STOP CHATGPT>>
