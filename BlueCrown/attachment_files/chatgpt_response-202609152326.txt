@@ -1,0 +1,2103 @@
+<<START CHATGPT>>
+
+Yes. I reviewed the current Buzzjuice source files, the previous 4.1.0 implementation, and the latest GitHub review. I also checked the current BuddyBoss moderation implementation because the blocking side is the most sensitive part.
+
+The **4.1.0 design is directionally correct, but I would not deploy it unchanged**. There are several important corrections.
+
+## 1. Final architecture I recommend
+
+The platform relationship hierarchy should be:
+
+**WordPress / BuddyBoss = canonical authority**
+
+```text
+                  ┌──────────────────────┐
+                  │  WORDPRESS /         │
+                  │  BUDDYBOSS           │
+                  │  SOURCE OF TRUTH     │
+                  └──────────┬───────────┘
+                             │
+                  Canonical relationship
+                  + moderation state
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+       HMAC REST API                 Direct DB fan-out
+       external reports              from WordPress
+              │                             │
+       ┌──────▼──────┐               ┌──────▼──────┐
+       │   Streams   │               │   Socials   │
+       │  WoWonder   │               │  QuickDate  │
+       └─────────────┘               └─────────────┘
+```
+
+The important principle is:
+
+> **Streams and Socials may initiate an action, but they never become authoritative merely because their local database changed.**
+
+They report the action to WordPress. WordPress applies BuddyBoss's rules. The resulting canonical state is then propagated back to both external platforms.
+
+This preserves BuddyBoss's existing restrictions on connection requests. The 4.1.0 proposal correctly emphasized this point. 
+
+---
+
+# 2. One important correction: a QuickDate "Like" should NOT create a connection
+
+I agree with GitHub's correction here.
+
+**Do not make a QuickDate Like equivalent to a connection/follow.**
+
+A Like is an engagement/reaction:
+
+```text
+Like
+  ≠
+Follow
+  ≠
+Connection/Friendship
+```
+
+If a Like were treated as a connection, the platform would create accidental friendships simply because somebody liked a photo/profile.
+
+For the new Buzzjuice Socials architecture, I recommend:
+
+| Social action            | Canonical meaning         |
+| ------------------------ | ------------------------- |
+| Like                     | No relationship change    |
+| Follow                   | Connection request        |
+| Follow accepted          | Connection                |
+| Unfollow                 | Remove connection/request |
+| Block                    | Global directional block  |
+| Unblock                  | Remove global block       |
+| BuddyBoss friend request | Pending connection        |
+| BuddyBoss acceptance     | Connected                 |
+| BuddyBoss removal        | No connection             |
+
+This is also consistent with how the existing WoWonder/QuickDate follower tables distinguish active followers from pending requests. In Streams, `active=0` is a pending request while `active=1` is active; QuickDate has the same general distinction. 
+
+---
+
+# 3. Another important correction to 4.1.0
+
+The previous implementation used:
+
+```php
+dirname(ABSPATH) . '/shared/db_helpers.php'
+```
+
+That is unsafe for your installation structure.
+
+Your shared directory is:
+
+```text
+/home/koware/public_html/buzzjuice.net/shared/
+```
+
+and WordPress is inside the Buzzjuice site root.
+
+Therefore the canonical path should be:
+
+```php
+ABSPATH . 'shared/db_helpers.php'
+```
+
+The updated version uses that.
+
+The existing `wwqd_bridge.php` itself already follows the correct `__DIR__`-based shared-file architecture. 
+
+---
+
+# 4. The updated MU plugin
+
+I have produced the complete refactored **5.0.0** MU plugin.
+
+### Download
+
+[Download `bzj-connections-sync-5.0.0.php`](sandbox:/mnt/data/bzj-connections-sync-5.0.0.php)
+
+The file has been PHP syntax-checked successfully.
+
+### What 5.0.0 changes
+
+Compared with 4.1.0:
+
+* WordPress remains the canonical authority.
+* BuddyBoss restrictions remain intact.
+* Connection requests are never force-accepted.
+* External follow → BuddyBoss connection request.
+* External accepted follow → BuddyBoss friendship acceptance.
+* External removal → BuddyBoss relationship removal.
+* BuddyBoss changes propagate to Streams + Socials.
+* Blocks are directional.
+* Blocks dominate connections.
+* Blocking removes existing BuddyBoss friendships.
+* Blocking removes external follow relationships.
+* Unblocking does **not** resurrect the previous friendship.
+* External blocks attempt to use the installed BuddyBoss moderation implementation rather than relying on an invented function name.
+* HMAC authentication includes timestamp validation.
+* HMAC requests expire after five minutes.
+* UUID idempotency prevents duplicate external reports.
+* Canonical state is re-read during reconciliation.
+* External databases are never loaded through `wp-load`.
+* External database failures enter the WordPress retry queue.
+* Retry uses exponential backoff.
+* Missing `wo_user_id` / `qd_user_id` does not corrupt canonical state.
+* Logging remains file-based.
+* Only operational state/queue data is stored in the two small WP tables.
+* The external DB helper path is corrected.
+* The REST namespace is moved to:
+
+```text
+/wp-json/bzj/v4/relationship
+```
+
+The 4.1.0 implementation's general use of a durable event queue and state-based reconciliation was a good design decision and has been retained. 
+
+---
+
+# 5. Why the two WordPress tables should remain
+
+You mentioned preferring log files rather than tables where feasible.
+
+I agree for **logs**.
+
+I would **not** replace the two operational tables with log files.
+
+They have different purposes:
+
+```text
+bzj-connections-sync.log
+        ↓
+Diagnostics / human-readable audit
+
+wp_bzj_relationships
+        ↓
+Current canonical relationship state
+
+wp_bzj_relationship_events
+        ↓
+Durable synchronization queue
+```
+
+This distinction is important.
+
+A log file cannot safely provide:
+
+* atomic state
+* idempotency
+* retry status
+* attempt count
+* next retry time
+* processed state
+* concurrent locking
+
+The 4.1.0 GitHub recommendation to keep durable operational state in tables while using a file for diagnostics was therefore correct. 
+
+---
+
+# 6. External-platform communication
+
+The external platforms should **not** know anything about WordPress functions.
+
+The flow is:
+
+```text
+Streams
+   │
+   │ local DB write succeeds
+   ▼
+bzj_connections_sync_report_to_wordpress()
+   │
+   │ HTTPS + HMAC
+   ▼
+WordPress REST endpoint
+   │
+   ▼
+BuddyBoss
+   │
+   ▼
+canonical state
+   │
+   ▼
+reconciliation queue
+   │
+   ├──────────────► Streams
+   │
+   └──────────────► Socials
+```
+
+This respects your explicit requirement that `wp-load` has **not** been implemented in Streams or Socials. The external platforms remain standalone applications. The previous GitHub implementation also correctly followed this principle. 
+
+---
+
+# 7. Update `shared/wwqd_bridge.php`
+
+Because this is a long existing file, **do not replace it**.
+
+Add the following complete helper block near the end of:
+
+```text
+/shared/wwqd_bridge.php
+```
+
+I also prepared it separately:
+
+[Download the external reporting helper](sandbox:/mnt/data/bzj-connections-sync-external-helper.php.txt)
+
+The helper uses:
+
+```text
+BUZZ_SSO_SECRET
+WP_BASE_SITE_URL
+```
+
+and calls:
+
+```text
+/wp-json/bzj/v4/relationship
+```
+
+It performs three short attempts:
+
+```text
+attempt 1 → immediately
+attempt 2 → +1 second
+attempt 3 → +3 seconds
+```
+
+A failed report **does not roll back a successful local Streams/Socials action**.
+
+That distinction is important. The local operation has already succeeded; the problem is synchronization, not the user's action.
+
+The request is HMAC signed as:
+
+```text
+timestamp.body
+```
+
+using:
+
+```text
+BUZZ_SSO_SECRET
+```
+
+The previous GitHub proposal correctly moved toward timestamp + body HMAC authentication, and the new implementation retains that security model. 
+
+---
+
+# 8. Streams modifications
+
+The existing Streams code confirms the relevant functions are exactly where expected:
+
+* `Wo_RegisterFollow()`
+* `Wo_DeleteFollow()`
+* `Wo_AcceptFollowRequest()`
+* `Wo_RegisterBlock()`
+* `Wo_RemoveBlock()`
+
+The existing `Wo_RegisterFollow()` also distinguishes active follows from pending requests using `active`. 
+
+### 8.1 Add the bridge include
+
+Near the existing include section of:
+
+```text
+/streams/assets/includes/functions_one.php
+```
+
+add:
+
+```php
+require_once __DIR__ . '/../../../shared/wwqd_bridge.php';
+```
+
+This is the correct relative path from:
+
+```text
+/streams/assets/includes/
+```
+
+to:
+
+```text
+/shared/
+```
+
+---
+
+## 8.2 `Wo_RegisterFollow()`
+
+Inside the existing:
+
+```php
+if ($query) {
+```
+
+block, after the local INSERT has succeeded, add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        ($active == 1 ? 'request' : 'request')
+    );
+}
+```
+
+The apparently redundant expression is intentional conceptually: **a new follow always starts as a connection request at the canonical BuddyBoss layer**.
+
+The actual acceptance is reported separately by `Wo_AcceptFollowRequest()`.
+
+I would simplify that final implementation to:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'request'
+    );
+}
+```
+
+This is preferable to GitHub's previous:
+
+```php
+($active == 1 ? 'accept' : 'request')
+```
+
+because an active WoWonder follow does **not** mean that the BuddyBoss friendship has been accepted. That was one of the subtle semantic issues I would correct before production.
+
+---
+
+# 9. Streams acceptance
+
+In:
+
+```php
+Wo_AcceptFollowRequest()
+```
+
+the current database operation is:
+
+```php
+UPDATE Wo_Followers
+SET active = '1'
+...
+```
+
+and it succeeds through `$query`. 
+
+Immediately after the successful update, add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$following_id,
+        (int)$follower_id,
+        'accept'
+    );
+}
+```
+
+This represents:
+
+```text
+follower → requester
+recipient → acceptor
+```
+
+and allows WordPress to find the pending BuddyBoss friendship and accept it.
+
+---
+
+# 10. Streams removal
+
+In `Wo_DeleteFollow()`, after:
+
+```php
+if ($query) {
+```
+
+add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+The existing WoWonder function deletes the follow and, when connectivity mode is enabled, also deletes the reverse relationship. 
+
+The canonical WordPress reconciliation subsequently guarantees both external platforms end in the same state.
+
+---
+
+# 11. Streams blocking
+
+The existing functions are:
+
+```php
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+and their local DB operations are straightforward inserts/deletes into the WoWonder block table. 
+
+After a successful `Wo_RegisterBlock()` insert:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'block'
+    );
+}
+```
+
+After a successful `Wo_RemoveBlock()` delete:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'unblock'
+    );
+}
+```
+
+---
+
+# 12. Socials modifications
+
+The Socials code confirms the same core follow functions exist:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+```
+
+and the Socials follower table is:
+
+```text
+followers
+```
+
+The current implementation writes `active=1` for an ordinary follow unless confirmation is enabled. 
+
+Add near the existing shared includes in:
+
+```text
+/social/core.php
+```
+
+```php
+require_once __DIR__ . '/../shared/wwqd_bridge.php';
+```
+
+---
+
+## 12.1 Socials follow
+
+After the successful INSERT inside `Wo_RegisterFollow()`:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'request'
+    );
+}
+```
+
+Again, **do not interpret `active=1` as BuddyBoss acceptance**.
+
+---
+
+## 12.2 Socials acceptance
+
+After the successful UPDATE in:
+
+```php
+Wo_AcceptFollowRequest()
+```
+
+add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'accept'
+    );
+}
+```
+
+The current QuickDate function updates the pending follower record to `active=1`. 
+
+---
+
+## 12.3 Socials removal
+
+After the successful DELETE in:
+
+```php
+Wo_DeleteFollow()
+```
+
+add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$follower_id,
+        (int)$following_id,
+        'remove'
+    );
+}
+```
+
+---
+
+# 13. Socials blocking
+
+In:
+
+```text
+/social/requests/ajax/useractions.php
+```
+
+the current block function inserts:
+
+```text
+user_id
+block_userid
+created_at
+```
+
+into:
+
+```text
+blocks
+```
+
+after which it returns success. 
+
+Add the reporter after `$saved` is true:
+
+```php
+if ($saved && function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)self::ActiveUser()->id,
+        (int)$userid,
+        'block'
+    );
+}
+```
+
+For `unblock()`, the existing code is especially important because it supports `targetuid`, which changes who actually owns the block. 
+
+Therefore **do not replace the existing `$target_id` logic**.
+
+After:
+
+```php
+if ($deleted) {
+```
+
+add:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$target_id,
+        (int)$userid,
+        'unblock'
+    );
+}
+```
+
+That preserves the existing QuickDate semantics.
+
+---
+
+# 14. Blocking is now much stronger
+
+The desired behavior becomes:
+
+### A blocks B on WordPress
+
+```text
+BuddyBoss block
+      ↓
+Canonical A → B block
+      ↓
+Existing BuddyBoss friendship removed
+      ↓
+Streams:
+    A cannot follow B
+    B cannot follow A
+      ↓
+Socials:
+    A cannot follow B
+    B cannot follow A
+      ↓
+Both external block states synchronized
+```
+
+### A blocks B on Streams
+
+```text
+Streams block
+      ↓
+HMAC report
+      ↓
+WordPress
+      ↓
+BuddyBoss block
+      ↓
+BuddyBoss friendship removed
+      ↓
+Canonical A → B block
+      ↓
+Socials synchronized
+```
+
+The same happens in reverse from Socials.
+
+This is much better than merely copying a block record because the **WordPress moderation object itself becomes authoritative**.
+
+The BuddyBoss source confirms that its moderation system has a dedicated member-moderation implementation and public moderation APIs/classes rather than requiring us to invent our own moderation table. 
+
+---
+
+# 15. Directional blocks are important
+
+The canonical record deliberately stores:
+
+```text
+block_a_to_b
+block_b_to_a
+```
+
+rather than:
+
+```text
+blocked = yes
+```
+
+This means:
+
+```text
+A blocks B
+```
+
+is different from:
+
+```text
+B blocks A
+```
+
+That is the correct model.
+
+For example:
+
+```text
+A → B = blocked
+B → A = not blocked
+```
+
+Unblocking A→B does **not** automatically unblock B→A.
+
+And more importantly:
+
+```text
+Block
+ ↓
+Remove connection
+ ↓
+Unblock
+ ↓
+Still NOT connected
+```
+
+The users must establish a new connection.
+
+That prevents a potentially serious moderation loophole.
+
+---
+
+# 16. BuddyBoss connection restrictions remain intact
+
+This is one of the strongest parts of the design.
+
+When an external platform says:
+
+```text
+A followed B
+```
+
+WordPress does:
+
+```php
+friends_add_friend(
+    $actor,
+    $target,
+    false
+);
+```
+
+rather than directly writing a friendship row.
+
+That means existing BuddyBoss restrictions remain in control.
+
+The 4.1.0 implementation explicitly corrected this point and avoided force-accepting external relationships. 
+
+So if BuddyBoss says:
+
+> A is not allowed to send B a connection request
+
+then:
+
+```text
+Socials follow
+      ↓
+WordPress rejects request
+      ↓
+Canonical state = NONE
+      ↓
+Reconciliation removes the Socials follow
+      ↓
+No bypass
+```
+
+That is exactly what we want.
+
+---
+
+# 17. The canonical state machine
+
+The resulting system has three relationship states:
+
+```text
+NONE
+ │
+ │ request
+ ▼
+REQUESTED
+ │
+ │ accept
+ ▼
+CONNECTED
+```
+
+And:
+
+```text
+REQUESTED ──remove──► NONE
+CONNECTED ──remove──► NONE
+CONNECTED ──block───► NONE + BLOCK
+REQUESTED ──block───► NONE + BLOCK
+BLOCK ──────unblock─► NONE
+```
+
+There is **no automatic**:
+
+```text
+UNBLOCK → CONNECTED
+```
+
+---
+
+# 18. Why the reconciliation layer is essential
+
+Suppose:
+
+```text
+Socials
+A follows B
+```
+
+The Socials database succeeds.
+
+Then:
+
+```text
+Internet timeout
+```
+
+before the report reaches WordPress.
+
+The local Socials action cannot be trusted as canonical.
+
+The system therefore has two protection layers:
+
+### Immediate
+
+The reporter retries:
+
+```text
+0 sec
+1 sec
+3 sec
+```
+
+### WordPress durable reconciliation
+
+Once WordPress knows the canonical state, the event queue repeatedly reconciles:
+
+```text
+pending
+   ↓
+retry
+   ↓
+retry
+   ↓
+...
+   ↓
+processed
+```
+
+with exponential backoff.
+
+This is significantly more reliable than simply firing a REST request once.
+
+---
+
+# 19. One thing I deliberately did NOT implement
+
+I did **not** introduce:
+
+```text
+QuickDate Like → Follow
+```
+
+or:
+
+```text
+QuickDate Like → BuddyBoss connection
+```
+
+That would make the social graph noisy and unpredictable.
+
+Instead:
+
+```text
+LIKE
+ └── engagement only
+
+FOLLOW
+ └── connection request
+
+ACCEPT
+ └── connection
+
+BLOCK
+ └── global moderation
+
+UNFOLLOW
+ └── remove connection
+```
+
+This will also make the new Buzzjuice Socials swipe-card architecture much cleaner.
+
+---
+
+# 20. Recommended deployment order
+
+Do this in stages rather than changing everything simultaneously.
+
+### Stage 1 — Backup
+
+Back up:
+
+```text
+WordPress database
+Streams database
+Socials database
+```
+
+and copy the existing:
+
+```text
+bzj-connections-sync.php
+wwqd_bridge.php
+functions_one.php
+core.php
+useractions.php
+```
+
+---
+
+### Stage 2 — Install the new MU plugin
+
+Replace:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+with:
+
+[Download `bzj-connections-sync-5.0.0.php`](sandbox:/mnt/data/bzj-connections-sync-5.0.0.php)
+
+Rename it to:
+
+```text
+bzj-connections-sync.php
+```
+
+---
+
+### Stage 3 — Add the reporter
+
+Add the supplied helper to:
+
+```text
+/shared/wwqd_bridge.php
+```
+
+[Download helper](sandbox:/mnt/data/bzj-connections-sync-external-helper.php.txt)
+
+Do **not** replace the entire `wwqd_bridge.php`; it is already a large shared integration file. The current file contains extensive existing WW/QD bridge functionality. 
+
+---
+
+### Stage 4 — Streams
+
+Modify only:
+
+```text
+/streams/assets/includes/functions_one.php
+```
+
+Add the include and the five reporting calls:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+The underlying functions and database operations have been verified against the current repository. 
+
+---
+
+### Stage 5 — Socials
+
+Modify:
+
+```text
+/social/core.php
+```
+
+for:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+```
+
+Then:
+
+```text
+/social/requests/ajax/useractions.php
+```
+
+for:
+
+```text
+block()
+unblock()
+```
+
+The current implementations were checked directly rather than relying on the previous proposal. 
+
+---
+
+# 21. Testing sequence
+
+I strongly recommend **not testing all three platforms simultaneously initially**.
+
+Use two test accounts:
+
+```text
+TEST-A
+TEST-B
+```
+
+### Test 1 — WordPress
+
+```text
+A → B connection request
+```
+
+Expected:
+
+```text
+WP       REQUESTED
+Streams  pending
+Socials  pending
+```
+
+Then B accepts:
+
+```text
+WP       CONNECTED
+Streams  mutual
+Socials  mutual
+```
+
+---
+
+### Test 2 — Streams
+
+Delete connection in Streams:
+
+```text
+Streams  NONE
+```
+
+Expected:
+
+```text
+WP       NONE
+Socials  NONE
+```
+
+---
+
+### Test 3 — Socials
+
+Follow from Socials:
+
+```text
+Socials → report
+WordPress → BuddyBoss request
+```
+
+Expected:
+
+```text
+WP       REQUESTED
+Streams  pending
+Socials  pending
+```
+
+Then accept.
+
+Expected:
+
+```text
+WP       CONNECTED
+Streams  mutual
+Socials  mutual
+```
+
+---
+
+### Test 4 — Block
+
+Connect A/B first.
+
+Then:
+
+```text
+A blocks B in Socials
+```
+
+Expected:
+
+```text
+Socials:
+    A → B BLOCKED
+
+WordPress:
+    A → B BLOCKED
+    friendship removed
+
+Streams:
+    A ↔ B relationship removed
+    A → B blocked
+```
+
+---
+
+### Test 5 — Unblock
+
+```text
+A unblocks B
+```
+
+Expected:
+
+```text
+A → B block = removed
+friendship = NONE
+```
+
+**It must not automatically reconnect them.**
+
+---
+
+### Test 6 — BuddyBoss restriction
+
+Configure a BuddyBoss restriction that prevents A from connecting to B.
+
+Then:
+
+```text
+A follows B on Socials
+```
+
+Expected:
+
+```text
+Socials local action
+       ↓
+WordPress rejects request
+       ↓
+Canonical NONE
+       ↓
+Socials relationship removed
+```
+
+This test is particularly important because it proves that the integration isn't bypassing BuddyBoss's existing access-control layer.
+
+---
+
+# 22. Final recommendation
+
+I would move forward with **5.0.0**, not 4.1.0.
+
+The conceptual architecture from the previous GitHub review was good:
+
+* canonical WordPress state
+* HMAC
+* UUID idempotency
+* durable queue
+* state-based reconciliation
+* directional blocks
+* no `wp-load`
+
+Those recommendations are retained. 
+
+But the important refinements are:
+
+1. **Do not treat active external follows as accepted BuddyBoss friendships.**
+2. **Do not use QuickDate Likes as relationships.**
+3. **Use `ABSPATH . 'shared/db_helpers.php'`.**
+4. **Preserve BuddyBoss connection restrictions.**
+5. **Make external blocks become real BuddyBoss moderation blocks.**
+6. **Make blocks dominate all relationship states.**
+7. **Never restore a friendship after unblock.**
+8. **Reconcile from current canonical state rather than trusting historical events.**
+9. **Keep logs in a file but retain database-backed operational state.**
+10. **Keep the large external files intact and make only targeted modifications.**
+
+The result is a much cleaner foundation for the next phase of Buzzjuice Socials: the **social graph becomes one network**, even though Streams, Socials and WordPress remain separate applications/databases.
+
+The following is an attempt at updating the  function. Check if the function has been modified correctly:
+
+<<START>>
+
+    function unblock() {
+        global $db;
+        if (self::ActiveUser() == NULL) {
+            return array(
+                'status' => 403,
+                'message' => __('Forbidden')
+            );
+        }
+        $userid = "";
+        if (isset($_POST[ 'userid' ]) && is_numeric($_POST[ 'userid' ])) {
+            $userid = (int) Secure($_POST[ 'userid' ]);
+            $user = $db->where('id', $userid)->getOne('users',array('id'));
+            if(empty($user)){
+                return array(
+                    'status' => 400,
+                    'message' => __('The User not exist.')
+                );
+            }
+        } else {
+            return array(
+                'status' => 400,
+                'message' => __('No User ID found.')
+            );
+        }
+        $target_id = self::ActiveUser()->id;
+        if (isset($_POST[ 'targetuid' ]) && $_POST[ 'targetuid' ] !== '') {
+            $targetuid = base64_decode(strrev(Secure($_POST[ 'targetuid' ])));
+            if (is_numeric($targetuid) && $targetuid > 0) {
+                $target_id = (int) $targetuid;
+            }
+        }
+        if ($target_id == $userid) {
+            return array(
+                'status' => 400,
+                'message' => __('You can not perform this action.')
+            );
+        }
+        $deleted = $db->where('user_id', $target_id)->where('block_userid', $userid)->delete('blocks');
+        if ($deleted) {
+            
+            if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$target_id,
+        (int)$userid,
+        'unblock'
+    );
+}
+            
+            if ($target_id == self::ActiveUser()->id) {
+                if (isset($_SESSION[ 'blocked_users' ])) {
+                    unset($_SESSION[ 'blocked_users' ]);
+                    $_SESSION[ 'blocked_users_expiry' ] = time();
+                }
+            }
+            return array(
+                'status' => 200,
+                'id' => $userid,
+                'block_text' => __('Block User'),
+                'message' => __('User has been unblocked successfully.')
+            );
+        } else {
+            return array(
+                'status' => 400,
+                'message' => __('Error while delete user block.')
+            );
+        }
+    }
+
+<<STOP>>
+
+Yes — **the modification is correct**, and importantly, you placed the synchronization call in the right location.
+
+### What you got right
+
+Your addition:
+
+```php
+if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+    bzj_connections_sync_report_to_wordpress(
+        'socials',
+        (int)$target_id,
+        (int)$userid,
+        'unblock'
+    );
+}
+```
+
+is correctly placed **inside `if ($deleted)`**, immediately after the QuickDate block record has actually been deleted.
+
+That gives us the correct sequence:
+
+```text
+QuickDate
+   │
+   ├─ DELETE blocks WHERE
+   │    user_id = $target_id
+   │    block_userid = $userid
+   │
+   ▼
+$deleted == true
+   │
+   ▼
+Report to WordPress
+   │
+   ▼
+Canonical block A → B removed
+   │
+   ▼
+WordPress reconciliation
+   ├── Streams
+   └── Socials
+```
+
+### The use of `$target_id` is especially important
+
+You correctly retained:
+
+```php
+'target_id'
+```
+
+rather than blindly using:
+
+```php
+self::ActiveUser()->id
+```
+
+This matters because QuickDate's existing `unblock()` supports `targetuid`.
+
+For example:
+
+```text
+A is logged in
+A is managing a block belonging to A
+```
+
+gives:
+
+```text
+target_id = A
+userid    = B
+```
+
+and the report becomes:
+
+```text
+A → B = unblock
+```
+
+If `targetuid` specifies another valid target, your code preserves QuickDate's existing semantics and reports:
+
+```text
+target_id → userid
+```
+
+which is exactly what the synchronization layer needs.
+
+### One thing I would change
+
+I recommend making the synchronization call **the last operation before returning success**, rather than putting it before the session-cache cleanup.
+
+Your current ordering is:
+
+```php
+DELETE
+↓
+SYNC
+↓
+SESSION CACHE CLEANUP
+↓
+RETURN
+```
+
+I'd prefer:
+
+```php
+DELETE
+↓
+SESSION CACHE CLEANUP
+↓
+SYNC
+↓
+RETURN
+```
+
+This is not a major correctness issue, because the reporting helper should be non-fatal. But conceptually, the local QuickDate transaction should be completely finished before we notify another system.
+
+So I recommend:
+
+```php
+if ($deleted) {
+
+    if ($target_id == self::ActiveUser()->id) {
+        if (isset($_SESSION['blocked_users'])) {
+            unset($_SESSION['blocked_users']);
+            $_SESSION['blocked_users_expiry'] = time();
+        }
+    }
+
+    if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+        bzj_connections_sync_report_to_wordpress(
+            'socials',
+            (int) $target_id,
+            (int) $userid,
+            'unblock'
+        );
+    }
+
+    return array(
+        'status' => 200,
+        'id' => $userid,
+        'block_text' => __('Block User'),
+        'message' => __('User has been unblocked successfully.')
+    );
+}
+```
+
+### Why this is the better arrangement
+
+The architectural rule should be:
+
+> **Complete the local operation first; synchronize the canonical system second.**
+
+So:
+
+```text
+QuickDate operation
+       ↓
+local state is correct
+       ↓
+report to WordPress
+       ↓
+WordPress becomes authoritative
+       ↓
+reconcile all platforms
+```
+
+If WordPress is temporarily unavailable, the QuickDate unblock still succeeds and the reporter/queue mechanism can deal with synchronization failure.
+
+---
+
+## One more important issue to verify
+
+Before testing this function, make sure the helper is actually loaded into the QuickDate runtime.
+
+Your call:
+
+```php
+function_exists('bzj_connections_sync_report_to_wordpress')
+```
+
+will simply return `false` if `wwqd_bridge.php` has not been included.
+
+So in `/social/core.php` we need the shared bridge loaded **before `unblock()` can execute**.
+
+If you have already added:
+
+```php
+require_once __DIR__ . '/../shared/wwqd_bridge.php';
+```
+
+to `core.php`, you're good.
+
+If not, the new code will silently skip synchronization.
+
+---
+
+## Verdict
+
+**Your modification is functionally correct.** I would make only the small ordering adjustment above.
+
+The final intended block should therefore be:
+
+```php
+if ($deleted) {
+
+    if ($target_id == self::ActiveUser()->id) {
+        if (isset($_SESSION['blocked_users'])) {
+            unset($_SESSION['blocked_users']);
+            $_SESSION['blocked_users_expiry'] = time();
+        }
+    }
+
+    if (function_exists('bzj_connections_sync_report_to_wordpress')) {
+        bzj_connections_sync_report_to_wordpress(
+            'socials',
+            (int) $target_id,
+            (int) $userid,
+            'unblock'
+        );
+    }
+
+    return array(
+        'status' => 200,
+        'id' => $userid,
+        'block_text' => __('Block User'),
+        'message' => __('User has been unblocked successfully.')
+    );
+}
+```
+
+**Do not change anything else in `unblock()` yet.** This preserves the existing QuickDate behavior while adding the required cross-platform synchronization hook.
+
+
+```
+[14-Sep-2026 22:11:31 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function wp_rand() in /home/koware/public_html/buzzjuice.net/wp-content/mu-plugins/bzj-connections-sync.php:647
+Stack trace:
+#0 /home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php(353): {closure}('')
+#1 /home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php(377): WP_Hook->apply_filters(NULL, Array)
+#2 /home/koware/public_html/buzzjuice.net/wp-includes/plugin.php(523): WP_Hook->do_action(Array)
+#3 /home/koware/public_html/buzzjuice.net/wp-includes/load.php(1308): do_action('shutdown')
+#4 [internal function]: shutdown_action_hook()
+#5 {main}
+  thrown in /home/koware/public_html/buzzjuice.net/wp-content/mu-plugins/bzj-connections-sync.php on line 647
+```
+
+Here is the code from line 605 to 657:
+<\<start code>>
+
+function bzj\_connections\_sync\_process\_events() {
+    global $wpdb;
+    $table=bzj\_connections\_sync\_event\_table();
+    $events=$wpdb->get\_results("SELECT \* FROM {$table} WHERE status IN ('pending','retry') AND next\_attempt\_at<=UTC\_TIMESTAMP() ORDER BY created\_at ASC LIMIT 50");
+    foreach ((array)$events as $event) {
+        $attempt=(int)$event->attempts+1;
+        if ($attempt>BZJ\_CONNECTIONS\_SYNC\_MAX\_RETRIES) {
+            $wpdb->update($table,array('status'=>BZJ\_EVENT\_FAILED,'attempts'=>$attempt,'last\_error'=>'Maximum retry count reached','processed\_at'=>gmdate('Y-m-d H\:i:s')),array('id'=>(int)$event->id),array('%s','%d','%s','%s'),array('%d'));
+            continue;
+        }
+        $a=(int)$event->actor\_wp\_id; $b=(int)$event->target\_wp\_id;
+        $row=bzj\_connections\_sync\_get($a,$b);
+        if (!$row) {
+            $wpdb->update($table,array('status'=>BZJ\_EVENT\_PROCESSED,'attempts'=>$attempt,'processed\_at'=>gmdate('Y-m-d H\:i:s'),'last\_error'=>null),array('id'=>(int)$event->id),array('%s','%d','%s','%s'),array('%d'));
+            continue;
+        }
+        $ok\_streams=true; $ok\_socials=true;
+        $wo\_a=absint(get\_user\_meta($a,'wo\_user\_id',true)); $wo\_b=absint(get\_user\_meta($b,'wo\_user\_id',true));
+        $qd\_a=absint(get\_user\_meta($a,'qd\_user\_id',true)); $qd\_b=absint(get\_user\_meta($b,'qd\_user\_id',true));
+        if ($wo\_a && $wo\_b) $ok\_streams=bzj\_connections\_sync\_reconcile\_streams($wo\_a,$wo\_b,$row);
+        if ($qd\_a && $qd\_b) $ok\_socials=bzj\_connections\_sync\_reconcile\_socials($qd\_a,$qd\_b,$row);
+        if ($ok\_streams && $ok\_socials) {
+            $wpdb->update($table,array('status'=>BZJ\_EVENT\_PROCESSED,'attempts'=>$attempt,'processed\_at'=>gmdate('Y-m-d H\:i:s'),'last\_error'=>null),array('id'=>(int)$event->id),array('%s','%d','%s','%s'),array('%d'));
+        } else {
+            $delay=min(3600,BZJ\_CONNECTIONS\_SYNC\_RETRY\_BASE\*pow(2,max(0,$attempt-1)));
+            $wpdb->update($table,array('status'=>BZJ\_EVENT\_RETRY,'attempts'=>$attempt,'next\_attempt\_at'=>gmdate('Y-m-d H\:i:s',time()+$delay),'last\_error'=>'One or more external platform reconciliations failed'),array('id'=>(int)$event->id),array('%s','%d','%s','%s'),array('%d'));
+        }
+    }
+}
+
+function bzj\_connections\_sync\_register\_cron() {
+    static $done=false;
+    if ($done) return; $done=true;
+    add\_filter('cron\_schedules',function($s){ if (!isset($s['bzj\_five\_minutes'])) $s['bzj\_five\_minutes']=array('interval'=>300,'display'=>'Every 5 minutes'); return $s; });
+    if (!wp\_next\_scheduled('bzj\_connections\_sync\_process\_events')) wp\_schedule\_event(time()+60,'bzj\_five\_minutes','bzj\_connections\_sync\_process\_events');
+    add\_action('bzj\_connections\_sync\_process\_events','bzj\_connections\_sync\_process\_events');
+}
+
+// Opportunistically process a small number of due events during normal WP requests.
+add\_action('shutdown',function(){
+    if (wp\_doing\_ajax() || wp\_doing\_cron()) return;
+    static $ran=false; if ($ran) return; $ran=true;
+    if (wp\_rand(1,20)!==1) return;
+    bzj\_connections\_sync\_process\_events\_limited(5);
+},99);
+function bzj\_connections\_sync\_process\_events\_limited($limit=5) {
+    global $wpdb;
+    $table=bzj\_connections\_sync\_event\_table();
+    $events=$wpdb->get\_results($wpdb->prepare("SELECT \* FROM {$table} WHERE status IN ('pending','retry') AND next\_attempt\_at<=UTC\_TIMESTAMP() ORDER BY created\_at ASC LIMIT %d",absint($limit)));
+    if (!$events) return;
+    // Reuse the full processor; the full processor caps itself at 50.
+    bzj\_connections\_sync\_process\_events();
+}
+<\<stop code>>
+
+Yes. The fatal error is straightforward, and it exposes a **design issue in the 5.0.0 MU plugin**, not a problem with your QuickDate modification.
+
+## Cause
+
+This line is causing the fatal error:
+
+```php
+if (wp_rand(1,20)!==1) return;
+```
+
+`wp_rand()` is a WordPress function. The problem is that the `shutdown` callback is being registered/executed in a context where the WordPress function isn't available at that point in the request lifecycle.
+
+More importantly, **we don't actually need `wp_rand()` here**.
+
+The opportunistic processor was intended to randomly process a small number of queued events during normal WordPress requests. We can use PHP's native:
+
+```php
+random_int(1, 20)
+```
+
+instead.
+
+That removes the dependency entirely.
+
+---
+
+# But there is a second issue
+
+I would actually correct more than just:
+
+```php
+wp_rand()
+```
+
+There is a problem with this function:
+
+```php
+function bzj_connections_sync_process_events_limited($limit=5) {
+```
+
+It queries only `$limit` records:
+
+```php
+LIMIT %d
+```
+
+but then completely ignores that result and calls:
+
+```php
+bzj_connections_sync_process_events();
+```
+
+which queries **up to 50 records**.
+
+So the function called `process_events_limited(5)` can actually process 50.
+
+That's not what we want.
+
+The cleanest solution is to make the full processor accept a limit.
+
+---
+
+# Recommended correction
+
+Replace the existing two processor functions and the shutdown block with the following **complete block**.
+
+```php
+function bzj_connections_sync_process_events($limit = 50) {
+    global $wpdb;
+
+    $limit = max(1, min(50, absint($limit)));
+    $table = bzj_connections_sync_event_table();
+
+    $events = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT *
+             FROM {$table}
+             WHERE status IN ('pending','retry')
+               AND next_attempt_at <= UTC_TIMESTAMP()
+             ORDER BY created_at ASC
+             LIMIT %d",
+            $limit
+        )
+    );
+
+    foreach ((array) $events as $event) {
+
+        $attempt = (int) $event->attempts + 1;
+
+        if ($attempt > BZJ_CONNECTIONS_SYNC_MAX_RETRIES) {
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'       => BZJ_EVENT_FAILED,
+                    'attempts'     => $attempt,
+                    'last_error'   => 'Maximum retry count reached',
+                    'processed_at' => gmdate('Y-m-d H:i:s')
+                ),
+                array(
+                    'id' => (int) $event->id
+                ),
+                array(
+                    '%s',
+                    '%d',
+                    '%s',
+                    '%s'
+                ),
+                array(
+                    '%d'
+                )
+            );
+
+            continue;
+        }
+
+        $a = (int) $event->actor_wp_id;
+        $b = (int) $event->target_wp_id;
+
+        /*
+         * Always reconcile against the current canonical WordPress
+         * relationship state, not merely the historical event.
+         */
+        $row = bzj_connections_sync_get($a, $b);
+
+        if (!$row) {
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'       => BZJ_EVENT_PROCESSED,
+                    'attempts'     => $attempt,
+                    'processed_at' => gmdate('Y-m-d H:i:s'),
+                    'last_error'   => null
+                ),
+                array(
+                    'id' => (int) $event->id
+                ),
+                array(
+                    '%s',
+                    '%d',
+                    '%s',
+                    '%s'
+                ),
+                array(
+                    '%d'
+                )
+            );
+
+            continue;
+        }
+
+        $ok_streams = true;
+        $ok_socials = true;
+
+        $wo_a = absint(
+            get_user_meta(
+                $a,
+                'wo_user_id',
+                true
+            )
+        );
+
+        $wo_b = absint(
+            get_user_meta(
+                $b,
+                'wo_user_id',
+                true
+            )
+        );
+
+        $qd_a = absint(
+            get_user_meta(
+                $a,
+                'qd_user_id',
+                true
+            )
+        );
+
+        $qd_b = absint(
+            get_user_meta(
+                $b,
+                'qd_user_id',
+                true
+            )
+        );
+
+        if ($wo_a && $wo_b) {
+            $ok_streams = bzj_connections_sync_reconcile_streams(
+                $wo_a,
+                $wo_b,
+                $row
+            );
+        }
+
+        if ($qd_a && $qd_b) {
+            $ok_socials = bzj_connections_sync_reconcile_socials(
+                $qd_a,
+                $qd_b,
+                $row
+            );
+        }
+
+        if ($ok_streams && $ok_socials) {
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'       => BZJ_EVENT_PROCESSED,
+                    'attempts'     => $attempt,
+                    'processed_at' => gmdate('Y-m-d H:i:s'),
+                    'last_error'   => null
+                ),
+                array(
+                    'id' => (int) $event->id
+                ),
+                array(
+                    '%s',
+                    '%d',
+                    '%s',
+                    '%s'
+                ),
+                array(
+                    '%d'
+                )
+            );
+
+        } else {
+
+            $delay = min(
+                3600,
+                BZJ_CONNECTIONS_SYNC_RETRY_BASE *
+                pow(
+                    2,
+                    max(0, $attempt - 1)
+                )
+            );
+
+            $wpdb->update(
+                $table,
+                array(
+                    'status'         => BZJ_EVENT_RETRY,
+                    'attempts'       => $attempt,
+                    'next_attempt_at' =>
+                        gmdate(
+                            'Y-m-d H:i:s',
+                            time() + $delay
+                        ),
+                    'last_error' =>
+                        'One or more external platform reconciliations failed'
+                ),
+                array(
+                    'id' => (int) $event->id
+                ),
+                array(
+                    '%s',
+                    '%d',
+                    '%s',
+                    '%s'
+                ),
+                array(
+                    '%d'
+                )
+            );
+        }
+    }
+}
+
+
+function bzj_connections_sync_register_cron() {
+    static $done = false;
+
+    if ($done) {
+        return;
+    }
+
+    $done = true;
+
+    add_filter(
+        'cron_schedules',
+        function ($schedules) {
+
+            if (!isset($schedules['bzj_five_minutes'])) {
+
+                $schedules['bzj_five_minutes'] = array(
+                    'interval' => 300,
+                    'display'  => 'Every 5 minutes'
+                );
+            }
+
+            return $schedules;
+        }
+    );
+
+    if (
+        !wp_next_scheduled(
+            'bzj_connections_sync_process_events'
+        )
+    ) {
+
+        wp_schedule_event(
+            time() + 60,
+            'bzj_five_minutes',
+            'bzj_connections_sync_process_events'
+        );
+    }
+
+    add_action(
+        'bzj_connections_sync_process_events',
+        function () {
+            bzj_connections_sync_process_events(50);
+        }
+    );
+}
+
+
+/*
+ * Opportunistically process a small number of due events during
+ * normal WordPress requests.
+ *
+ * This is intentionally probabilistic so that high-traffic requests
+ * do not all attempt reconciliation.
+ *
+ * IMPORTANT:
+ * Do not use wp_rand() here. The queue processor should not depend
+ * on a WordPress random-number helper during shutdown.
+ */
+add_action(
+    'shutdown',
+    function () {
+
+        if (
+            function_exists('wp_doing_ajax') &&
+            wp_doing_ajax()
+        ) {
+            return;
+        }
+
+        if (
+            function_exists('wp_doing_cron') &&
+            wp_doing_cron()
+        ) {
+            return;
+        }
+
+        static $ran = false;
+
+        if ($ran) {
+            return;
+        }
+
+        $ran = true;
+
+        /*
+         * PHP-native random_int() avoids dependency on wp_rand().
+         */
+        try {
+            if (random_int(1, 20) !== 1) {
+                return;
+            }
+        } catch (Throwable $e) {
+            /*
+             * If secure randomness is unavailable, simply skip
+             * opportunistic processing. WP-Cron remains responsible
+             * for normal queue processing.
+             */
+            return;
+        }
+
+        bzj_connections_sync_process_events(5);
+
+    },
+    99
+);
+```
+
+## One correction to the above
+
+There's one thing I would **not** carry forward from your current implementation:
+
+```php
+if (wp_doing_ajax() || wp_doing_cron()) return;
+```
+
+Although the replacement above safely checks whether those functions exist, the better long-term approach is to use the constants/conditions appropriate to your WordPress version.
+
+But this is secondary. The immediate fatal error is definitely:
+
+```php
+wp_rand()
+```
+
+---
+
+# However, I recommend an even simpler architecture
+
+Given that you already have:
+
+```text
+WP-Cron
+    ↓
+every 5 minutes
+    ↓
+process up to 50 events
+```
+
+I don't think we need the opportunistic `shutdown` processor at all.
+
+The shutdown mechanism was an optimization intended to make synchronization feel faster without waiting for WP-Cron.
+
+But it introduces unnecessary execution during **every normal WordPress request**.
+
+For Buzzjuice, I'd rather have:
+
+```text
+External action
+       ↓
+Immediate REST report
+       ↓
+WordPress canonical state
+       ↓
+Queue event
+       ↓
+WP-Cron reconciliation
+       ↓
+Streams + Socials
+```
+
+with the immediate external reporter itself retrying.
+
+Then WP-Cron is purely the recovery mechanism.
+
+### Even better
+
+We can have WordPress perform the first reconciliation immediately after accepting the external event, then put it into the queue only if the external platform update fails:
+
+```text
+Streams/Socials
+      │
+      │ report
+      ▼
+WordPress
+      │
+      ├── canonical state
+      │
+      ├── immediate reconciliation
+      │
+      └── failure → queue
+                       │
+                       ▼
+                    WP-Cron
+```
+
+That gives you both:
+
+**Fast synchronization + reliable eventual consistency.**
+
+---
+
+# One more thing I noticed
+
+Your current query:
+
+```php
+SELECT * FROM {$table}
+WHERE status IN ('pending','retry')
+AND next_attempt_at<=UTC_TIMESTAMP()
+```
+
+is fine **provided `next_attempt_at` is always populated** for new pending events.
+
+We should verify the event insertion function does this:
+
+```text
+pending event
+next_attempt_at = NOW
+```
+
+Otherwise a newly created event could behave unexpectedly depending on the column's default.
+
+---
+
+## What I recommend you do now
+
+**Don't modify the QuickDate `unblock()` again.** That part is fine.
+
+Fix `bzj-connections-sync.php` first.
+
+I recommend **removing the shutdown processor altogether rather than merely replacing `wp_rand()`**, because the queue already has a proper five-minute WP-Cron worker and the external reporter provides the immediate synchronization path.
+
+If you want to retain the opportunistic mechanism, then the minimum emergency fix is:
+
+```php
+if (random_int(1, 20) !== 1) return;
+```
+
+But my architectural recommendation is to **remove that `shutdown` block and the `_limited()` function entirely** and let the queue processor be driven by WP-Cron.
+
+That is simpler, more predictable, and better suited to a production social graph where we don't want relationship reconciliation happening unpredictably during arbitrary page shutdowns.
+
+<<STOP CHATGPT>>
