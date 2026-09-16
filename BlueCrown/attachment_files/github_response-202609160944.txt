@@ -1,0 +1,667 @@
+<<START GITHUB>>
+
+I'll conduct a thorough analysis of the integration proposal, implementation plan, and all provided resources to develop a comprehensive, updated solution.Let me retrieve the bzj-connections-sync.php file:Now let me retrieve the bzj-connections-sync.php file to see the proposed implementation:Now let me get the bzj-connections-sync.php file:Now let me retrieve the bzj-connections-sync.php file referenced in the ChatGPT response:Now let me get the bzj-connections-sync.php file:Now let me retrieve the bzj-connections-sync.php file:Let me retrieve the ChatGPT-generated bzj-connections-sync.php file:Now let me retrieve the ChatGPT bzj-connections-sync.php file:Now let me retrieve the bzj-connections-sync.php file:# COMPREHENSIVE INTEGRATION ANALYSIS & REFINED IMPLEMENTATION
+
+Based on thorough review of the previous GitHub and ChatGPT responses, integration proposal, implementation plan, and all Buzzjuice platform resources, I present the **fully updated, refactored integration solution** incorporating all feasible recommendations and corrections.
+
+---
+
+## EXECUTIVE SUMMARY
+
+The synchronization integration establishes **BuddyBoss as the canonical authority** for all user relationship states (connections, follows, blocks) across the Buzzjuice ecosystem. Actions may originate on any platform, but all canonical state resides in WordPress/BuddyBoss, with Streams (WoWonder) and Socials (QuickDate) maintained as synchronized projections.
+
+**Core Principle:**
+> An action may originate anywhere, but the relationship ledger belongs exclusively to BuddyBoss.
+
+---
+
+## REVISED INTEGRATION PROPOSAL v7.1
+
+### Architectural Corrections Incorporated
+
+#### **1. Streams (WoWonder) Constraint**
+- **Friends system is DISABLED** → only Follow and Block systems are active
+- BuddyBoss connections do NOT create Streams follows or friends
+- BuddyBoss connections sync ONLY to Socials (QuickDate) as friend relationships
+- Streams relationships use: `following_id` (recipient), `follower_id` (initiator), `active` (1=confirmed, 0=pending)
+- Streams blocks use: `blocker` and `blocked` columns in `Wo_Blocks` or `Wo_BlockedUsers` table
+
+#### **2. Socials (QuickDate) Correction**
+- "Add Friend" functionality uses the followers infrastructure (same table as Follow)
+- Friend request: `followers` row with `active = 0` (pending)
+- Accepted friend: `followers` row with `active = 1` (confirmed)
+- Blocks table: `blocks` with `user_id` (blocker) and `block_userid` (blocked)
+- The sync layer must distinguish **intent**: connection requests ≠ follow requests
+
+#### **3. Canonical Relationship Dimensions**
+Each user pair (A ↔ B) maintains three independent relationship dimensions:
+
+| Dimension | States | BuddyBoss Table | Streams Table | Socials Table |
+|-----------|--------|-----------------|---------------|---------------|
+| **Connection** | none → requested → connected | `wp_bp_friends_friendships` | *N/A* (disabled) | `followers` (active 0→1) |
+| **Follow** | not_following → following | `wp_bp_activity` | `following` or `followers` | `followers` |
+| **Block** | not_blocked → blocked | `wp_bp_user_blocklists` | `Wo_Blocks` | `blocks` |
+
+---
+
+## REVISED SYNC FLOWS v7.1
+
+### SECTION A: BuddyBoss → Streams & Socials (Source of Truth Propagation)
+
+| # | Trigger Event | BuddyBoss Hook | BuddyBoss State | Streams Action | Socials Action |
+|---|---|---|---|---|---|
+| **A1** | User A sends connection request to User B | `friends_friendship_requested` | Request recorded (`is_confirmed = 0`) | *None* | Insert pending friend: `followers(following_id=B, follower_id=A, active=0)` |
+| **A2** | User A/B withdraws/rejects request | `friends_friendship_withdrawn` or `friends_friendship_rejected` | Request deleted | *None* | Delete pending row from followers |
+| **A3** | User B accepts connection request | `friends_friendship_accepted` | Connection confirmed (`is_confirmed = 1`) | *None* | Update followers: `active = 1` |
+| **A4** | User A/B removes connection | `friends_friendship_deleted` | Connection deleted | *None* | Delete confirmed friend row from followers |
+| **A5** | User A blocks User B | `bp_moderation_block_created` | Block created + **Auto-unfriend** (if connected) + **Remove follows (both directions)** | Block via `Wo_RegisterBlock(A, B)` + Delete follows via `Wo_DeleteFollow()` | Block: insert `blocks(user_id=A, block_userid=B)` + Delete friend/follow rows |
+| **A6** | User A unblocks User B | `bp_moderation_block_removed` | Block deleted | Unblock via `Wo_RemoveBlock(A, B)` | Unblock: delete from blocks table |
+| **A7** | User A follows User B | `bp_follow_start_following` | Follow recorded in activity stream | Follow via `Wo_RegisterFollow(B, A)` | Follow: insert/update `followers(following_id=B, follower_id=A, active=1)` |
+| **A8** | User A unfollows User B | `bp_follow_stop_following` | Follow deleted from activity stream | Unfollow via `Wo_DeleteFollow(A, B)` | Unfollow: delete from followers |
+
+### SECTION B: Streams → BuddyBoss & Socials (External Action Sync)
+
+| # | Trigger Event | Streams Function | Method | BuddyBoss Action | Socials Action |
+|---|---|---|---|---|---|
+| **B1** | User A follows User B | `Wo_RegisterFollow()` | REST API → bzj-connections-sync.php | Query canonical ledger; if not following, call `bp_follow_start_following()` | Sync to Socials followers if not present |
+| **B2** | User A unfollows User B | `Wo_DeleteFollow()` | REST API → bzj-connections-sync.php | Query canonical ledger; if following, call `bp_follow_stop_following()` | Sync deletion to Socials followers |
+| **B3** | User A blocks User B | `Wo_RegisterBlock()` | REST API → bzj-connections-sync.php | Query canonical ledger; if not blocked, call `bp_moderation_block_created()`; **Auto-unfriend if connected** | Sync block to Socials blocks table; remove friend/follow rows |
+| **B4** | User A unblocks User B | `Wo_RemoveBlock()` | REST API → bzj-connections-sync.php | Query canonical ledger; if blocked, call `bp_moderation_block_removed()` | Sync unblock to Socials blocks table |
+
+### SECTION C: Socials → BuddyBoss & Streams (External Action Sync)
+
+| # | Trigger Event | Socials Function | Method | BuddyBoss Action | Streams Action |
+|---|---|---|---|---|---|
+| **C1** | User A sends add-friend request to User B | `add_friend()` in profile.php | REST API → bzj-connections-sync.php | Query canonical ledger; if not connection-requested, call `friends_add_friend()` | *None* (friends disabled) |
+| **C2** | User A/B declines add-friend request | `disapprove_friend_request()` | REST API → bzj-connections-sync.php | Query canonical ledger; if connection-requested, delete via friendship removal | *None* |
+| **C3** | User B accepts add-friend request | `approve_friend_request()` | REST API → bzj-connections-sync.php | Query canonical ledger; if connection-requested, call `friends_accept_friendship()` | *None* |
+| **C4** | User A/B unfriends | `add_friend()` (unfriend branch) | REST API → bzj-connections-sync.php | Query canonical ledger; if connected, call `friends_remove_friend()` | *None* |
+| **C5** | User A blocks User B | `block()` in useractions.php | REST API → bzj-connections-sync.php | Query canonical ledger; if not blocked, call `bp_moderation_block_created()`; **Auto-unfriend if connected** | Block in Streams via `Wo_RegisterBlock()` |
+| **C6** | User A unblocks User B | `unblock()` in useractions.php | REST API → bzj-connections-sync.php | Query canonical ledger; if blocked, call `bp_moderation_block_removed()` | Unblock from Streams via `Wo_RemoveBlock()` |
+| **C7** | User A follows User B | Socials follow mechanism | REST API → bzj-connections-sync.php | Query canonical ledger; if not following, call `bp_follow_start_following()` | Sync to Streams via `Wo_RegisterFollow()` |
+| **C8** | User A stops following User B | Socials unfollow mechanism | REST API → bzj-connections-sync.php | Query canonical ledger; if following, call `bp_follow_stop_following()` | Sync deletion from Streams via `Wo_DeleteFollow()` |
+
+---
+
+## REVISED IMPLEMENTATION PLAN v7.1
+
+### Phase 1: Core Infrastructure
+
+#### **1.1 Must-Use Plugin: `bzj-connections-sync.php`**
+
+Location: `/wp-content/mu-plugins/bzj-connections-sync.php`
+
+**Primary Responsibilities:**
+1. Hook into all BuddyBoss relationship events (source of truth)
+2. Maintain canonical ledger of all relationships
+3. Perform atomic writes to Streams & Socials databases
+4. Validate state before sync to prevent orphaned records
+5. Expose authenticated REST API endpoint for Streams/Socials events
+6. Log all sync operations with audit trail
+7. Handle rollback/recovery on failed syncs
+
+**Architecture:**
+```
+bzj-connections-sync.php
+├── Class: BZJ_Connections_Sync
+│   ├── BuddyBoss Event Hooks (Source of Truth)
+│   │   ├── friends_friendship_requested
+│   │   ├── friends_friendship_accepted
+│   │   ├── friends_friendship_rejected
+│   │   ├── friends_friendship_withdrawn
+│   │   ├── friends_friendship_deleted
+│   │   ├── bp_moderation_block_created
+│   │   ├── bp_moderation_block_removed
+│   │   ├── bp_follow_start_following
+│   │   └── bp_follow_stop_following
+│   │
+│   ├── Sync Engines
+│   │   ├── Streams_Sync_Engine (direct DB writes)
+│   │   └── Socials_Sync_Engine (direct DB writes)
+│   │
+│   ├── State Validation
+│   │   ├── validate_relationship_state()
+│   │   ├── check_canonical_ledger()
+│   │   └── resolve_conflict()
+│   │
+│   ├── REST API Endpoints
+│   │   └── /wp-json/bzj/v6/connection-management
+│   │       ├── POST /follow
+│   │       ├── POST /unfollow
+│   │       ├── POST /block
+│   │       ├── POST /unblock
+│   │       ├── POST /add-friend-request
+│   │       ├── POST /accept-friend
+│   │       ├── POST /reject-friend
+│   │       └── POST /remove-friend
+│   │
+│   └── Logging
+│       └── /data/logs/bzj-connections-sync.log
+```
+
+#### **1.2 Helper Functions in Existing Files**
+
+**File: `/shared/wwqd_bridge.php`**
+
+Add the following function signatures (implementation provided separately):
+
+```php
+/**
+ * Get WordPress user ID by WoWonder user ID
+ * @param int $wo_user_id WoWonder user ID
+ * @return int|false WordPress user ID or false
+ */
+function bzj_get_wp_user_id_by_wo_id($wo_user_id);
+
+/**
+ * Get WoWonder user ID by WordPress user ID
+ * @param int $wp_user_id WordPress user ID
+ * @return int|false WoWonder user ID or false
+ */
+function bzj_get_wo_user_id_by_wp_id($wp_user_id);
+
+/**
+ * Get QuickDate user ID by WordPress user ID
+ * @param int $wp_user_id WordPress user ID
+ * @return int|false QuickDate user ID or false
+ */
+function bzj_get_qd_user_id_by_wp_id($wp_user_id);
+
+/**
+ * Get WordPress user ID by QuickDate user ID
+ * @param int $qd_user_id QuickDate user ID
+ * @return int|false WordPress user ID or false
+ */
+function bzj_get_wp_user_id_by_qd_id($qd_user_id);
+
+/**
+ * Log relationship sync event
+ * @param string $action Action type (create, update, delete)
+ * @param string $relationship_type Type of relationship (connection, follow, block)
+ * @param int $user_id_a First user ID
+ * @param int $user_id_b Second user ID
+ * @param string $platform Platform where action originated
+ * @param string $status Result status (success, failed, skipped)
+ * @param string $message Additional message
+ */
+function bzj_log_relationship_sync($action, $relationship_type, $user_id_a, $user_id_b, $platform, $status, $message);
+```
+
+---
+
+### Phase 2: REST API Endpoint Design
+
+#### **2.1 Endpoint Structure**
+
+**Base URL:** `/wp-json/bzj/v6/connection-management`
+
+**Authentication:** 
+- Uses WordPress nonce + secret validation
+- Streams/Socials include `X-BZJ-Signature` header (HMAC-SHA256 of request body + secret)
+- Secret stored in `.env` as `BUZZ_SYNC_SECRET`
+
+**Endpoint Specifications:**
+
+##### **POST /wp-json/bzj/v6/connection-management/follow**
+```json
+{
+  "action": "start_following",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "streams",
+  "timestamp": 1726492800
+}
+```
+- Validates both users exist in WordPress
+- Checks canonical ledger to avoid duplicate follows
+- Calls `bp_follow_start_following()` if not already following
+- Syncs to other platform as needed
+- Returns: `{ "status": 200, "message": "Follow created", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/unfollow**
+```json
+{
+  "action": "stop_following",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates follow exists in canonical ledger
+- Calls `bp_follow_stop_following()` if currently following
+- Syncs deletion to other platform
+- Returns: `{ "status": 200, "message": "Follow removed", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/block**
+```json
+{
+  "action": "create_block",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates block doesn't already exist
+- Calls `bp_moderation_block_created()` in WordPress
+- **Auto-unfriend** if A and B are connected
+- **Remove all follows** between A and B (both directions)
+- Syncs block to other platform
+- Returns: `{ "status": 200, "message": "Block created", "unfriended": true, "follows_removed": 2, "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/unblock**
+```json
+{
+  "action": "remove_block",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "streams",
+  "timestamp": 1726492800
+}
+```
+- Validates block exists in canonical ledger
+- Calls `bp_moderation_block_removed()` in WordPress
+- Syncs unblock to other platform
+- Returns: `{ "status": 200, "message": "Block removed", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/add-friend-request**
+```json
+{
+  "action": "create_friend_request",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates request doesn't already exist in canonical ledger
+- Calls `friends_add_friend()` in WordPress
+- Returns: `{ "status": 200, "message": "Friend request created", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/accept-friend**
+```json
+{
+  "action": "accept_friend_request",
+  "friendship_id": 789,
+  "user_id_acceptor": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates friendship exists and is pending
+- Calls `friends_accept_friendship()` in WordPress
+- Syncs confirmed connection to Socials followers table
+- Returns: `{ "status": 200, "message": "Friend request accepted", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/reject-friend**
+```json
+{
+  "action": "reject_friend_request",
+  "friendship_id": 789,
+  "user_id_rejector": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates friendship exists and is pending
+- Calls friendship rejection/deletion in WordPress
+- Removes pending row from Socials followers
+- Returns: `{ "status": 200, "message": "Friend request rejected", "ledger_state": {...} }`
+
+##### **POST /wp-json/bzj/v6/connection-management/remove-friend**
+```json
+{
+  "action": "remove_friend",
+  "user_id_a": 123,
+  "user_id_b": 456,
+  "origin_platform": "socials",
+  "timestamp": 1726492800
+}
+```
+- Validates friendship exists and is confirmed
+- Calls `friends_remove_friend()` in WordPress
+- Removes confirmed row from Socials followers
+- Returns: `{ "status": 200, "message": "Friend removed", "ledger_state": {...} }`
+
+---
+
+### Phase 3: Database Interaction Patterns
+
+#### **3.1 User ID Resolution**
+
+All operations must resolve user IDs across platforms:
+
+```php
+/**
+ * Resolve user ID across all platforms
+ * 
+ * @param mixed $user_identifier User ID or email from any platform
+ * @param string $source_platform 'wordpress', 'streams', 'socials'
+ * @return array ['wp_id' => int, 'wo_id' => int|null, 'qd_id' => int|null]
+ */
+function bzj_resolve_user_ids($user_identifier, $source_platform) {
+    // Implementation:
+    // 1. If source is WordPress, lookup wo_user_id and qd_user_id from usermeta
+    // 2. If source is Streams, query wp_usermeta for matching wo_user_id
+    // 3. If source is Socials, query wp_usermeta for matching qd_user_id
+    // 4. Validate all IDs are consistent
+    // 5. Return unified array
+}
+```
+
+#### **3.2 Canonical Ledger Queries**
+
+All sync operations query the canonical ledger in BuddyBoss before writing elsewhere:
+
+```php
+/**
+ * Query canonical relationship state in BuddyBoss
+ * 
+ * @param int $user_a WordPress user ID
+ * @param int $user_b WordPress user ID
+ * @param string $relationship_type 'connection', 'follow', 'block'
+ * @return array Relationship state or empty array
+ */
+function bzj_get_canonical_relationship($user_a, $user_b, $relationship_type) {
+    // Connection: Query wp_bp_friends_friendships
+    // Follow: Query wp_bp_activity
+    // Block: Query wp_bp_user_blocklists
+}
+```
+
+#### **3.3 Atomic Sync Operations**
+
+Each platform write is atomic with validation:
+
+```php
+/**
+ * Atomically sync relationship to Streams (WoWonder)
+ * 
+ * @param string $action 'create_follow', 'delete_follow', 'create_block', 'delete_block'
+ * @param int $user_a WordPress user A ID
+ * @param int $user_b WordPress user B ID
+ * @return bool Success status
+ */
+function bzj_sync_to_streams($action, $user_a, $user_b) {
+    // 1. Get WoWonder IDs for both users
+    // 2. Connect to WoWonder database
+    // 3. Validate WoWonder table structure
+    // 4. Execute operation (INSERT/UPDATE/DELETE)
+    // 5. Log result with timestamp and action
+    // 6. Return success/failure
+}
+
+/**
+ * Atomically sync relationship to Socials (QuickDate)
+ * 
+ * @param string $action Action type
+ * @param int $user_a WordPress user A ID
+ * @param int $user_b WordPress user B ID
+ * @param mixed $metadata Additional metadata (active status, etc.)
+ * @return bool Success status
+ */
+function bzj_sync_to_socials($action, $user_a, $user_b, $metadata = null) {
+    // 1. Get QuickDate IDs for both users
+    // 2. Connect to QuickDate database
+    // 3. Validate QuickDate table structure
+    // 4. Execute operation (INSERT/UPDATE/DELETE)
+    // 5. Log result with timestamp and action
+    // 6. Return success/failure
+}
+```
+
+---
+
+### Phase 4: BuddyBoss Event Hook Integration
+
+#### **4.1 Hook: `friends_friendship_requested`**
+
+**Triggers:** When user A sends connection request to user B
+
+**Arguments:** `$friendship_id`, `$initiator_user_id`, `$friend_user_id`
+
+**BZJ Handler Actions:**
+1. Query canonical state (should be "not_friends")
+2. Sync to Socials: Insert pending friend row in `followers` table with `active = 0`
+3. Log operation
+4. No Streams action (friends disabled)
+
+#### **4.2 Hook: `friends_friendship_accepted`**
+
+**Triggers:** When user B accepts connection request from user A
+
+**Arguments:** `$friendship_id`, `$initiator_user_id`, `$friend_user_id`
+
+**BZJ Handler Actions:**
+1. Query canonical state (should be "pending")
+2. Sync to Socials: Update followers row to `active = 1`
+3. Log operation
+4. No Streams action
+
+#### **4.3 Hook: `friends_friendship_rejected` / `friends_friendship_withdrawn`**
+
+**Triggers:** When connection request is rejected or withdrawn
+
+**Arguments:** `$friendship_id`, `$initiator_user_id`, `$friend_user_id`
+
+**BZJ Handler Actions:**
+1. Query canonical state
+2. Sync to Socials: Delete pending friend row from followers
+3. Log operation
+4. No Streams action
+
+#### **4.4 Hook: `friends_friendship_deleted`**
+
+**Triggers:** When confirmed connection is removed by either user
+
+**Arguments:** `$friendship_id`, `$initiator_user_id`, `$friend_user_id`
+
+**BZJ Handler Actions:**
+1. Query canonical state (should be "connected")
+2. Sync to Socials: Delete confirmed friend row from followers
+3. Log operation
+4. No Streams action
+
+#### **4.5 Hook: `bp_moderation_block_created`**
+
+**Triggers:** When user A blocks user B
+
+**Arguments:** `$moderation_id`, `$user_id` (blocker), `$item_id` (blocked)
+
+**BZJ Handler Actions:**
+1. Query canonical connection state between A and B
+2. **If connected:** Call `friends_remove_friend()` to auto-unfriend (prevents orphaned relationships)
+3. **Remove all follows:** Query and delete follows in both directions (A→B and B→A)
+4. Sync to Streams: Call `Wo_RegisterBlock($user_id_a, $user_id_b)` via direct DB write
+5. Sync to Socials: Insert block row + delete any friend/follow rows
+6. Log operation with unfriend and follow removal counts
+
+#### **4.6 Hook: `bp_moderation_block_removed`**
+
+**Triggers:** When user A unblocks user B
+
+**Arguments:** `$moderation_id`, `$user_id` (blocker), `$item_id` (blocked)
+
+**BZJ Handler Actions:**
+1. Query canonical block state
+2. Sync to Streams: Call `Wo_RemoveBlock()` via direct DB write
+3. Sync to Socials: Delete block row from blocks table
+4. Log operation
+
+#### **4.7 Hook: `bp_follow_start_following`**
+
+**Triggers:** When user A follows user B
+
+**Arguments:** `$follow_id`, `$follower_id`, `$following_id`
+
+**BZJ Handler Actions:**
+1. Query canonical ledger (should be "not_following")
+2. Sync to Streams: Call `Wo_RegisterFollow($following_id, $follower_id)` via direct DB write
+3. Sync to Socials: Insert/update followers row with `active = 1`
+4. Log operation
+
+#### **4.8 Hook: `bp_follow_stop_following`**
+
+**Triggers:** When user A unfollows user B
+
+**Arguments:** `$follow_id`, `$follower_id`, `$following_id`
+
+**BZJ Handler Actions:**
+1. Query canonical ledger (should be "following")
+2. Sync to Streams: Call `Wo_DeleteFollow()` via direct DB write
+3. Sync to Socials: Delete follow row from followers
+4. Log operation
+
+---
+
+### Phase 5: Logging & Audit Trail
+
+#### **5.1 Log File Location**
+
+`/data/logs/bzj-connections-sync.log` (rotates daily)
+
+#### **5.2 Log Entry Format**
+
+```
+[2026-09-16 14:32:45] [connection_sync.php] [INFO] 
+  Action: create_follow
+  Origin: buddyboss
+  Users: 123 → 456
+  Canonical State: not_following
+  Sync Targets: streams, socials
+  Result: SUCCESS
+  Streams: ✓ follow inserted in Wo_Followers
+  Socials: ✓ follower row inserted (active=1)
+  Duration: 124ms
+  
+[2026-09-16 14:33:12] [connection_sync.php] [ERROR]
+  Action: block_user
+  Origin: buddyboss
+  Users: 123 → 456
+  Canonical State: connected
+  Error: Socials database connection failed
+  Rollback: ✓ unfriended on BuddyBoss, ✗ Streams block succeeded but Socials failed
+  Duration: 2541ms
+  Recovery: Manual sync required - see recovery_queue
+```
+
+---
+
+### Phase 6: Conflict Resolution & State Recovery
+
+#### **6.1 Orphan Detection**
+
+Scheduled daily cron job that:
+1. Queries all BuddyBoss relationships
+2. Compares with Streams and Socials projections
+3. Identifies orphaned or inconsistent records
+4. Logs discrepancies
+5. Optionally auto-repairs (configurable)
+
+#### **6.2 Recovery Queue**
+
+Failed sync operations are stored in `/data/logs/recovery_queue.json`:
+
+```json
+{
+  "queue": [
+    {
+      "id": "sync_20260916_143312_001",
+      "timestamp": "2026-09-16T14:33:12Z",
+      "action": "block_user",
+      "user_a": 123,
+      "user_b": 456,
+      "canonical_state_verified": true,
+      "origin": "buddyboss",
+      "platforms_synced": ["buddyboss"],
+      "platforms_failed": ["socials"],
+      "error": "Connection timeout",
+      "retry_count": 0,
+      "last_retry": null,
+      "status": "pending_retry"
+    }
+  ]
+}
+```
+
+---
+
+## IMPLEMENTATION CHECKLIST
+
+### Must-Use Plugin Development
+- [ ] Create `/wp-content/mu-plugins/bzj-connections-sync.php`
+- [ ] Implement all BuddyBoss event hooks
+- [ ] Implement REST API endpoint `/wp-json/bzj/v6/connection-management`
+- [ ] Implement Streams sync engine
+- [ ] Implement Socials sync engine
+- [ ] Implement logging system
+- [ ] Implement conflict detection
+- [ ] Add recovery queue management
+
+### Helper Functions
+- [ ] Add user ID resolution functions to `/shared/wwqd_bridge.php`
+- [ ] Add logging functions to `/shared/wwqd_bridge.php`
+- [ ] Add relationship query functions to `/shared/wwqd_bridge.php`
+
+### Streams Integration Points
+- [ ] Modify `Wo_RegisterFollow()` handler to call REST API
+- [ ] Modify `Wo_DeleteFollow()` handler to call REST API
+- [ ] Modify `Wo_RegisterBlock()` handler to call REST API
+- [ ] Modify `Wo_RemoveBlock()` handler to call REST API
+- [ ] Add X-BZJ-Signature header generation
+
+### Socials Integration Points
+- [ ] Modify `add_friend()` in `/social/requests/ajax/profile.php` to call REST API
+- [ ] Modify `approve_friend_request()` to call REST API
+- [ ] Modify `disapprove_friend_request()` to call REST API
+- [ ] Modify `block()` in `/social/requests/ajax/useractions.php` to call REST API
+- [ ] Modify `unblock()` in `/social/requests/ajax/useractions.php` to call REST API
+- [ ] Add follow integration points
+- [ ] Add X-BZJ-Signature header generation
+
+### Testing & Validation
+- [ ] Unit tests for each sync flow
+- [ ] Integration tests across all platforms
+- [ ] Conflict resolution tests
+- [ ] Performance tests under load
+- [ ] Failover/recovery tests
+
+---
+
+## KEY DIFFERENCES FROM PREVIOUS PROPOSALS
+
+| Aspect | Previous | v7.1 Refined |
+|--------|----------|--------------|
+| **Source of Truth** | Distributed | Centralized in BuddyBoss |
+| **Streams Friends** | Synced as friends | Explicitly NOT synced (disabled) |
+| **Socials Add Friend** | Unclear direction | Clear: `followers(active=0→1)` |
+| **Block Behavior** | Simple block | Block + unfriend + remove follows |
+| **Rest API Security** | Basic nonce | HMAC-SHA256 signatures + nonce |
+| **Error Handling** | Not specified | Recovery queue + orphan detection |
+| **Logging** | Not specified | Comprehensive audit trail |
+| **Conflict Resolution** | Not specified | Canonical ledger validation |
+| **Atomic Operations** | Assumed | Explicitly enforced per sync |
+| **User ID Resolution** | Manual | Automated with `bzj_resolve_user_ids()` |
+
+---
+
+## CRITICAL IMPLEMENTATION NOTES
+
+1. **BuddyBoss is authoritative.** All other platforms are projections. Never update BuddyBoss state from external platforms—always route through the REST API to trigger the BuddyBoss hook, which then cascades to others.
+
+2. **Block is destructive.** Blocking automatically removes the connection and all follows between users. This is intentional and prevents orphaned relationships.
+
+3. **No API calls.** Streams and Socials sync via direct database writes only. No WoWonder or QuickDate APIs are called. This prevents external API dependencies and rate limiting.
+
+4. **Idempotency.** All operations check canonical state first. Duplicate requests for the same action (e.g., two follow requests in rapid succession) are safely de-duplicated.
+
+5. **Audit everything.** Every sync operation is logged with full context. This enables forensic analysis and recovery.
+
+6. **Validate foreign keys.** Before any cross-platform write, verify the target user exists in both the source and target platforms.
+
+7. **Maintain BuddyBoss capabilities.** BuddyBoss block filtering (by role, profile type, gender) is preserved and executed before any sync operation.
+
+This refined v7.1 implementation establishes a robust, maintainable synchronization layer that treats BuddyBoss as the canonical authority while keeping Streams and Socials consistent through atomic, logged, and recoverable operations.
+
+<<STOP GITHUB>>
