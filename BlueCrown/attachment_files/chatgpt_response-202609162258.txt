@@ -1,0 +1,1172 @@
+<<START CHATGPT>>
+
+## Updated Architecture — v8.1
+
+I reviewed the original proposal, the previous implementation, the two GitHub reviews, the existing `bzj-connections-sync.php`, BuddyBoss friendship functions, QuickDate friendship/follow logic, WoWonder follow/block functions, and the shared database layer.
+
+The GitHub recommendations are directionally correct, but I would **not** adopt them literally in a few places. In particular:
+
+* BuddyBoss remains the **actual source of truth**; the synchronization ledger is a state/recovery projection, not a second authority.
+* WoWonder Friends remain completely excluded because the Streams Friends System is disabled.
+* QuickDate `followers` must be treated as a **shared friend/follow projection**, rather than assuming every row represents only a follow.
+* External actions must mutate BuddyBoss first and then allow BuddyBoss's native lifecycle to drive synchronization.
+* BuddyBoss's native `friends_add_friend()`, `friends_accept_friendship()`, `friends_reject_friendship()`, `friends_withdraw_friendship()`, `friends_remove_friend()`, `bp_start_following()` and `bp_stop_following()` remain the canonical mutation functions. The supplied BuddyBoss source confirms the friendship hooks and that `friends_friendship_deleted` fires before the friendship is actually deleted. 
+* The BuddyBoss follow hooks must consume the `BP_Activity_Follow` object and extract `follower_id`/`leader_id`; the earlier scalar-ID assumption was incorrect. 
+* QuickDate's `add_friend()` actually calls `Wo_RegisterFollow($to, active_user)`, meaning `followers.following_id` is the **recipient** and `follower_id` is the **requester**. This corrects an important directional error in the previous implementation. 
+* WoWonder's normal follow representation is likewise `following_id = followed user`, `follower_id = actor`. 
+* Blocking is now explicitly destructive: connection + both follows are removed, external blocks are created, and **unblocking never restores the previous relationships**.
+* The proposed `bp_moderation_block_created()` approach should not be inserted blindly. The supplied BuddyBoss member-moderation class establishes the `user` moderation type, while the earlier simplistic function-based recommendation is not established by the supplied source. 
+* Direct external database access uses the existing `db_helpers.php` connection layer, which already exposes `get_wowonder_db()` and `get_qd_db_conn()`. ([GitHub][1])
+* No WoWonder or QuickDate API is used.
+
+### The resulting control plane
+
+```text
+                         BUZZJUICE NETWORK
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │ WORDPRESS / BUDDYBOSS │
+                    │  CANONICAL AUTHORITY  │
+                    │                      │
+                    │ Connections           │
+                    │ Follows               │
+                    │ Blocks                │
+                    └──────────┬───────────┘
+                               │
+                     Native BB lifecycle
+                         + control plane
+                               │
+                               ▼
+                ┌─────────────────────────────┐
+                │ bzj-connections-sync.php    │
+                │                             │
+                │ • canonical state mirror    │
+                │ • event idempotency         │
+                │ • pair locking              │
+                │ • HMAC authentication       │
+                │ • recovery                  │
+                │ • reconciliation             │
+                │ • external projections      │
+                └─────────────┬───────────────┘
+                              │
+                 ┌────────────┴────────────┐
+                 ▼                         ▼
+       ┌─────────────────┐       ┌─────────────────┐
+       │ Buzzjuice       │       │ Buzzjuice       │
+       │ Streams         │       │ Socials         │
+       │ WoWonder        │       │ QuickDate       │
+       │                 │       │                 │
+       │ Follow          │       │ Friend          │
+       │ Block           │       │ Follow          │
+       └─────────────────┘       │ Block           │
+                                 └─────────────────┘
+```
+
+## Relationship rules
+
+### Connections
+
+| Origin           | BuddyBoss             | Streams | Socials                                                            |
+| ---------------- | --------------------- | ------- | ------------------------------------------------------------------ |
+| BB request       | Pending               | None    | Pending friend                                                     |
+| BB accept        | Connected             | None    | Active friend                                                      |
+| BB reject        | Removed               | None    | Pending friend removed                                             |
+| BB withdraw      | Removed               | None    | Pending friend removed                                             |
+| BB unfriend      | Removed               | None    | Friend removed unless an independent follow still requires the row |
+| Socials request  | Creates BB request    | None    | Pending                                                            |
+| Socials accept   | Creates BB connection | None    | Active friend                                                      |
+| Socials unfriend | Removes BB connection | None    | Friend removed                                                     |
+
+This preserves the distinction you specifically wanted: **QuickDate Add Friend maps to BuddyBoss Connection, not to a WoWonder/BB follow.**
+
+### Follows
+
+```text
+BuddyBoss follow
+      ↓
+Streams follow
+      +
+Socials follow
+
+Streams follow
+      ↓
+BuddyBoss follow
+      ↓
+Socials follow
+
+Socials follow
+      ↓
+BuddyBoss follow
+      ↓
+Streams follow
+```
+
+The external action first invokes the BuddyBoss native operation, so the BuddyBoss hook becomes the synchronization trigger.
+
+### Blocks
+
+```text
+A blocks B
+   │
+   ├── BuddyBoss block
+   ├── remove BB connection
+   ├── remove A → B BB follow
+   ├── remove B → A BB follow
+   │
+   ├── Streams block A → B
+   ├── remove Streams follows both directions
+   │
+   ├── Socials block A → B
+   └── remove Socials friend/follow projections
+```
+
+Then:
+
+```text
+A unblocks B
+      ↓
+remove block only
+      ↓
+NO relationship restoration
+```
+
+That is the correct long-term model.
+
+---
+
+# Important QuickDate correction
+
+This was one of the most important fixes.
+
+The previous implementation had the friend projection direction backwards in places.
+
+QuickDate's actual code does:
+
+```php
+Wo_RegisterFollow($to, (int) self::ActiveUser()->id)
+```
+
+and `Wo_RegisterFollow()` inserts:
+
+```text
+following_id = recipient
+follower_id  = requester
+```
+
+So:
+
+```text
+A sends friend request to B
+
+QuickDate:
+following_id = B
+follower_id  = A
+active = 0
+```
+
+When accepted:
+
+```text
+following_id = B
+follower_id  = A
+active = 1
+```
+
+The new implementation follows that model. 
+
+This is particularly important because QuickDate uses the same `followers` table for both its friendship and follow mechanisms.
+
+---
+
+# New Control-Plane Storage
+
+I retained two operational tables, but **not a database logging table**:
+
+### `wp_bzj_relationships`
+
+Current synchronization state:
+
+```text
+user_a
+user_b
+connection_state
+requested_by
+follow_a_to_b
+follow_b_to_a
+block_a_to_b
+block_b_to_a
+version
+last_event_uuid
+created_at
+updated_at
+```
+
+This is a **reconciliation/state ledger**, not the ultimate source of truth.
+
+BuddyBoss remains authoritative.
+
+### `wp_bzj_relationship_events`
+
+Durable event/recovery queue:
+
+```text
+event_uuid
+origin
+operation
+actor_wp_id
+target_wp_id
+pair_a
+pair_b
+payload
+status
+attempts
+next_attempt_at
+last_error
+processed_at
+created_at
+updated_at
+```
+
+This gives us recovery without introducing a third log table.
+
+Actual diagnostic logging remains:
+
+```text
+/data/logs/bzj-connections-sync.log
+```
+
+---
+
+# Security
+
+The external endpoint is:
+
+```text
+POST /wp-json/bzj/v6/connection-management
+```
+
+Authentication:
+
+```text
+X-BZJ-Timestamp
+X-BZJ-Signature
+```
+
+Signature:
+
+```text
+HMAC-SHA256(
+    timestamp + "." + raw JSON body,
+    BUZZ_SSO_SECRET
+)
+```
+
+The endpoint rejects:
+
+* missing authentication
+* invalid signatures
+* stale timestamps
+* malformed JSON
+* invalid origin
+* invalid operation
+* invalid UUID
+* invalid users
+* unmapped external IDs
+* same actor/target
+
+The five-minute replay window and UUID idempotency are retained from the GitHub recommendation. 
+
+---
+
+# Critical implementation improvement
+
+One subtle but important correction from the earlier implementation is how external operations interact with BuddyBoss hooks.
+
+It is **wrong** to do:
+
+```text
+External action
+   ↓
+set "internal context"
+   ↓
+friends_add_friend()
+   ↓
+BuddyBoss hook suppressed
+```
+
+because then the canonical BuddyBoss hook never performs the normal projection.
+
+The updated architecture instead does:
+
+```text
+Streams/Socials
+      ↓
+signed REST
+      ↓
+BuddyBoss native mutation
+      ↓
+BuddyBoss native hook
+      ↓
+canonical ledger
+      ↓
+Streams + Socials projection
+```
+
+Internal cascading operations—particularly block → unfriend/unfollow—use the context guard to prevent loops.
+
+That gives us a clean distinction between:
+
+**external-originated canonical mutation**
+
+and
+
+**internal synchronization mutation**.
+
+---
+
+# Recovery / self-healing
+
+If this occurs:
+
+```text
+BuddyBoss     ✓
+Streams       ✓
+Socials       ✗
+```
+
+we do **not** roll back BuddyBoss.
+
+Instead:
+
+```text
+BuddyBoss remains authoritative
+          ↓
+failed projection recorded
+          ↓
+recovery queue
+          ↓
+retry
+          ↓
+Socials repaired
+```
+
+This follows the GitHub/previous analysis recommendation and avoids pretending that three independent databases can participate in one atomic transaction. 
+
+Reconciliation periodically performs:
+
+```text
+Read BuddyBoss
+      ↓
+refresh synchronization state
+      ↓
+compare/projection
+      ↓
+repair Streams
+      ↓
+repair Socials
+```
+
+Thus:
+
+> **If the platforms disagree, BuddyBoss wins.**
+
+---
+
+# Updated Plugin
+
+I generated the complete refactored MU plugin:
+
+**[Download `bzj-connections-sync-v8.1.0.php`](sandbox:/mnt/data/bzj-connections-sync-v8.1.0.php)**
+
+It contains the complete implementation rather than placeholders or truncated sections, and I syntax-checked the generated PHP file successfully.
+
+---
+
+# What I deliberately did NOT modify yet
+
+I recommend **not** simultaneously modifying:
+
+```text
+/streams/assets/includes/functions_one.php
+/streams/themes/sunshine/layout/extra_js/content.phtml
+/social/core.php
+/social/requests/ajax/profile.php
+/social/requests/ajax/useractions.php
+/shared/wwqd_bridge.php
+```
+
+The control plane should be installed and tested first.
+
+This follows the strongest recommendation from the previous analysis: establish and validate the canonical control plane before attaching every external-origin action to it. 
+
+---
+
+# Implementation sequence
+
+## Phase 1 — Install control plane
+
+Place:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+using the generated file above.
+
+Do **not** rename it to a different plugin name.
+
+Then verify:
+
+```text
+WordPress loads normally
+        ↓
+no PHP fatal
+        ↓
+wp_bzj_relationships created
+        ↓
+wp_bzj_relationship_events created
+        ↓
+REST route registered
+        ↓
+cron scheduled
+        ↓
+/data/logs/bzj-connections-sync.log writable
+```
+
+## Phase 2 — BuddyBoss → Streams/Socials
+
+Test independently:
+
+1. Connection request
+2. Connection accept
+3. Connection reject
+4. Connection withdraw
+5. Connection removal
+6. Follow
+7. Unfollow
+8. Block
+9. Unblock
+
+Do this before touching Streams/Socials action code.
+
+## Phase 3 — Streams → BuddyBoss
+
+Then we add small synchronization calls at the **successful action boundaries** around:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+The existing WoWonder behavior remains intact; the new code simply reports the completed action to:
+
+```text
+/wp-json/bzj/v6/connection-management
+```
+
+The Streams database continues to be managed normally by WoWonder.
+
+## Phase 4 — Socials → BuddyBoss
+
+Then integrate:
+
+```text
+add_friend()
+approve_friend_request()
+disapprove_friend_request()
+unfriend
+block()
+unblock()
+follow
+unfollow
+```
+
+Again, we should patch the existing action boundaries rather than replace large files.
+
+## Phase 5 — Reconciliation
+
+Once live synchronization is stable:
+
+```text
+hourly recovery
++
+hourly reconciliation
+```
+
+can remain enabled.
+
+---
+
+## One architectural point I would keep firmly
+
+I would **not** create a generalized `/relationship` API.
+
+Your choice of:
+
+```text
+/wp-json/bzj/v6/connection-management
+```
+
+is better for this control-plane purpose.
+
+Later, Buzzjuice Socials can have a separate broader relationship API without confusing the internal synchronization mechanism with a public-facing relationship service.
+
+The result is therefore effectively:
+
+```text
+                 BUDDYBOSS
+              SOURCE OF TRUTH
+                    │
+                    ▼
+       ┌─────────────────────────┐
+       │ BZJ CONNECTION CONTROL  │
+       │         PLANE           │
+       └────────────┬────────────┘
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+       STREAMS              SOCIALS
+       Follow                Friend
+       Block                 Follow
+                             Block
+```
+
+That gives Buzzjuice a much cleaner foundation for eventually adding other relationship types without turning the three platforms into a tightly coupled three-way system. 
+
+**Next implementation step should be Phase 1 installation/testing of this MU plugin, followed by the small Streams action-boundary patches.**
+
+[1]: https://github.com/cupidblack/buzzjuice.net/blob/main/shared/db_helpers.php "buzzjuice.net/shared/db_helpers.php at main · cupidblack/buzzjuice.net · GitHub"
+
+After implementing the updated code:
+
+WordPress loads normally.
+
+wp_bzj_relationships and wp_bzj_relationship_events both created successfully and catching logging and logging activity correctly
+
+Not sure how to check REST route registered
+
+Not sure how to check cron scheduled
+
+No /data/logs/bzj-connections-sync.log file in logs directory
+
+On BuddyBoss:
+1.i. When user A makes a connection request to user B on BuddyBoss, user B gets the normal connection request on BuddyBoss as well as an 'add friend' request on Buzzjuice Socials.
+
+- Does not sync the block on Buzzjuice Streams
+- Correctly syncs the connection request on Buzzjuice Socials
+
+1.ii. When user A or B cancels the connection request on BuddyBoss, the 'Add friend' request should also be canceled on Buzzjuice Socials.
+
+- Does not sync the connection request cancelation on Buzzjuice Streams
+- Does not sync the connection request cancelation on Buzzjuice Socials
+
+2.i. When user B accepts user A's connection request on BuddyBoss, user A and B would be connected on Buddyboss as normal and would also be connected as friends on Buzzjuice Socials. 
+
+- No acceptance sync is required for Buzzjuice Streams
+- Correctly syncs the acceptance on Buzzjuice Socials
+
+2.ii. When user A or B removes the connection on BuddyBoss, unfriend user A and B on Buzzjuice Socials.
+
+- No acceptance sync is required for Buzzjuice Streams
+- Correctly syncs on Buzzjuice Socials when user B removes the connection on BuddyBoss
+- Does not sync on Buzzjuice Socials when user A removes the connection on BuddyBoss.
+
+3.i. When user A blocks user B on BuddyBoss, user B is blocked on Buzzjuice Streams and blocked on Buzzjuice Socials.
+
+- Does not sync the block on Buzzjuice Streams
+- Correctly syncs the block on Buzzjuice Socials
+
+3.ii. When user A unblocks user B on BuddyBoss, user B is unblocked from user A on Buzzjuice Streams and unblocked on Buzzjuice Socials.
+
+- Does not sync the unblock on Buzzjuice Streams
+- Correctly syncs the unblock on Buzzjuice Socials
+
+4.i. When user A follows user B on BuddyBoss, user B gets user A as a follower as normal on BuddyBoss as well on Buzzjuice Streams.
+
+- Does not sync followers on Buzzjuice Streams
+- No follower sync required for Buzzjuice Socials
+
+4.ii. When user A unfollows user B on BuddyBoss, user B is unfollowed by user A on Buzzjuice Streams.
+
+- Does not sync unfollow on Buzzjuice Streams
+- No unfollow sync required for Buzzjuice Socials
+
+The following appears in the WordPress debug:
+
+<<START LOG>>
+
+[16-Sep-2026 17:01:41 UTC] 
+==========
+ERROR: Function WP_Object_Cache::get was called <strong>incorrectly</strong>. Cache key must be an integer or a non-empty string, NULL given. Please see <a href="https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/">Debugging in WordPress</a> for more information. (This message was added in version 6.1.0.)
+In file: /home/koware/public_html/buzzjuice.net/wp-includes/functions.php on line 6260
+STACK TRACE:
+[internal] -- line  {closure}()
+/home/koware/public_html/buzzjuice.net/wp-includes/functions.php -- line 6260 trigger_error()
+/home/koware/public_html/buzzjuice.net/wp-includes/functions.php -- line 6174 wp_trigger_error()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-object-cache.php -- line 160 _doing_it_wrong()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-object-cache.php -- line 363 WP_Object_Cache->is_valid_key()
+/home/koware/public_html/buzzjuice.net/wp-includes/cache.php -- line 154 WP_Object_Cache->get()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-members/bp-members-functions.php -- line 2937 wp_cache_get()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/mycred-toolkit/includes/addons/mycred-buddyboss/includes/mycred-buddyboss-activity-stream-hook.php -- line 331 bp_get_member_type()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 353 myCRED_buddyboss_Activity_Stream_Events_Hook->mycred_bp_delete_activity()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-activity/bp-activity-functions.php -- line 3327 do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-activity/bp-activity-functions.php -- line 3451 bp_activity_delete()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-activity.php -- line 81 bp_activity_delete_by_item_id()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-activity.php -- line 477 friends_delete_activity()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 355 bp_friends_delete_activity_on_friendship_delete()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-functions.php -- line 129 do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-templates/bp-nouveau/includes/friends/ajax.php -- line 188 friends_remove_friend()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 353 bp_nouveau_ajax_addremove_friend()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-admin/admin-ajax.php -- line 192 do_action()
+==========
+[16-Sep-2026 17:01:41 UTC] PHP Notice:  Function WP_Object_Cache::get was called <strong>incorrectly</strong>. Cache key must be an integer or a non-empty string, NULL given. Please see <a href="https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/">Debugging in WordPress</a> for more information. (This message was added in version 6.1.0.) in /home/koware/public_html/buzzjuice.net/wp-includes/functions.php on line 6260
+[16-Sep-2026 17:01:41 UTC] 
+==========
+ERROR: Function WP_Object_Cache::set was called <strong>incorrectly</strong>. Cache key must be an integer or a non-empty string, NULL given. Please see <a href="https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/">Debugging in WordPress</a> for more information. (This message was added in version 6.1.0.)
+In file: /home/koware/public_html/buzzjuice.net/wp-includes/functions.php on line 6260
+STACK TRACE:
+[internal] -- line  {closure}()
+/home/koware/public_html/buzzjuice.net/wp-includes/functions.php -- line 6260 trigger_error()
+/home/koware/public_html/buzzjuice.net/wp-includes/functions.php -- line 6174 wp_trigger_error()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-object-cache.php -- line 160 _doing_it_wrong()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-object-cache.php -- line 302 WP_Object_Cache->is_valid_key()
+/home/koware/public_html/buzzjuice.net/wp-includes/cache.php -- line 111 WP_Object_Cache->set()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-members/bp-members-functions.php -- line 2952 wp_cache_set()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/mycred-toolkit/includes/addons/mycred-buddyboss/includes/mycred-buddyboss-activity-stream-hook.php -- line 331 bp_get_member_type()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 353 myCRED_buddyboss_Activity_Stream_Events_Hook->mycred_bp_delete_activity()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-activity/bp-activity-functions.php -- line 3327 do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-activity/bp-activity-functions.php -- line 3451 bp_activity_delete()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-activity.php -- line 81 bp_activity_delete_by_item_id()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-activity.php -- line 477 friends_delete_activity()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 355 bp_friends_delete_activity_on_friendship_delete()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-functions.php -- line 129 do_action()
+/home/koware/public_html/buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-templates/bp-nouveau/includes/friends/ajax.php -- line 188 friends_remove_friend()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 353 bp_nouveau_ajax_addremove_friend()
+/home/koware/public_html/buzzjuice.net/wp-includes/class-wp-hook.php -- line 377 WP_Hook->apply_filters()
+/home/koware/public_html/buzzjuice.net/wp-includes/plugin.php -- line 523 WP_Hook->do_action()
+/home/koware/public_html/buzzjuice.net/wp-admin/admin-ajax.php -- line 192 do_action()
+==========
+[16-Sep-2026 17:01:41 UTC] PHP Notice:  Function WP_Object_Cache::set was called <strong>incorrectly</strong>. Cache key must be an integer or a non-empty string, NULL given. Please see <a href="https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/">Debugging in WordPress</a> for more information. (This message was added in version 6.1.0.) in /home/koware/public_html/buzzjuice.net/wp-includes/functions.php on line 6260
+[16-Sep-2026 17:01:41 UTC] [FATAL] Function WP_Object_Cache::set was called <strong>incorrectly</strong>. Cache key must be an integer or a non-empty string, NULL given. Please see <a href="https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/">Debugging in WordPress</a> for more information. (This message was added in version 6.1.0.) in /home/koware/public_html/buzzjuice.net/wp-includes/functions.php:6260
+
+<<STOP LOG>>
+
+## Diagnosis
+
+The test results are actually very useful. The **BuddyBoss → QuickDate side of the control plane is largely working**, which proves that the MU plugin is loading, the BuddyBoss friendship hooks are firing, the ledger is functioning, and the QuickDate projection layer is functioning.
+
+The failures point to two concrete defects in v8.1.0 plus one unrelated BuddyBoss/MyCRED problem.
+
+### 1. The Streams database path was wrong
+
+The v8.1.0 plugin looked for:
+
+```text
+/home/koware/public_html/shared/db_helpers.php
+```
+
+before looking anywhere else.
+
+Your actual shared layer is under the Buzzjuice installation:
+
+```text
+/home/koware/public_html/buzzjuice.net/shared/db_helpers.php
+```
+
+So the Streams connection could fail even though the rest of the plugin was operating.
+
+This is especially significant because `db_helpers.php` confirms that `get_wowonder_db()` returns the correct mysqli connection to the WoWonder database. 
+
+I have corrected this.
+
+---
+
+### 2. The log path was also wrong
+
+v8.1.0 calculated the log directory using:
+
+```php
+dirname(ABSPATH) . '/data/logs'
+```
+
+The requested Buzzjuice location is:
+
+```text
+/home/koware/public_html/buzzjuice.net/data/logs/
+```
+
+The corrected version now explicitly uses:
+
+```php
+ABSPATH . 'data/logs/'
+```
+
+This should finally give us the diagnostic information we need.
+
+---
+
+### 3. Connection cancellation needs more robust lifecycle handling
+
+BuddyBoss actually has separate lifecycle hooks:
+
+* `friends_friendship_rejected`
+* `friends_friendship_withdrawn`
+* `friends_friendship_deleted`
+* `friends_friendship_post_delete`
+
+and the supplied BuddyBoss source confirms that `friends_friendship_deleted` fires **before** the friendship row is deleted, while `friends_friendship_post_delete` fires after deletion. 
+
+v8.1.0 depended too heavily on the pre-delete path.
+
+I've therefore added:
+
+```php
+friends_friendship_post_delete
+```
+
+as a second idempotent safety projection.
+
+I've also added BuddyBoss's legacy misspelled hook:
+
+```php
+friends_friendship_whithdrawn
+```
+
+alongside the correct:
+
+```php
+friends_friendship_withdrawn
+```
+
+The current BuddyBoss source fires both the deprecated misspelled hook and the correctly spelled hook. 
+
+This should resolve the cancellation inconsistencies.
+
+---
+
+## 4. The MyCRED error is a separate problem
+
+This part of your debug trace is important:
+
+```text
+WP_Object_Cache::get
+Cache key must be an integer or a non-empty string, NULL given
+
+...
+bp_get_member_type()
+...
+myCRED_buddyboss_Activity_Stream_Events_Hook->mycred_bp_delete_activity()
+...
+friends_remove_friend()
+```
+
+That stack does **not originate in `bzj-connections-sync.php`**.
+
+It originates in:
+
+```text
+mycred-toolkit/includes/addons/mycred-buddyboss/includes/mycred-buddyboss-activity-stream-hook.php
+```
+
+while BuddyBoss is deleting the friendship activity.
+
+The BuddyBoss source confirms that `friends_remove_friend()` fires its deletion lifecycle and subsequently deletes the associated activity. 
+
+So we have:
+
+```text
+A removes B
+     │
+     ▼
+BuddyBoss friendship removal
+     │
+     ├── BZJ synchronization
+     │
+     └── BuddyBoss activity deletion
+              │
+              ▼
+          MyCRED hook
+              │
+              ▼
+       bp_get_member_type(NULL)
+              │
+              ▼
+       WP cache error/fatal
+```
+
+**We should not modify MyCRED yet.**
+
+First we need to establish that the BZJ synchronization completes correctly before the MyCRED error occurs. The new `post_delete` hook also gives us a recovery path.
+
+---
+
+# Updated v8.1.1
+
+I've generated the corrected plugin:
+
+**[Download `bzj-connections-sync-v8.1.1.php`](sandbox:/mnt/data/bzj-connections-sync-v8.1.1.php)**
+
+It has been PHP syntax-checked successfully.
+
+### Changes in v8.1.1
+
+| Area                          | v8.1.0                       | v8.1.1                                      |
+| ----------------------------- | ---------------------------- | ------------------------------------------- |
+| Streams `db_helpers.php` path | Incorrect priority           | **Correct Buzzjuice root path first**       |
+| `/data/logs`                  | Parent-directory calculation | **`ABSPATH/data/logs/`**                    |
+| Diagnostic logging            | Difficult to inspect         | **Explicit diagnostics**                    |
+| REST status                   | Available                    | Retained                                    |
+| REST diagnostics              | Not available                | **Added**                                   |
+| Withdraw hook                 | Correct hook only            | **Correct + legacy typo hook**              |
+| Friendship deletion           | Pre-delete only              | **Pre-delete + post-delete safety hook**    |
+| Streams DB test               | Limited                      | **Reports connection + table availability** |
+| Cron test                     | Manual                       | **Diagnostics reports next execution**      |
+| REST route test               | Manual                       | **Diagnostics reports registration**        |
+| MyCRED                        | Untouched                    | Correctly isolated as separate issue        |
+
+---
+
+# Step 1 — Replace the plugin
+
+Replace:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+with:
+
+```text
+bzj-connections-sync-v8.1.1.php
+```
+
+but **keep the actual installed filename**:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+In other words:
+
+```text
+REMOVE:
+bzj-connections-sync.php
+
+RENAME:
+bzj-connections-sync-v8.1.1.php
+
+TO:
+bzj-connections-sync.php
+```
+
+Do not keep both files in `mu-plugins`, because both would load.
+
+---
+
+# Step 2 — Confirm the new log location
+
+After loading WordPress once, check:
+
+```text
+/home/koware/public_html/buzzjuice.net/data/logs/
+```
+
+You should now get:
+
+```text
+bzj-connections-sync.log
+```
+
+The plugin will create the directory if necessary.
+
+The entries are JSON lines, for example:
+
+```json
+{"time":"2026-09-16T17:30:00+00:00","message":"Diagnostics requested",...}
+```
+
+This is preferable to putting another database table in the system.
+
+---
+
+# Step 3 — Check the REST route
+
+You don't need to guess anymore.
+
+Log in to WordPress as an administrator and visit:
+
+```text
+https://buzzjuice.net/wp-json/bzj/v6/connection-management
+```
+
+Because that is the GET status endpoint, you should receive JSON rather than a WordPress 404.
+
+Then visit:
+
+```text
+https://buzzjuice.net/wp-json/bzj/v6/connection-management/diagnostics
+```
+
+The second endpoint is admin-only.
+
+It will tell us:
+
+```text
+route_registered
+cron_recovery
+cron_reconcile
+log path
+log directory
+Streams DB connection
+Socials DB connection
+Wo_Followers
+Wo_Blocks
+QuickDate followers
+QuickDate blocks
+BuddyBoss hook registration
+```
+
+So we no longer need to infer whether those pieces are active.
+
+---
+
+# Step 4 — Check cron
+
+The diagnostics endpoint will show something like:
+
+```json
+"cron": {
+    "recovery_next": "2026-09-16T18:00:00+00:00",
+    "reconcile_next": "2026-09-16T18:00:00+00:00"
+}
+```
+
+If either is `null`, we know immediately that the schedule isn't registered.
+
+One important WordPress detail: WP-Cron is traffic-driven unless your server has a real cron job invoking it. So **"scheduled" and "executed" are different things**.
+
+For now, we only need to establish that the events are scheduled.
+
+---
+
+# Step 5 — Run one controlled BuddyBoss test
+
+Don't retest everything yet.
+
+Use two test users and perform:
+
+### Test A — Follow
+
+```text
+A follows B on BuddyBoss
+```
+
+Expected:
+
+```text
+BuddyBoss
+    A → B follow
+
+Streams
+    B ← A follow
+
+Socials
+    unchanged
+```
+
+The WoWonder source confirms that its follow representation is:
+
+```text
+following_id = B
+follower_id  = A
+active = 1
+```
+
+and pending requests use the same table with `active = 0`. 
+
+---
+
+### Test B — Unfollow
+
+```text
+A unfollows B
+```
+
+Expected:
+
+```text
+Streams
+    A → B follow deleted
+```
+
+---
+
+### Test C — Block
+
+```text
+A blocks B
+```
+
+Expected:
+
+```text
+BuddyBoss
+    A → B blocked
+    connection removed
+    follow removed
+
+Streams
+    blocker = A
+    blocked = B
+    follows removed
+
+Socials
+    block created
+    relationships removed
+```
+
+The actual WoWonder source confirms its block table is `Wo_Blocks` and the columns are:
+
+```text
+blocker
+blocked
+```
+
+and its native functions insert/delete exactly those columns. 
+
+The table definitions independently confirm:
+
+```text
+T_FOLLOWERS = Wo_Followers
+T_BLOCKS    = Wo_Blocks
+```
+
+
+
+So the v8.1.1 direct-DB projection now aligns with the actual WoWonder schema.
+
+---
+
+# Step 6 — Then test connection cancellation
+
+After the basic Streams test:
+
+```text
+A sends connection request to B
+```
+
+verify:
+
+```text
+Socials:
+A → B pending friend request
+```
+
+Then:
+
+```text
+A cancels
+```
+
+Expected:
+
+```text
+Socials:
+pending friend row removed
+```
+
+Then repeat:
+
+```text
+A sends request
+B rejects
+```
+
+Expected:
+
+```text
+Socials:
+pending friend row removed
+```
+
+The BuddyBoss source confirms rejection and withdrawal have separate lifecycle hooks, while friendship deletion has both pre- and post-delete hooks. 
+
+---
+
+# One important thing we should NOT do yet
+
+Don't modify:
+
+```text
+functions_one.php
+content.phtml
+social/core.php
+social/requests/ajax/profile.php
+social/requests/ajax/useractions.php
+```
+
+yet.
+
+The current evidence suggests the **control plane itself still has an infrastructure problem**, particularly its external database helper path.
+
+We should fix and verify that first.
+
+The architecture remains:
+
+```text
+             BUDDYBOSS
+          SOURCE OF TRUTH
+                │
+                ▼
+       bzj-connections-sync
+                │
+       ┌────────┴────────┐
+       ▼                 ▼
+    STREAMS            SOCIALS
+    WoWonder           QuickDate
+```
+
+Only after that works consistently should we attach the reverse-direction action hooks in Streams and Socials.
+
+---
+
+## What I want from the next test
+
+After installing v8.1.1, **don't send the whole debug log yet**.
+
+First open:
+
+```text
+https://buzzjuice.net/wp-json/bzj/v6/connection-management/diagnostics
+```
+
+and paste the JSON response here.
+
+That single response will tell us immediately:
+
+1. whether the REST route is registered;
+2. whether both cron events are scheduled;
+3. whether the log directory is writable;
+4. whether `get_wowonder_db()` is connecting;
+5. whether `Wo_Followers` exists;
+6. whether `Wo_Blocks` exists;
+7. whether QuickDate is connected;
+8. whether the relevant BuddyBoss hooks are actually attached.
+
+Then we can make the **next targeted correction rather than changing several long-running platform files blindly**.
+
+
+<<STOP CHATGPT>>
