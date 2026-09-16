@@ -1,0 +1,1361 @@
+<<START CHATGPT>>
+
+I reviewed the current Buzzjuice source, the supplied BuddyBoss implementation, the existing `wwqd_bridge.php`, the 5.0 MU plugin, and both GitHub responses. The architecture is sound, but I would **not deploy 5.0.0 as-is**.
+
+Several important corrections are required before deployment.
+
+## 1. Critical corrections
+
+### A. Connections and follows must be separate canonical states
+
+The previous implementation treats the relationship as essentially:
+
+`none → requested → connected`
+
+That is insufficient because Buzzjuice now has **two independent relationship dimensions**:
+
+1. **Connection**
+
+   * none
+   * requested
+   * connected
+
+2. **Follow**
+
+   * A follows B
+   * B follows A
+   * both
+   * neither
+
+A user can therefore be:
+
+> A connected to B, while A follows B and B does not follow A.
+
+The canonical ledger needs independent `follow_a_to_b` and `follow_b_to_a` fields.
+
+### B. QuickDate "Like" should not be the synchronization primitive
+
+This is the most important correction to the original proposal.
+
+QuickDate's `like()` operates on its `likes` table and is part of the dating/matching mechanism. The actual QuickDate friend/follower mechanism uses the `followers` table and `Wo_RegisterFollow()`. 
+
+Therefore:
+
+**BuddyBoss follow**
+→ Streams follow
+→ QuickDate follower
+
+not:
+
+**BuddyBoss follow**
+→ QuickDate dating like.
+
+Likewise:
+
+**QuickDate dating like**
+→ should **not** automatically create a BuddyBoss follow.
+
+Otherwise a dating swipe becomes a network relationship, which couples two completely different product concepts.
+
+### C. QuickDate Add Friend is implemented through `followers`
+
+The current `add_friend()` calls `Wo_RegisterFollow()`. 
+
+Therefore the synchronization layer should interpret:
+
+`Socials Add Friend → BuddyBoss connection request`
+
+while the local QuickDate representation remains its existing follower/request row.
+
+### D. The BuddyBoss rejected/withdrawn hook signatures in 5.0 are wrong
+
+The installed BuddyBoss source shows:
+
+* `friends_friendship_rejected` receives **2 arguments**: friendship ID and friendship object.
+* `friends_friendship_withdrawn` also receives **2 arguments**: friendship ID and friendship object.
+* `friends_friendship_deleted` receives **3 arguments**.
+* `friends_friendship_requested` and `friends_friendship_accepted` receive the friendship ID, initiator, friend, and friendship object. 
+
+So the 5.0 registration:
+
+```php
+add_action('friends_friendship_rejected', '...', 20, 3);
+```
+
+and routing it into a function expecting three user IDs is incorrect.
+
+The updated implementation must extract:
+
+```php
+$friendship->initiator_user_id
+$friendship->friend_user_id
+```
+
+for rejected/withdrawn events.
+
+### E. BuddyBoss's native connection API must remain authoritative
+
+`friends_add_friend()` creates the connection request and fires the appropriate lifecycle hook. 
+
+Therefore external requests should **never directly insert into `wp_bp_friends`**.
+
+They must call:
+
+```php
+friends_add_friend($actor, $target, false);
+```
+
+This preserves the existing Buzzjuice restrictions on connection requests.
+
+Likewise, acceptance must use the actual friendship ID:
+
+```php
+friends_accept_friendship($friendship_id);
+```
+
+The BuddyBoss source confirms this API requires the friendship ID. 
+
+### F. Blocking should proactively remove existing connections
+
+The supplied recommendation is correct conceptually.
+
+When:
+
+> A blocks B
+
+the canonical state becomes:
+
+```text
+A → B blocked
+connection = none
+A → B follow = false
+B → A follow = false
+```
+
+and the existing BuddyBoss connection should be removed immediately.
+
+The block itself remains **directional**. Thus:
+
+```text
+A → B blocked
+```
+
+does not automatically mean:
+
+```text
+B → A blocked
+```
+
+The external platforms, however, should prevent the blocked pair from maintaining any follower/connection relationship.
+
+### G. Unblocking must never restore the old relationship
+
+This remains a hard rule:
+
+```text
+block
+   ↓
+remove connection/follows
+   ↓
+unblock
+   ↓
+still no connection/follow
+```
+
+The user must deliberately reconnect/follow again.
+
+### H. The external platform should report after successful local writes
+
+This recommendation from the GitHub analysis is correct. The current Streams implementation actually performs direct database operations such as the `Wo_RegisterFollow()` insert and `Wo_DeleteFollow()` delete. 
+
+Therefore:
+
+```text
+External local operation
+        ↓
+successful
+        ↓
+signed report to WordPress
+        ↓
+BuddyBoss canonical operation
+        ↓
+canonical reconciliation
+```
+
+rather than trying to intercept the operation before it happens.
+
+---
+
+# 2. Updated architecture
+
+The resulting Buzzjuice relationship architecture should be:
+
+```text
+                         ┌──────────────────────┐
+                         │  WORDPRESS /         │
+                         │  BUDDYBOSS           │
+                         │                      │
+                         │ SOURCE OF TRUTH      │
+                         └──────────┬───────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    │                               │
+              Canonical Ledger                Event Queue
+                    │                               │
+        ┌───────────┴───────────┐                   │
+        │                       │                   │
+   Connections               Follows               │
+        │                       │                   │
+        └───────────┬───────────┘                   │
+                    │                               │
+             State reconciliation                   │
+                    │                               │
+          ┌─────────┴─────────┐                     │
+          │                   │                     │
+     WoWonder Streams     QuickDate Socials ◄──────┘
+```
+
+The canonical ledger should contain:
+
+```text
+user_a
+user_b
+
+relationship_state
+requested_by
+
+follow_a_to_b
+follow_b_to_a
+
+block_a_to_b
+block_b_to_a
+
+created_at
+updated_at
+last_event_uuid
+```
+
+This gives us a complete pair state.
+
+---
+
+# 3. Canonical state model
+
+For users A and B:
+
+| Dimension   | Canonical values                 |
+| ----------- | -------------------------------- |
+| Connection  | `none`, `requested`, `connected` |
+| Requester   | WP user ID                       |
+| A follows B | `0/1`                            |
+| B follows A | `0/1`                            |
+| A blocks B  | `0/1`                            |
+| B blocks A  | `0/1`                            |
+
+### Precedence
+
+```text
+BLOCK
+  ↓
+CONNECTION
+  ↓
+FOLLOW
+```
+
+A block clears the lower relationship dimensions.
+
+---
+
+# 4. Updated synchronization matrix
+
+## Connections
+
+| Origin    | Action                    | BuddyBoss         | Streams                 | Socials                      |
+| --------- | ------------------------- | ----------------- | ----------------------- | ---------------------------- |
+| BuddyBoss | request                   | canonical         | pending follower        | pending friend               |
+| BuddyBoss | accept                    | connected         | mutual active followers | mutual active followers      |
+| BuddyBoss | reject                    | removed           | pending removed         | pending removed              |
+| BuddyBoss | withdraw                  | removed           | pending removed         | pending removed              |
+| BuddyBoss | unfriend                  | removed           | relationship removed    | relationship removed         |
+| Streams   | friend-equivalent request | native BB request | local                   | pending Socials relationship |
+| Socials   | Add Friend                | native BB request | reconciled              | local request                |
+| Socials   | accept                    | native BB accept  | reconciled              | local accepted               |
+| Socials   | decline/cancel            | native BB removal | reconciled              | local removal                |
+
+The BuddyBoss side remains authoritative even when the originating action occurs externally.
+
+---
+
+# 5. Updated follow matrix
+
+## BuddyBoss follow
+
+```text
+A follows B on BuddyBoss
+        ↓
+canonical follow_a_to_b = 1
+        ↓
+Streams: A follows B
+        ↓
+Socials: A follows B
+```
+
+## Streams follow
+
+```text
+A follows B on Streams
+        ↓
+report
+        ↓
+BuddyBoss native follow
+        ↓
+canonical follow_a_to_b = 1
+        ↓
+Socials reconciled
+```
+
+## Socials follow
+
+```text
+A follows B on Socials
+        ↓
+report
+        ↓
+BuddyBoss native follow
+        ↓
+canonical follow_a_to_b = 1
+        ↓
+Streams reconciled
+```
+
+This uses the QuickDate `followers` table, which is also what its `Wo_IsFollowing()` implementation reads. 
+
+---
+
+# 6. Updated moderation model
+
+For:
+
+```text
+A blocks B
+```
+
+canonical state becomes:
+
+```text
+block_a_to_b = 1
+relationship_state = none
+follow_a_to_b = 0
+follow_b_to_a = 0
+```
+
+and all platforms receive:
+
+```text
+A → B block
+A ↔ B relationship removed
+```
+
+The Streams block table is explicitly directional (`blocker`, `blocked`). 
+
+QuickDate likewise stores:
+
+```text
+user_id
+block_userid
+created_at
+```
+
+so the directional model maps naturally. 
+
+---
+
+# 7. Updated MU-plugin
+
+The new plugin should be **6.0.0**, replacing the conceptual 5.0 implementation.
+
+I recommend the following file:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+The important structural changes are:
+
+```php
+define('BZJ_CSYNC_VERSION', '6.0.0');
+
+define('BZJ_REL_NONE',      'none');
+define('BZJ_REL_REQUESTED', 'requested');
+define('BZJ_REL_CONNECTED', 'connected');
+
+define('BZJ_OP_CONNECTION_REQUEST', 'connection_request');
+define('BZJ_OP_CONNECTION_ACCEPT',  'connection_accept');
+define('BZJ_OP_CONNECTION_REMOVE',  'connection_remove');
+
+define('BZJ_OP_FOLLOW',   'follow');
+define('BZJ_OP_UNFOLLOW', 'unfollow');
+
+define('BZJ_OP_BLOCK',   'block');
+define('BZJ_OP_UNBLOCK', 'unblock');
+
+define('BZJ_OP_RECONCILE', 'reconcile');
+```
+
+The canonical table should be:
+
+```sql
+CREATE TABLE {$wpdb->prefix}bzj_relationships (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+    user_a BIGINT UNSIGNED NOT NULL,
+    user_b BIGINT UNSIGNED NOT NULL,
+
+    relationship_state VARCHAR(20) NOT NULL DEFAULT 'none',
+    requested_by BIGINT UNSIGNED NULL,
+
+    follow_a_to_b TINYINT(1) NOT NULL DEFAULT 0,
+    follow_b_to_a TINYINT(1) NOT NULL DEFAULT 0,
+
+    block_a_to_b TINYINT(1) NOT NULL DEFAULT 0,
+    block_b_to_a TINYINT(1) NOT NULL DEFAULT 0,
+
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    last_event_uuid CHAR(36) NULL,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY relationship_pair (user_a,user_b),
+
+    KEY relationship_state (relationship_state),
+    KEY requested_by (requested_by),
+
+    KEY follow_a_to_b (follow_a_to_b),
+    KEY follow_b_to_a (follow_b_to_a),
+
+    KEY block_a_to_b (block_a_to_b),
+    KEY block_b_to_a (block_b_to_a),
+
+    KEY updated_at (updated_at)
+)
+```
+
+The event table remains:
+
+```sql
+CREATE TABLE {$wpdb->prefix}bzj_relationship_events (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+    event_uuid CHAR(36) NOT NULL,
+
+    origin VARCHAR(20) NOT NULL,
+    operation VARCHAR(40) NOT NULL,
+
+    actor_wp_id BIGINT UNSIGNED NOT NULL,
+    target_wp_id BIGINT UNSIGNED NOT NULL,
+
+    payload LONGTEXT NULL,
+
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    attempts INT UNSIGNED NOT NULL DEFAULT 0,
+
+    next_attempt_at DATETIME NOT NULL,
+
+    last_error TEXT NULL,
+
+    created_at DATETIME NOT NULL,
+    processed_at DATETIME NULL,
+
+    PRIMARY KEY (id),
+
+    UNIQUE KEY event_uuid (event_uuid),
+    KEY retry_lookup (status,next_attempt_at),
+    KEY pair_lookup (actor_wp_id,target_wp_id),
+    KEY created_at (created_at)
+)
+```
+
+This keeps the requested two-table operational model while using a file for diagnostics.
+
+---
+
+# 8. Correct BuddyBoss hooks
+
+The new MU plugin should register:
+
+```php
+add_action(
+    'friends_friendship_requested',
+    'bzj_csync_wp_requested',
+    20,
+    4
+);
+
+add_action(
+    'friends_friendship_accepted',
+    'bzj_csync_wp_accepted',
+    20,
+    4
+);
+
+add_action(
+    'friends_friendship_rejected',
+    'bzj_csync_wp_rejected',
+    20,
+    2
+);
+
+add_action(
+    'friends_friendship_withdrawn',
+    'bzj_csync_wp_withdrawn',
+    20,
+    2
+);
+
+add_action(
+    'friends_friendship_deleted',
+    'bzj_csync_wp_deleted',
+    20,
+    3
+);
+```
+
+The correction to `rejected` and `withdrawn` is important because the installed BuddyBoss source confirms those hooks receive the friendship object rather than three user-ID arguments. 
+
+For rejection:
+
+```php
+function bzj_csync_wp_rejected($friendship_id, $friendship) {
+
+    if (!is_object($friendship)) {
+        return;
+    }
+
+    bzj_csync_wp_connection_removed(
+        (int)$friendship->initiator_user_id,
+        (int)$friendship->friend_user_id,
+        (int)$friendship_id,
+        'rejected'
+    );
+}
+```
+
+For withdrawal:
+
+```php
+function bzj_csync_wp_withdrawn($friendship_id, $friendship) {
+
+    if (!is_object($friendship)) {
+        return;
+    }
+
+    bzj_csync_wp_connection_removed(
+        (int)$friendship->initiator_user_id,
+        (int)$friendship->friend_user_id,
+        (int)$friendship_id,
+        'withdrawn'
+    );
+}
+```
+
+---
+
+# 9. External REST endpoint
+
+The endpoint remains:
+
+```text
+POST /wp-json/bzj/v6/relationship
+```
+
+with:
+
+```http
+X-BZJ-Timestamp
+X-BZJ-Signature
+```
+
+where:
+
+```text
+signature =
+HMAC-SHA256(
+    timestamp + "." + raw_json_body,
+    BUZZ_SSO_SECRET
+)
+```
+
+This is preferable to a simple bearer token because the timestamp/body signature prevents straightforward replay of an intercepted request.
+
+The endpoint payload becomes:
+
+```json
+{
+    "origin": "streams",
+    "origin_user_id": 123,
+    "target_user_id": 456,
+    "operation": "follow",
+    "event_uuid": "uuid"
+}
+```
+
+Allowed operations:
+
+```text
+connection_request
+connection_accept
+connection_remove
+
+follow
+unfollow
+
+block
+unblock
+```
+
+---
+
+# 10. External connection requests
+
+The most important implementation rule is:
+
+```php
+friends_add_friend(
+    $actor_wp_id,
+    $target_wp_id,
+    false
+);
+```
+
+**Never:**
+
+```php
+INSERT INTO wp_bp_friends ...
+```
+
+The native BuddyBoss function performs the normal BuddyBoss processing and emits the lifecycle event. 
+
+This preserves your existing BuddyBoss request restrictions.
+
+For example:
+
+```php
+case BZJ_OP_CONNECTION_REQUEST:
+
+    if (!function_exists('friends_add_friend')) {
+        return false;
+    }
+
+    $status = friends_check_friendship_status(
+        $actor_wp_id,
+        $target_wp_id
+    );
+
+    if (
+        $status === 'is_friend' ||
+        $status === 'pending' ||
+        $status === 'awaiting_response'
+    ) {
+        bzj_csync_enqueue_reconcile(
+            $actor_wp_id,
+            $target_wp_id,
+            'connection_request_already_exists'
+        );
+
+        return true;
+    }
+
+    bzj_csync_context_set($event_uuid, $origin);
+
+    try {
+        $result = friends_add_friend(
+            $actor_wp_id,
+            $target_wp_id,
+            false
+        );
+    } finally {
+        bzj_csync_context_clear();
+    }
+
+    return (bool)$result;
+```
+
+---
+
+# 11. External connection acceptance
+
+The external platform must first resolve the actual BuddyBoss friendship ID:
+
+```php
+$friendship_id = friends_get_friendship_id(
+    $actor_wp_id,
+    $target_wp_id
+);
+
+if (!$friendship_id) {
+    $friendship_id = friends_get_friendship_id(
+        $target_wp_id,
+        $actor_wp_id
+    );
+}
+```
+
+Then:
+
+```php
+bzj_csync_context_set($event_uuid, $origin);
+
+try {
+    $result = friends_accept_friendship($friendship_id);
+} finally {
+    bzj_csync_context_clear();
+}
+```
+
+This is the correct BuddyBoss API model. 
+
+---
+
+# 12. Streams changes
+
+The existing Streams follow implementation confirms that `Wo_RegisterFollow()` uses:
+
+```text
+following_id = target
+follower_id  = actor
+active       = 1
+```
+
+and `Wo_DeleteFollow()` removes the corresponding relationship. 
+
+Therefore add the reporter to:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+### After successful follow
+
+```php
+if (
+    $query &&
+    function_exists('bzj_connections_sync_report_to_wordpress')
+) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'follow'
+    );
+}
+```
+
+### After successful unfollow
+
+```php
+if (
+    $query &&
+    function_exists('bzj_connections_sync_report_to_wordpress')
+) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$follower_id,
+        (int)$following_id,
+        'unfollow'
+    );
+}
+```
+
+### After successful block
+
+```php
+if (
+    $query &&
+    function_exists('bzj_connections_sync_report_to_wordpress')
+) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'block'
+    );
+}
+```
+
+### After successful unblock
+
+```php
+if (
+    $query &&
+    function_exists('bzj_connections_sync_report_to_wordpress')
+) {
+    bzj_connections_sync_report_to_wordpress(
+        'streams',
+        (int)$logged_user_id,
+        (int)$user_id,
+        'unblock'
+    );
+}
+```
+
+The existing Streams block implementation is already directional. 
+
+---
+
+# 13. QuickDate changes
+
+Add:
+
+```php
+require_once __DIR__ . '/../shared/wwqd_bridge.php';
+```
+
+to `social/core.php`.
+
+QuickDate's `Wo_IsFollowing()` reads:
+
+```text
+followers
+following_id
+follower_id
+active
+```
+
+so the canonical synchronization should use that mechanism. 
+
+---
+
+## QuickDate Add Friend
+
+The current `add_friend()` ultimately executes:
+
+```php
+Wo_RegisterFollow(
+    $to,
+    (int)self::ActiveUser()->id
+);
+```
+
+
+
+After successful completion, report:
+
+```php
+bzj_connections_sync_report_to_wordpress(
+    'socials',
+    (int)self::ActiveUser()->id,
+    (int)$to,
+    'connection_request'
+);
+```
+
+That causes BuddyBoss to create the real connection request.
+
+---
+
+## QuickDate Accept
+
+After successful acceptance:
+
+```php
+bzj_connections_sync_report_to_wordpress(
+    'socials',
+    (int)$friend_request_userid,
+    (int)$friend_request_to_userid,
+    'connection_accept'
+);
+```
+
+The existing implementation verifies that the request exists before accepting it. 
+
+---
+
+## QuickDate Decline
+
+After successful local removal:
+
+```php
+bzj_connections_sync_report_to_wordpress(
+    'socials',
+    (int)$friend_request_userid,
+    (int)$friend_request_to_userid,
+    'connection_remove'
+);
+```
+
+---
+
+# 14. QuickDate block/unblock
+
+The existing block implementation inserts:
+
+```text
+user_id
+block_userid
+created_at
+```
+
+and the unblock implementation deletes that directional row. 
+
+After successful block:
+
+```php
+bzj_connections_sync_report_to_wordpress(
+    'socials',
+    (int)self::ActiveUser()->id,
+    (int)$userid,
+    'block'
+);
+```
+
+After successful unblock:
+
+```php
+bzj_connections_sync_report_to_wordpress(
+    'socials',
+    (int)$target_id,
+    (int)$userid,
+    'unblock'
+);
+```
+
+The existing `$target_id` / `targetuid` behaviour must remain untouched.
+
+---
+
+# 15. QuickDate Like — deliberately excluded
+
+The existing QuickDate `like()` writes to the `likes` mechanism and performs dating-specific processing, including swipe limits and notifications. 
+
+Therefore I recommend **removing items 10.i and 10.ii from the integration proposal**.
+
+The corrected specification is:
+
+> QuickDate Likes remain QuickDate-only dating interactions unless a future, explicitly designed "dating interest synchronization" subsystem is introduced.
+
+That prevents:
+
+```text
+dating swipe
+   ↓
+network follow
+   ↓
+social notification
+   ↓
+BuddyBoss follower
+```
+
+from happening accidentally.
+
+---
+
+# 16. BuddyBoss follow synchronization
+
+This is the one area where the previous implementation needs an additional targeted change.
+
+The BuddyBoss REST members action implementation confirms that the platform uses:
+
+```php
+bp_follow_start_following()
+```
+
+or:
+
+```php
+bp_start_following()
+```
+
+and corresponding stop functions. 
+
+The successful BuddyBoss follow operation therefore needs to update:
+
+```text
+follow_a_to_b
+```
+
+or:
+
+```text
+follow_b_to_a
+```
+
+in the canonical ledger.
+
+The successful operation should execute:
+
+```php
+bzj_csync_set_follow_state(
+    (int)$follower_id,
+    (int)$leader_id,
+    true
+);
+```
+
+and unfollow:
+
+```php
+bzj_csync_set_follow_state(
+    (int)$follower_id,
+    (int)$leader_id,
+    false
+);
+```
+
+**Do not replace the BuddyBoss follow functions.**
+
+The exact insertion point should be immediately after the existing successful database/write operation in the installed `bp_start_following()` and `bp_stop_following()` implementations.
+
+This preserves all existing Buzzjuice BuddyBoss follow restrictions.
+
+---
+
+# 17. External reconciliation algorithm
+
+The queue processor should never replay the original event blindly.
+
+Instead:
+
+```text
+event arrives
+      ↓
+read current canonical state
+      ↓
+lock pair
+      ↓
+rebuild Streams
+      ↓
+rebuild Socials
+      ↓
+success → processed
+failure → retry
+```
+
+This is one of the strongest recommendations in the GitHub analysis. The previous 4.1 architecture explicitly moved toward state-based reconciliation and exponential retry. 
+
+For example, if these happen almost simultaneously:
+
+```text
+A follows B
+A unfollows B
+A follows B
+```
+
+the queue should not blindly replay:
+
+```text
+follow
+unfollow
+follow
+```
+
+Instead it reads:
+
+```text
+canonical follow_a_to_b = 1
+```
+
+and simply makes both external platforms converge to:
+
+```text
+A follows B
+```
+
+---
+
+# 18. Retry model
+
+Use:
+
+```text
+attempt 1 → 60 seconds
+attempt 2 → 120 seconds
+attempt 3 → 240 seconds
+attempt 4 → 480 seconds
+...
+maximum → 1 hour between attempts
+```
+
+with a maximum retry count such as:
+
+```php
+define('BZJ_CSYNC_MAX_RETRIES', 8);
+```
+
+and:
+
+```php
+$delay = min(
+    3600,
+    60 * pow(2, max(0, $attempt - 1))
+);
+```
+
+This is materially better than marking an event processed merely because the first reconciliation attempt occurred.
+
+---
+
+# 19. File logging
+
+Continue using:
+
+```text
+/wp-content/bzj-connections-sync.log
+```
+
+Example:
+
+```text
+[2026-09-15 23:50:10] Canonical connection requested
+{"actor":12,"target":34,"uuid":"..."}
+
+[2026-09-15 23:50:11] Streams reconciliation successful
+{"actor":12,"target":34}
+
+[2026-09-15 23:50:11] Socials reconciliation successful
+{"actor":12,"target":34}
+```
+
+Do not log:
+
+* SSO secrets
+* HMAC signatures
+* passwords
+* session tokens
+
+---
+
+# 20. Updated implementation plan
+
+## Phase 1 — Canonical engine
+
+Create:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+Version:
+
+```text
+6.0.0
+```
+
+It creates:
+
+```text
+wp_bzj_relationships
+wp_bzj_relationship_events
+```
+
+and provides:
+
+```text
+canonical ledger
+pair locking
+event UUIDs
+REST endpoint
+retry queue
+Streams reconciliation
+Socials reconciliation
+BuddyBoss connection handlers
+BuddyBoss block handlers
+BuddyBoss external-operation handlers
+```
+
+---
+
+## Phase 2 — Shared bridge
+
+Modify only:
+
+```text
+/shared/wwqd_bridge.php
+```
+
+Add:
+
+```php
+bzj_connections_sync_report_to_wordpress()
+```
+
+No `wp-load`.
+
+The current `db_helpers.php` already supplies the database connections for WordPress, QuickDate and WoWonder, so the existing architecture is suitable for this approach. ([GitHub][1])
+
+---
+
+## Phase 3 — Streams
+
+Modify only:
+
+```text
+/streams/assets/includes/functions_one.php
+```
+
+Add reporting after successful:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_AcceptFollowRequest()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+No full-file regeneration.
+
+---
+
+## Phase 4 — QuickDate
+
+Modify:
+
+```text
+/social/core.php
+/social/requests/ajax/profile.php
+/social/requests/ajax/useractions.php
+```
+
+Add reporting after successful local operations.
+
+Again, no full-file regeneration.
+
+---
+
+## Phase 5 — BuddyBoss follow
+
+Modify the installed BuddyBoss follow implementation only at the successful-write points.
+
+This is preferable to attempting to "hook" a PHP function merely because it is named `bp_start_following()`.
+
+---
+
+# 21. Final relationship behaviour
+
+The resulting system becomes:
+
+### Connection request
+
+```text
+BuddyBoss
+   ↓
+canonical requested
+   ↓
+Streams pending
+   ↓
+Socials pending
+```
+
+### Connection accepted
+
+```text
+BuddyBoss connected
+   ↓
+canonical connected
+   ↓
+Streams mutual follow
+   ↓
+Socials mutual follow
+```
+
+### Connection removed
+
+```text
+BuddyBoss none
+   ↓
+Streams connection rows removed
+   ↓
+Socials connection rows removed
+```
+
+### Follow
+
+```text
+BuddyBoss A → B
+   ↓
+canonical follow_a_to_b
+   ↓
+Streams A → B
+   ↓
+Socials A → B
+```
+
+### Block
+
+```text
+A blocks B
+       ↓
+canonical block_a_to_b
+       ↓
+connection removed
+       ↓
+A→B + B→A follows removed
+       ↓
+Streams block
+       ↓
+Socials block
+```
+
+### Unblock
+
+```text
+A unblocks B
+       ↓
+block removed
+       ↓
+NO relationship restored
+```
+
+### QuickDate like
+
+```text
+A likes B
+       ↓
+QuickDate likes only
+```
+
+No automatic BuddyBoss/Streams follow.
+
+---
+
+# 22. Why this is materially better than 5.0
+
+The GitHub 5.0/4.1 work correctly introduced HMAC authentication, UUID idempotency, durable retries, pair locks, canonical reconciliation and directional blocks. Those are worth retaining. 
+
+The next architectural step is to fix the remaining conceptual gap:
+
+```text
+5.0
+Connection state
+      +
+blocks
+```
+
+becomes:
+
+```text
+6.0
+
+Connection state
+       +
+Directional follows
+       +
+Directional blocks
+       +
+canonical reconciliation
+```
+
+That is the model I recommend implementing on Buzzjuice.
+
+**Most importantly, I would not implement the original "QuickDate Like ↔ network Follow" rule.** The current source confirms that QuickDate's `likes` and `followers` are separate mechanisms, while its Add Friend implementation is actually built on `Wo_RegisterFollow()`. 
+
+The next implementation step should therefore be **installing the 6.0 MU engine first, then applying the small targeted bridge/Streams/Socials/BuddyBoss patches in that order**. This keeps the existing long files intact and gives us a clean rollback point at every stage.
+
+[1]: https://github.com/cupidblack/buzzjuice.net/blob/main/shared/db_helpers.php "buzzjuice.net/shared/db_helpers.php at main · cupidblack/buzzjuice.net · GitHub"
+
+
+<<STOP CHATGPT>>
