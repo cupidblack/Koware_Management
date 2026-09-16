@@ -1,0 +1,765 @@
+<<START CHATGPT>>
+
+I reviewed the original integration proposal, the implementation plan, the previous `bzj-connections-sync.php`, and the GitHub review against the current Buzzjuice source files. The GitHub review identified several important architectural corrections, and I have incorporated them into the refactored v7 design.
+
+## 1. Final architecture
+
+The most important change is this:
+
+> **BuddyBoss is the canonical authority. The ledger is a synchronization/state mirror—not a second source of truth.**
+
+The resulting architecture is:
+
+```text
+                         ┌──────────────────────────┐
+                         │   WORDPRESS / BUDDYBOSS  │
+                         │      SOURCE OF TRUTH     │
+                         │                          │
+                         │ Connections              │
+                         │ Follows                  │
+                         │ Blocks                   │
+                         └────────────┬─────────────┘
+                                      │
+                         bzj-connections-sync.php
+                                      │
+                  ┌───────────────────┴───────────────────┐
+                  │                                       │
+                  ▼                                       ▼
+        ┌────────────────────┐                  ┌────────────────────┐
+        │ BUZZJUICE STREAMS  │                  │ BUZZJUICE SOCIALS  │
+        │     WoWonder       │                  │     QuickDate      │
+        │                    │                  │                    │
+        │ Follow             │                  │ Follow             │
+        │ Block              │                  │ Add Friend         │
+        │                    │                  │ Follow             │
+        └────────────────────┘                  │ Block              │
+                                                └────────────────────┘
+```
+
+And for actions originating outside WordPress:
+
+```text
+Streams/Socials user action
+          │
+          ▼
+Authenticated / signed
+/wp-json/bzj/v6/connection-management
+          │
+          ▼
+Native BuddyBoss operation
+          │
+          ▼
+BuddyBoss hook
+          │
+          ▼
+Canonical state established
+          │
+          ├──────────────► Streams projection
+          │
+          └──────────────► Socials projection
+```
+
+This is substantially safer than having Streams update BuddyBoss and then separately having Streams update Socials.
+
+---
+
+# 2. Important corrections incorporated
+
+### A. Streams Friends are NOT synchronized
+
+Because the WoWonder Friends System is disabled, a BuddyBoss connection does **not** create a Streams friend.
+
+Therefore:
+
+| BuddyBoss action              | Streams | Socials                |
+| ----------------------------- | ------- | ---------------------- |
+| Connection request            | Nothing | Pending Add Friend     |
+| Connection accepted           | Nothing | Confirmed friend       |
+| Connection cancelled/rejected | Nothing | Remove pending request |
+| Connection removed            | Nothing | Remove friendship      |
+
+This follows the actual platform configuration and the GitHub review. 
+
+---
+
+### B. QuickDate Add Friend is a `followers` row
+
+The actual QuickDate implementation uses the followers table for both follows and friendships.
+
+The underlying representation is:
+
+```text
+following_id = recipient
+follower_id  = requester
+active       = 0   pending friend request
+active       = 1   accepted relationship
+```
+
+The source confirms that QuickDate's `add_friend()` ultimately calls:
+
+```php
+Wo_RegisterFollow($to, self::ActiveUser()->id)
+```
+
+and WoWonder's follow infrastructure stores `following_id`, `follower_id`, and `active`. 
+
+I corrected this direction in the generated v7 plugin. This is an important correction because the previous implementation had the QuickDate friend-request direction reversed.
+
+---
+
+### C. QuickDate block table corrected
+
+The Socials source explicitly writes blocks as:
+
+```text
+blocks
+    user_id
+    block_userid
+    created_at
+```
+
+and the unblock operation deletes the same directional record. 
+
+The new plugin therefore uses:
+
+```text
+Socials:
+blocks.user_id
+blocks.block_userid
+blocks.created_at
+```
+
+rather than the incorrect `user_blocks` table proposed earlier.
+
+---
+
+### D. WoWonder block table corrected
+
+The actual WoWonder functions use:
+
+```php
+T_BLOCKS
+```
+
+with:
+
+```text
+blocker
+blocked
+```
+
+The source's `Wo_RegisterBlock()` and `Wo_RemoveBlock()` confirm this. 
+
+The v7 implementation therefore detects the actual table dynamically, preferring:
+
+```text
+Wo_Blocks
+Wo_BlockedUsers
+```
+
+rather than blindly assuming `blocks`.
+
+---
+
+### E. BuddyBoss hooks corrected
+
+The actual BuddyBoss source confirms:
+
+```php
+friends_friendship_requested
+friends_friendship_accepted
+friends_friendship_rejected
+friends_friendship_withdrawn
+friends_friendship_deleted
+```
+
+and their actual argument structures. 
+
+The v7 plugin uses those signatures rather than relying on assumptions.
+
+---
+
+### F. Blocking is now authoritative and destructive
+
+Blocking is treated as the dominant state:
+
+```text
+BLOCK
+  ↓
+remove BuddyBoss connection
+  ↓
+remove BuddyBoss follows in both directions
+  ↓
+block Streams
+  ↓
+remove Streams follows
+  ↓
+block Socials
+  ↓
+remove Socials follows/friend relationship
+```
+
+This implements the recommendation you supplied about forcing an unfriend when a BuddyBoss block occurs.
+
+Most importantly:
+
+```text
+UNBLOCK
+   ↓
+remove block
+   ↓
+DO NOT recreate connection
+   ↓
+DO NOT recreate follows
+```
+
+That prevents the undesirable situation where somebody unblocks another member and suddenly becomes connected/following them again.
+
+---
+
+# 3. The ledger is no longer treated as authoritative
+
+The previous architecture risked allowing the synchronization ledger to recreate a relationship that had already been removed in BuddyBoss.
+
+The new reconciliation flow is:
+
+```text
+Reconciliation
+     ↓
+Read BuddyBoss
+     ↓
+Determine actual canonical state
+     ↓
+Refresh ledger
+     ↓
+Project to Streams/Socials
+```
+
+This is critical.
+
+The ledger therefore acts as:
+
+* synchronization state
+* recovery state
+* operational cache
+* event correlation
+* reconciliation support
+
+but **not** as the authority.
+
+---
+
+# 4. Durable synchronization queue
+
+The new implementation retains two WordPress tables:
+
+```text
+wp_bzj_relationships
+wp_bzj_relationship_events
+```
+
+These are **not logging tables**.
+
+They are operational state/queue tables.
+
+Actual logs remain in:
+
+```text
+/data/logs/bzj-connections-sync.log
+```
+
+This respects your preference to use log files rather than creating unnecessary log tables.
+
+The queue allows:
+
+```text
+BuddyBoss succeeds
+       ↓
+Streams DB unavailable
+       ↓
+Streams projection queued
+       ↓
+retry
+       ↓
+projection eventually succeeds
+```
+
+The same applies to Socials.
+
+---
+
+# 5. Pair-level locking improved
+
+The previous version used:
+
+```php
+get_transient()
+set_transient()
+```
+
+which is not an atomic lock.
+
+The new implementation uses MySQL's:
+
+```sql
+GET_LOCK()
+RELEASE_LOCK()
+```
+
+for the user pair.
+
+For example:
+
+```text
+User 14 ↔ User 29
+```
+
+gets one canonical synchronization lock.
+
+This prevents simultaneous operations such as:
+
+```text
+A blocks B
+A follows B
+B removes A
+A unblocks B
+```
+
+from racing against each other.
+
+---
+
+# 6. Loop prevention
+
+The design now uses three layers:
+
+### Context marker
+
+When the synchronization engine itself calls a BuddyBoss function:
+
+```php
+friends_remove_friend()
+bp_stop_following()
+```
+
+the resulting BuddyBoss hooks are identified as internally generated operations.
+
+### Event UUID
+
+Every operation has an idempotency UUID:
+
+```text
+event_id = UUID
+```
+
+### Pair lock
+
+Only one relationship operation for the pair can be processed at a time.
+
+Together:
+
+```text
+Origin
+  ↓
+Event UUID
+  ↓
+Pair lock
+  ↓
+Canonical operation
+  ↓
+Hook
+  ↓
+Context detection
+  ↓
+No recursive re-entry
+```
+
+---
+
+# 7. REST endpoint
+
+The endpoint is now exactly in the namespace you requested:
+
+```text
+/wp-json/bzj/v6/connection-management
+```
+
+rather than the ambiguous:
+
+```text
+/bzj/v6/relationship
+```
+
+External platforms authenticate with:
+
+```text
+X-BZJ-Timestamp
+X-BZJ-Signature
+```
+
+using:
+
+```text
+HMAC-SHA256
+```
+
+over:
+
+```text
+timestamp + "." + raw JSON body
+```
+
+and the existing:
+
+```text
+BUZZ_SSO_SECRET
+```
+
+is used.
+
+A five-minute timestamp window prevents old signed requests from being replayed indefinitely.
+
+---
+
+# 8. Native BuddyBoss operations remain authoritative
+
+This is particularly important for your existing BuddyBoss restrictions.
+
+The external platform does **not** directly insert a friendship into BuddyBoss's database.
+
+Instead, the central plugin calls:
+
+```php
+friends_add_friend()
+friends_accept_friendship()
+friends_reject_friendship()
+friends_withdraw_friendship()
+friends_remove_friend()
+```
+
+and:
+
+```php
+bp_start_following()
+bp_stop_following()
+```
+
+Therefore existing BuddyBoss logic remains in the path.
+
+For example, if BuddyBoss currently prevents:
+
+```text
+Role X → Role Y
+Profile type X → Profile type Y
+Gender restriction
+Other connection restriction
+```
+
+the external platform cannot bypass that simply by calling the synchronization endpoint.
+
+That is exactly what we want.
+
+---
+
+# 9. Updated relationship matrix
+
+## Connection
+
+| Origin             | BuddyBoss             | Streams | Socials          |
+| ------------------ | --------------------- | ------- | ---------------- |
+| BuddyBoss request  | Request               | —       | Pending friend   |
+| BuddyBoss accept   | Connected             | —       | Connected friend |
+| BuddyBoss reject   | None                  | —       | Remove pending   |
+| BuddyBoss withdraw | None                  | —       | Remove pending   |
+| BuddyBoss unfriend | None                  | —       | Remove friend    |
+| Socials request    | Creates BB request    | —       | Pending          |
+| Socials accept     | Creates BB connection | —       | Connected        |
+| Socials reject     | Removes BB request    | —       | Removed          |
+| Socials unfriend   | Removes BB connection | —       | Removed          |
+
+---
+
+## Follow
+
+| Origin             | BuddyBoss | Streams  | Socials  |
+| ------------------ | --------- | -------- | -------- |
+| BuddyBoss follow   | Follow    | Follow   | Follow   |
+| BuddyBoss unfollow | None      | Unfollow | Unfollow |
+| Streams follow     | Follow    | Follow   | Follow   |
+| Streams unfollow   | Unfollow  | None     | Unfollow |
+| Socials follow     | Follow    | Follow   | Follow   |
+| Socials unfollow   | Unfollow  | Unfollow | None     |
+
+This is independent from friendship.
+
+So:
+
+```text
+Connected ≠ Following
+```
+
+which is important for the Buzzjuice architecture.
+
+---
+
+## Block
+
+| Origin            | BuddyBoss                         | Streams | Socials |
+| ----------------- | --------------------------------- | ------- | ------- |
+| BuddyBoss block   | Block + remove connection/follows | Block   | Block   |
+| BuddyBoss unblock | Unblock                           | Unblock | Unblock |
+| Streams block     | Block BB                          | Block   | Block   |
+| Streams unblock   | Unblock BB                        | Unblock | Unblock |
+| Socials block     | Block BB                          | Block   | Block   |
+| Socials unblock   | Unblock BB                        | Unblock | Unblock |
+
+And:
+
+```text
+Block > Connection
+Block > Follow
+```
+
+---
+
+# 10. Generated v7.0.0 plugin
+
+I generated the full refactored plugin and syntax-checked it with PHP.
+
+**PHP syntax result:**
+
+```text
+No syntax errors detected
+```
+
+The file contains the complete implementation rather than placeholders or truncated sections.
+
+[Download `bzj-connections-sync-v7.0.0.php`](sandbox:/mnt/data/bzj-connections-sync-v7.0.0.php)
+
+---
+
+# 11. One architectural improvement I recommend for the external platforms
+
+There is one further distinction worth making before we modify the Streams/Socials source files.
+
+The **final desired flow** should be:
+
+```text
+User clicks Follow on Streams
+          ↓
+Streams calls
+/wp-json/bzj/v6/connection-management
+          ↓
+BuddyBoss validates + creates follow
+          ↓
+BuddyBoss hook fires
+          ↓
+Streams + Socials synchronized
+          ↓
+Streams returns success
+```
+
+rather than:
+
+```text
+User clicks Follow
+       ↓
+Streams writes database
+       ↓
+Streams calls BuddyBoss
+       ↓
+BuddyBoss writes database
+       ↓
+Streams writes database again
+       ↓
+Socials writes database
+```
+
+The second approach creates unnecessary race conditions and makes rollback difficult.
+
+So the **external platform should ultimately become a command interface to the canonical control plane**, not another independent synchronization authority.
+
+That means the next implementation stage should modify only the relevant action handlers in:
+
+### Streams
+
+```text
+streams/themes/sunshine/layout/extra_js/content.phtml
+streams/assets/includes/functions_one.php
+```
+
+and the relevant AJAX/API action paths.
+
+### Socials
+
+```text
+social/requests/ajax/profile.php
+social/requests/ajax/useractions.php
+```
+
+so the user action becomes a signed command to WordPress and the central plugin performs the canonical operation and projections.
+
+This is preferable to adding another independent synchronization layer.
+
+---
+
+# 12. Recommended implementation sequence
+
+I would implement this in four controlled stages rather than deploying everything simultaneously.
+
+### Stage 1 — Install the control plane
+
+Install:
+
+```text
+wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+using the v7 file above.
+
+Verify:
+
+```text
+REST endpoint registers
+schema exists
+cron exists
+/data/logs is writable
+BuddyBoss hooks load
+```
+
+---
+
+### Stage 2 — Test BuddyBoss → external platforms
+
+Test only:
+
+```text
+Connection request
+Connection accept
+Connection reject
+Connection withdraw
+Connection removal
+Follow
+Unfollow
+Block
+Unblock
+```
+
+No external-origin actions yet.
+
+This establishes that BuddyBoss remains reliable as the source of truth.
+
+---
+
+### Stage 3 — Modify Streams
+
+Add a small reusable authenticated HTTP client to the Streams side rather than duplicating HMAC code inside every action.
+
+Conceptually:
+
+```php
+bzj_streams_connection_management_command(
+    $operation,
+    $actor_id,
+    $target_id
+);
+```
+
+Then connect:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+to the central control plane.
+
+Because Streams has no WordPress runtime, it will **not** use:
+
+```php
+get_user_meta()
+friends_add_friend()
+bp_start_following()
+```
+
+etc.
+
+It will only use:
+
+```text
+Streams DB
++
+WordPress REST endpoint
++
+shared/db_helpers.php
+```
+
+---
+
+### Stage 4 — Modify Socials
+
+Do the same for:
+
+```text
+add_friend()
+approve_friend_request()
+disapprove_friend_request()
+block()
+unblock()
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+```
+
+Again:
+
+```text
+Socials
+   ↓
+signed command
+   ↓
+WordPress/BuddyBoss
+   ↓
+canonical operation
+   ↓
+central projection
+```
+
+---
+
+## Bigger-picture result
+
+This gives Buzzjuice a proper **relationship control plane** rather than three systems attempting to synchronize one another:
+
+```text
+                 ┌───────────────────────┐
+                 │   BUDDYBOSS / WP      │
+                 │   CANONICAL STATE     │
+                 └───────────┬───────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │ BZJ CONTROL PLANE │
+                   │                   │
+                   │ Events            │
+                   │ Idempotency       │
+                   │ Pair locks        │
+                   │ Projection        │
+                   │ Recovery          │
+                   │ Reconciliation    │
+                   └──────┬─────┬──────┘
+                          │     │
+                 ┌────────▼─┐ ┌─▼─────────┐
+                 │ Streams  │ │ Socials   │
+                 │ WoWonder │ │ QuickDate │
+                 └──────────┘ └───────────┘
+```
+
+That architecture is much easier to extend later for additional Buzzjuice relationship capabilities without turning the three platforms into a circular synchronization system.
+
+The next practical step should therefore be **Stage 2 testing of the v7 control plane, followed by the targeted Streams and Socials patches**, rather than modifying the three platforms simultaneously. ([github.com][1])
+
+[1]: https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/attachment_files/github_response-202609160807.txt "Koware_Management/BlueCrown/attachment_files/github_response-202609160807.txt at main · cupidblack/Koware_Management · GitHub"
+
+
+<<STOP CHATGPT>>
