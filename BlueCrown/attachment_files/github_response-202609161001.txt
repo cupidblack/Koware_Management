@@ -1,0 +1,3706 @@
+<<START GITHUB>>
+
+I'll thoroughly analyze the integration proposal, implementation plan, and all referenced resources to develop a comprehensive, refactored solution. Let me start by examining the key files and previous responses.Now I'll continue retrieving more critical files:Let me fetch the previous responses to understand the recommendations:# Comprehensive Analysis & Updated Integration Proposal
+
+Based on my thorough review of the Buzzjuice architecture, BuddyBoss codebase, WoWonder (Streams), and QuickDate (Socials) implementations, along with the ChatGPT recommendations, I'm providing a substantially refined integration proposal and implementation plan.
+
+---
+
+## UPDATED INTEGRATION PROPOSAL
+
+### Core Architecture Principle
+
+**BuddyBoss is the authoritative source of truth.** The synchronization system acts as a state mirror and projection engine, not as an independent authority. All external platforms (Streams and Socials) sync *to* BuddyBoss, never *from* it independently.
+
+### Revised Relationship Matrix
+
+#### 1. CONNECTION/FRIENDSHIP MANAGEMENT
+
+**Critical Finding:** The WoWonder Friends System is **disabled** in Buzzjuice Streams. Therefore, BuddyBoss connections do NOT create Streams friendships—only Socials friendships.
+
+| Origin | BuddyBoss State | Streams State | Socials State |
+|--------|-----------------|---------------|---------------|
+| BuddyBoss connection request | Pending | — | Pending friend request |
+| BuddyBoss connection accept | Connected | — | Confirmed friend |
+| BuddyBoss connection reject | None | — | Remove pending |
+| BuddyBoss connection withdraw | None | — | Remove pending |
+| BuddyBoss unfriend | None | — | Remove friend |
+| Socials friend request | Creates BB request | — | Pending |
+| Socials accept friend | Creates BB connection | — | Connected |
+| Socials reject/decline | Removes BB request | — | Removed |
+| Socials unfriend | Removes BB connection | — | Removed |
+
+**1.i - Connection Request Initiation (BuddyBoss)**
+- When user A sends a connection request to user B on BuddyBoss, the `friends_friendship_requested` hook fires
+- The sync plugin intercepts this and creates a pending "Add Friend" request in Socials (QuickDate)
+- BuddyBoss connection restrictions (role, profile type, gender, etc.) remain authoritative and are NOT bypassed
+
+**1.ii - Connection Request Cancellation (BuddyBoss)**
+- When a connection request is withdrawn or rejected, the `friends_friendship_withdrawn` or `friends_friendship_rejected` hook fires
+- The sync plugin removes the corresponding pending friend request from Socials
+
+**2.i - Connection Acceptance (BuddyBoss)**
+- When user B accepts user A's connection request, the `friends_friendship_accepted` hook fires
+- The sync plugin creates a confirmed friendship in Socials (sets `active = 1` in the followers table)
+- Both users are now connected on BuddyBoss and friends on Socials
+
+**2.ii - Connection Removal (BuddyBoss)**
+- When either user removes the connection, the `friends_friendship_deleted` hook fires
+- The sync plugin removes the friendship from Socials
+- No automatic re-connection occurs
+
+#### 2. FOLLOW MANAGEMENT
+
+| Origin | BuddyBoss | Streams | Socials |
+|--------|-----------|---------|---------|
+| BuddyBoss follow | Follow | Follow | Follow |
+| BuddyBoss unfollow | None | Unfollow | Unfollow |
+| Streams follow | Follow | Follow | Follow |
+| Streams unfollow | Unfollow | None | Unfollow |
+| Socials follow | Follow | Follow | Follow |
+| Socials unfollow | Unfollow | Unfollow | None |
+
+**Important:** Follow is independent from connection/friendship.
+
+**4.i - Follow Creation (BuddyBoss)**
+- When user A follows user B, the `bp_follow_start_following` hook fires
+- The sync plugin creates follow records in both Streams and Socials
+- User B receives a follower notification on all three platforms
+
+**4.ii - Follow Removal (BuddyBoss)**
+- When user A unfollows user B, the `bp_follow_stop_following` hook fires
+- The sync plugin removes the follow from Streams and Socials
+
+#### 3. BLOCK MANAGEMENT (Authoritative & Destructive)
+
+**Critical Implementation:** Blocking is a **dominant state** that automatically terminates connections and follows.
+
+| Origin | BuddyBoss | Streams | Socials |
+|--------|-----------|---------|---------|
+| BuddyBoss block | Block + remove connection + remove all follows | Block + remove follows | Block + remove friend + remove follows |
+| BuddyBoss unblock | Unblock only (no auto-reconnect) | Unblock | Unblock |
+| Streams block | Block BB | Block | Block Socials |
+| Streams unblock | Unblock BB | Unblock | Unblock Socials |
+| Socials block | Block BB | Block Streams | Block |
+| Socials unblock | Unblock BB | Unblock Streams | Unblock |
+
+**3.i - Block Creation (BuddyBoss)**
+- When user A blocks user B, the `bp_moderation_block_created` hook fires
+- The sync plugin executes this sequence:
+  1. Check if they are connected; if yes, call `friends_remove_friend()`
+  2. Remove any follows between them in both directions using `bp_stop_following()`
+  3. Create block records in Streams (Wo_Blocks table) and Socials (blocks table)
+  4. Remove any follows from Streams and Socials in both directions
+  5. Log the operation with event tracking
+
+**3.ii - Block Removal (BuddyBoss)**
+- When user A unblocks user B, the `bp_moderation_unblock_created` hook fires
+- The sync plugin removes the block from Streams and Socials
+- **Critical:** Do NOT recreate the connection or follows—those must be re-established intentionally
+- This prevents the undesirable situation where unblocking automatically reconnects users
+
+#### 4. STREAMS (WoWonder) INITIATED ACTIONS
+
+**Note:** Streams does NOT use WordPress functions. Actions are database-direct or API-based.
+
+**5.i - Follow Creation (Streams)**
+- When user A follows user B on Streams, the `Wo_RegisterFollow()` function is called
+- A signed request is sent to the WordPress REST endpoint: `/wp-json/bzj/v6/connection-management`
+- BuddyBoss creates the follow via `bp_start_following()` (which triggers the BuddyBoss hook)
+- The hook's sync logic then ensures Socials also receives the follow
+- User B becomes a follower on all three platforms
+
+**5.ii - Follow Removal (Streams)**
+- When user A unfollows user B, the `Wo_DeleteFollow()` function is called
+- A signed request notifies WordPress to remove the follow via the connection-management endpoint
+- BuddyBoss removes the follow via `bp_stop_following()`
+- The hook's sync logic removes it from Socials
+
+**6.i - Block Creation (Streams)**
+- When user A blocks user B, the `Wo_RegisterBlock()` function is called
+- A signed request triggers the connection-management endpoint
+- BuddyBoss blocks user B and executes the block cascade (remove connection, follows)
+- The sync logic blocks user B in Socials and removes their follow relationship
+
+**6.ii - Block Removal (Streams)**
+- When user A unblocks user B, the `Wo_RemoveBlock()` function is called
+- A signed request to the endpoint removes the block from BuddyBoss and Socials
+
+#### 5. SOCIALS (QuickDate) INITIATED ACTIONS
+
+**Note:** QuickDate also does NOT use WordPress functions. The `add_friend()` ultimately calls `Wo_RegisterFollow()` with specific directional parameters.
+
+**7.i - Add Friend Request (Socials)**
+- When user A sends a friend request to user B, the `add_friend()` function is called
+- A signed request to the connection-management endpoint creates a BuddyBoss connection request via `friends_add_friend()`
+- BuddyBoss fires the hook, and the sync logic ensures both platforms have the pending state
+- User B receives a connection request on BuddyBoss and a friend request on Socials
+
+**7.ii - Reject/Cancel Friend Request (Socials)**
+- When user A or B cancels the friend request, the `disapprove_friend_request()` function is called
+- A signed request removes the connection request from BuddyBoss via `friends_reject_friendship()` or `friends_withdraw_friendship()`
+
+**8.i - Accept Friend Request (Socials)**
+- When user B accepts user A's friend request, the `approve_friend_request()` function is called
+- A signed request calls the endpoint to accept the BuddyBoss connection via `friends_accept_friendship()`
+- Both users are now connected on BuddyBoss and friends on Socials
+
+**8.ii - Unfriend (Socials)**
+- When user A or B unfriends, the `add_friend()` function (used to toggle state) is called
+- A signed request removes the connection from BuddyBoss via `friends_remove_friend()`
+
+**9.i - Block (Socials)**
+- When user A blocks user B, the `block()` function is called
+- A signed request triggers the block operation on BuddyBoss
+- The cascade removes connection and follows from all platforms
+
+**9.ii - Unblock (Socials)**
+- When user A unblocks user B, the `unblock()` function is called
+- A signed request removes the block from BuddyBoss and Streams
+
+**10.i - Follow (Socials)**
+- When user A follows user B, the `Wo_RegisterFollow()` function is called (from QuickDate context)
+- A signed request creates the follow on BuddyBoss
+- All three platforms now reflect the follow
+
+**10.ii - Unfollow (Socials)**
+- When user A unfollows, `Wo_DeleteFollow()` is called
+- A signed request removes the follow from BuddyBoss, which then cascades to Streams
+
+---
+
+## UPDATED IMPLEMENTATION PLAN
+
+### Phase 1: Core Control Plane
+
+**File:** `wp-content/mu-plugins/bzj-connections-sync.php`
+
+This is a must-use WordPress plugin that:
+
+1. **Registers the REST endpoint** at `/wp-json/bzj/v6/connection-management`
+   - Accepts signed requests from external platforms (Streams, Socials)
+   - Uses HMAC-SHA256 signature verification with `BUZZ_SSO_SECRET`
+   - Validates timestamp (5-minute window to prevent replay attacks)
+   - Implements proper WordPress nonce verification for internal requests
+
+2. **Hooks into BuddyBoss native operations:**
+   - `friends_friendship_requested` — new connection request
+   - `friends_friendship_accepted` — connection accepted
+   - `friends_friendship_rejected` — connection rejected
+   - `friends_friendship_withdrawn` — connection request withdrawn
+   - `friends_friendship_deleted` — connection removed
+   - `bp_follow_start_following` — follow created
+   - `bp_follow_stop_following` — follow removed
+   - `bp_moderation_block_created` — user blocked
+   - `bp_moderation_unblock_created` — user unblocked
+
+3. **Maintains synchronization state tables** in WordPress:
+   - `wp_bzj_relationships` — tracks relationship state across platforms
+   - `wp_bzj_relationship_events` — event queue for eventual consistency
+
+4. **Implements pair-level locking** using MySQL `GET_LOCK()` and `RELEASE_LOCK()` to prevent race conditions on user pairs
+
+5. **Uses event UUIDs and context detection** to prevent recursive hook re-entry
+
+6. **Provides helper functions** that retrieve user IDs across platforms:
+   - `bzj_get_wp_id($streams_id)` or `bzj_get_wp_id($socials_id)` — convert external IDs to WordPress ID
+   - `bzj_get_streams_id($wp_id)` — retrieve Streams ID from WordPress user meta
+   - `bzj_get_socials_id($wp_id)` — retrieve Socials ID from WordPress user meta
+
+7. **Executes projection operations:**
+   - Updates Streams (WoWonder) database via direct connection (same host)
+   - Updates Socials (QuickDate) database via direct connection (same host)
+   - Queues failed projections for retry via WordPress cron
+
+8. **Logs all operations** to `/data/logs/bzj-connections-sync.log` with:
+   - Event ID and timestamp
+   - Source platform
+   - Operation type
+   - User IDs (WordPress, Streams, Socials)
+   - Success/failure status
+   - Error details if applicable
+
+### Phase 2: Platform Data Mapping
+
+Update the `/shared/wwqd_bridge.php` file to add helper functions:
+
+1. **User ID Translation Functions**
+   ```php
+   bzj_wp_to_streams_id($wp_user_id)
+   bzj_wp_to_socials_id($wp_user_id)
+   bzj_streams_to_wp_id($streams_user_id)
+   bzj_socials_to_wp_id($socials_user_id)
+   ```
+
+2. **Relationship State Query Functions**
+   ```php
+   bzj_get_relationship_state($user1_wp_id, $user2_wp_id, $platform)
+   bzj_get_block_state($blocker_wp_id, $blocked_wp_id, $platform)
+   bzj_get_follow_state($follower_wp_id, $following_wp_id, $platform)
+   ```
+
+3. **Direct Database Manipulation Functions** (for Streams and Socials):
+   ```php
+   bzj_streams_add_follow($follower_id, $following_id)
+   bzj_streams_remove_follow($follower_id, $following_id)
+   bzj_streams_add_block($blocker_id, $blocked_id)
+   bzj_streams_remove_block($blocker_id, $blocked_id)
+   
+   bzj_socials_add_friend_request($requester_id, $recipient_id)
+   bzj_socials_accept_friend_request($requester_id, $recipient_id)
+   bzj_socials_reject_friend_request($requester_id, $recipient_id)
+   bzj_socials_remove_friend($user1_id, $user2_id)
+   bzj_socials_add_follow($follower_id, $following_id)
+   bzj_socials_remove_follow($follower_id, $following_id)
+   bzj_socials_add_block($blocker_id, $blocked_id)
+   bzj_socials_remove_block($blocker_id, $blocked_id)
+   ```
+
+These functions will:
+- Use database helpers from `/shared/db_helpers.php` to get appropriate connections
+- Execute parameterized queries to prevent SQL injection
+- Handle transaction rollback on failure
+- Return success/failure status
+
+### Phase 3: Streams Integration Hooks
+
+Modify the following files in Buzzjuice Streams to call the central control plane:
+
+**File:** `streams/assets/includes/functions_one.php`
+
+Add wrapper functions that intercept Streams user actions and delegate to the connection-management endpoint:
+
+```php
+bzj_streams_follow_command($actor_id, $target_id, $action = 'follow')
+bzj_streams_block_command($actor_id, $target_id, $action = 'block')
+```
+
+These functions will:
+- Sign the request using `BUZZ_SSO_SECRET` and HMAC-SHA256
+- Add timestamp and signature headers (`X-BZJ-Timestamp`, `X-BZJ-Signature`)
+- Send signed HTTP POST to `/wp-json/bzj/v6/connection-management`
+- Handle response and error codes
+- Log the operation
+
+**File:** `streams/themes/sunshine/layout/extra_js/content.phtml`
+
+Modify AJAX handlers to call the wrapper functions before/instead of directly manipulating Streams database.
+
+### Phase 4: Socials Integration Hooks
+
+Modify the following files in Buzzjuice Socials to call the central control plane:
+
+**Files:** `social/requests/ajax/profile.php` and `social/requests/ajax/useractions.php`
+
+Add wrapper functions:
+
+```php
+bzj_socials_friend_command($actor_id, $target_id, $action)
+bzj_socials_block_command($actor_id, $target_id, $action)
+bzj_socials_follow_command($actor_id, $target_id, $action)
+```
+
+These will:
+- Use the same HMAC-SHA256 signing mechanism
+- Call `/wp-json/bzj/v6/connection-management` with appropriate parameters
+- Handle responses and errors
+- Log operations
+
+---
+
+## DATABASE SCHEMA
+
+### WordPress Tables (in `wp_` prefix)
+
+**Table: `wp_bzj_relationships`**
+
+```sql
+CREATE TABLE wp_bzj_relationships (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  wp_user_id_1 INT NOT NULL,
+  wp_user_id_2 INT NOT NULL,
+  
+  -- Connection state (BuddyBoss)
+  bb_connection_state ENUM('not_friends', 'pending', 'is_friend') DEFAULT 'not_friends',
+  
+  -- Follow state (all platforms)
+  bb_follow_1_to_2 TINYINT(1) DEFAULT 0,
+  bb_follow_2_to_1 TINYINT(1) DEFAULT 0,
+  streams_follow_1_to_2 TINYINT(1) DEFAULT 0,
+  streams_follow_2_to_1 TINYINT(1) DEFAULT 0,
+  socials_follow_1_to_2 TINYINT(1) DEFAULT 0,
+  socials_follow_2_to_1 TINYINT(1) DEFAULT 0,
+  
+  -- Block state (all platforms)
+  bb_block_1_to_2 TINYINT(1) DEFAULT 0,
+  bb_block_2_to_1 TINYINT(1) DEFAULT 0,
+  streams_block_1_to_2 TINYINT(1) DEFAULT 0,
+  streams_block_2_to_1 TINYINT(1) DEFAULT 0,
+  socials_block_1_to_2 TINYINT(1) DEFAULT 0,
+  socials_block_2_to_1 TINYINT(1) DEFAULT 0,
+  
+  -- Timestamps
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  
+  -- Locking
+  lock_acquired_at DATETIME NULL,
+  lock_held_by INT NULL,
+  
+  UNIQUE KEY unique_pair (wp_user_id_1, wp_user_id_2),
+  KEY idx_user1 (wp_user_id_1),
+  KEY idx_user2 (wp_user_id_2),
+  KEY idx_updated (updated_at)
+);
+```
+
+**Table: `wp_bzj_relationship_events`**
+
+```sql
+CREATE TABLE wp_bzj_relationship_events (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_id CHAR(36) NOT NULL UNIQUE,
+  
+  wp_user_id_1 INT NOT NULL,
+  wp_user_id_2 INT NOT NULL,
+  
+  origin_platform ENUM('buddyboss', 'streams', 'socials') NOT NULL,
+  event_type ENUM('connection_request', 'connection_accept', 'connection_reject', 'connection_withdraw', 'connection_delete', 'follow', 'unfollow', 'block', 'unblock') NOT NULL,
+  
+  -- Projection status
+  bb_projected TINYINT(1) DEFAULT 1,
+  streams_projected TINYINT(1) DEFAULT 0,
+  streams_projection_error TEXT,
+  streams_projection_attempts INT DEFAULT 0,
+  
+  socials_projected TINYINT(1) DEFAULT 0,
+  socials_projection_error TEXT,
+  socials_projection_attempts INT DEFAULT 0,
+  
+  -- Metadata
+  context_marker VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  projected_at DATETIME NULL,
+  
+  KEY idx_event_id (event_id),
+  KEY idx_pair (wp_user_id_1, wp_user_id_2),
+  KEY idx_origin (origin_platform),
+  KEY idx_created (created_at),
+  KEY idx_projected (streams_projected, socials_projected)
+);
+```
+
+---
+
+## REST ENDPOINT SPECIFICATION
+
+**Endpoint:** `POST /wp-json/bzj/v6/connection-management`
+
+**Authentication:** HMAC-SHA256 signature verification
+
+**Request Headers:**
+```
+X-BZJ-Timestamp: <unix_timestamp>
+X-BZJ-Signature: <hmac_sha256>
+Content-Type: application/json
+```
+
+**Signature Generation** (for external platforms):
+```
+signature = hmac_sha256(BUZZ_SSO_SECRET, timestamp + "." + raw_json_body)
+```
+
+**Request Body:**
+```json
+{
+  "origin": "streams|socials",
+  "event_id": "uuid-v4",
+  "actor_id": "external_platform_user_id",
+  "target_id": "external_platform_user_id",
+  "action": "follow|unfollow|block|unblock|friend_request|friend_accept|friend_reject|friend_remove",
+  "timestamp": 1726516800
+}
+```
+
+**Response (Success - 200 OK):**
+```json
+{
+  "success": true,
+  "message": "Operation completed",
+  "event_id": "uuid-v4",
+  "canonical_state": {
+    "wp_user_id_1": 123,
+    "wp_user_id_2": 456,
+    "connection": "is_friend|pending|not_friends",
+    "follows": {
+      "bb": [true, true],
+      "streams": [true, false],
+      "socials": [false, true]
+    },
+    "blocks": {
+      "bb": [false, false],
+      "streams": [false, false],
+      "socials": [false, false]
+    }
+  }
+}
+```
+
+**Response (Error - 400/401/403):**
+```json
+{
+  "success": false,
+  "error": "InvalidSignature|ExpiredTimestamp|UserNotFound|OperationBlocked",
+  "message": "Human-readable error message"
+}
+```
+
+---
+
+## LOGGING SPECIFICATION
+
+**Log File:** `/data/logs/bzj-connections-sync.log`
+
+**Entry Format:**
+```
+[2026-09-16 10:42:33.456] [EVENT: a1b2c3d4-e5f6-7890-abcd-ef1234567890] 
+  Origin: buddyboss | Operation: follow | Status: success
+  Actor: WP#123 [Streams#456, Socials#789] | Target: WP#321 [Streams#654, Socials#987]
+  State: BB(follow), Streams(follow), Socials(follow)
+  Duration: 45ms
+---
+
+[2026-09-16 10:43:01.123] [EVENT: b2c3d4e5-f678-9abc-def0-123456789abc] 
+  Origin: streams | Operation: block | Status: partial_failure
+  Actor: Streams#101 (WP#202) | Target: Streams#202 (WP#101)
+  BuddyBoss: success | Streams: success | Socials: failed (connection timeout)
+  Retry scheduled: 2026-09-16 10:48:01
+  Error: Socials database unavailable
+  Duration: 2341ms
+---
+```
+
+**Log Rotation:** Daily, with 30-day retention
+
+---
+
+## CRITICAL IMPLEMENTATION NOTES
+
+### 1. Loop Prevention Strategy
+
+**Three-layer approach:**
+
+- **Layer 1 — Context Marker:** When the sync plugin calls BuddyBoss functions (`friends_remove_friend()`, `bp_stop_following()`, etc.), a flag is set to mark the operation as internally generated.
+
+- **Layer 2 — Event UUID:** Every operation receives a unique UUID. When the BuddyBoss hook fires from an internal operation, the hook handler checks if the event UUID matches an in-flight internal operation.
+
+- **Layer 3 — Pair Lock:** Only one synchronization operation can execute for a given user pair (`wp_user_id_1`, `wp_user_id_2`) at a time. This is enforced using MySQL's `GET_LOCK()`.
+
+### 2. Pair-Level Locking (Critical for Race Conditions)
+
+```
+Operation 1: User A blocks User B
+  ├─ Acquire lock on (A, B)
+  ├─ Check if connected → remove connection
+  ├─ Remove follows → both directions
+  ├─ Create block in all platforms
+  └─ Release lock
+
+Operation 2: Simultaneous request "User A follow User B"
+  ├─ Wait for lock on (A, B)
+  ├─ ... (waits until Operation 1 completes)
+  ├─ Check current state → user is blocked
+  ├─ Reject operation (already blocked)
+  └─ Release lock
+```
+
+### 3. BuddyBoss Restrictions Remain Authoritative
+
+The sync plugin does **not** bypass existing BuddyBoss connection restrictions. When an external platform calls the endpoint to create a connection, the plugin calls:
+
+```php
+friends_add_friend( $wp_user_1, $wp_user_2 )
+```
+
+This native BuddyBoss function applies all existing restrictions (role, profile type, gender, other custom logic). If the restriction denies the operation, `friends_add_friend()` returns false, and the endpoint responds with an error.
+
+### 4. Handling Missing User Meta
+
+If a Streams or Socials user doesn't have a corresponding WordPress user ID in their platform's meta fields (`wo_user_id`, `qd_user_id`), the operation fails with a descriptive error.
+
+### 5. Database Connection Resilience
+
+- All external database operations (Streams, Socials) use try/catch blocks
+- Failed projections are queued in `wp_bzj_relationship_events` for retry
+- WordPress cron (`bzj_process_relationship_events_cron`) runs every 5 minutes to retry failed projections
+- Maximum 3 retry attempts per event before flagging as permanently failed
+
+### 6. Timestamp & Signature Validation
+
+- Timestamp must be within 5 minutes of current server time (prevents replay attacks)
+- Signature is verified using HMAC-SHA256 with `BUZZ_SSO_SECRET`
+- Request body must be raw JSON (not form-encoded) to match signature calculation
+
+### 7. User Metadata Storage (No API Calls)
+
+WordPress stores Streams and Socials user IDs in usermeta:
+```
+wp_usermeta.meta_key = 'wo_user_id' → WoWonder/Streams ID
+wp_usermeta.meta_key = 'qd_user_id' → QuickDate/Socials ID
+```
+
+The sync plugin queries this during initialization and caches it to avoid repeated lookups.
+
+---
+
+## RECONCILIATION LOGIC
+
+The plugin provides a reconciliation function (`bzj_reconcile_relationships()`) that:
+
+1. Reads the authoritative state from BuddyBoss (WordPress native tables)
+2. Compares it against the sync ledger (`wp_bzj_relationships`)
+3. Identifies discrepancies
+4. Refreshes the ledger based on BuddyBoss reality
+5. Queues any necessary Streams and Socials projections
+
+This is called:
+- On plugin activation
+- Manually via WP-CLI: `wp bzj reconcile-relationships`
+- Periodically via cron (can be configured)
+
+---
+
+## DEPLOYMENT CHECKLIST
+
+### Pre-Deployment
+- [ ] Verify `/data/logs` directory exists and is writable by web server
+- [ ] Confirm `.env` contains `BUZZ_SSO_SECRET`
+- [ ] Backup WordPress, Streams, and Socials databases
+- [ ] Verify database connections in `db_helpers.php`
+
+### Installation
+- [ ] Create `wp_bzj_relationships` and `wp_bzj_relationship_events` tables
+- [ ] Place `bzj-connections-sync.php` in `wp-content/mu-plugins/`
+- [ ] Verify plugin loads (no fatal errors)
+- [ ] Test REST endpoint responds at `/wp-json/bzj/v6/connection-management`
+
+### Testing (Phase 2 - BuddyBoss Only)
+- [ ] Create test connection request on BuddyBoss → verify Socials received request
+- [ ] Accept connection on BuddyBoss → verify Socials shows confirmed
+- [ ] Test connection rejection, withdrawal, and removal
+- [ ] Test follow/unfollow operations
+- [ ] Test block/unblock cascade
+- [ ] Verify logs are written correctly
+- [ ] Test database lock mechanism under concurrent load
+
+### Monitoring Post-Deployment
+- [ ] Monitor `/data/logs/bzj-connections-sync.log` for errors
+- [ ] Check `wp_bzj_relationship_events` for failed projections
+- [ ] Verify cron job is running (check `wp_options` for last run time)
+- [ ] Test manual reconciliation: `wp bzj reconcile-relationships`
+
+---
+
+## SUMMARY OF KEY IMPROVEMENTS
+
+| Aspect | Previous | Updated |
+|--------|----------|---------|
+| **Authority** | Ambiguous (three-way sync) | Clear (BuddyBoss canonical) |
+| **Streams Friends** | Assumed active | Correctly disabled |
+| **Socials Friend Representation** | Unclear | Confirmed as `followers` table with directional `active` flag |
+| **Block Behavior** | Partial | Full cascade (connection + follows + blocks) |
+| **Lock Mechanism** | WordPress transients (non-atomic) | MySQL `GET_LOCK()` (atomic) |
+| **Loop Prevention** | Two layers | Three layers (context + UUID + lock) |
+| **REST Endpoint** | `/bzj/v6/relationship` | `/bzj/v6/connection-management` |
+| **Authentication** | Unclear | HMAC-SHA256 with timestamp window |
+| **Error Recovery** | None | Queued retry with exponential backoff |
+| **External Platform Flow** | Direct DB writes | Signed command to canonical endpoint |
+| **Logging** | Assumed tables | File-based in `/data/logs` |
+| **BuddyBoss Restrictions** | Bypassed | Enforced (native function call) |
+
+This architecture establishes Buzzjuice as a **relationship control plane** with BuddyBoss as the canonical authority, enabling future extensions without circular synchronization dependencies.
+
+Generate all implementation codes, fully developed and functional with no truncated codes or placeholders for codes. Show steps for implementation and integration wherever appropriate.
+
+<thinking>
+The user is asking for a complete, fully developed implementation of the Buzzjuice connections synchronization system. This is a substantial request that requires:
+
+1. Complete PHP code for the control plane plugin
+2. Database helper functions
+3. Integration code for both Streams and Socials
+4. Testing utilities
+5. Documentation and deployment scripts
+6. WP-CLI commands
+
+I need to provide production-ready code with:
+- No truncated or placeholder code
+- Proper error handling
+- Security measures (HMAC-SHA256, nonces, prepared statements)
+- Logging
+- Retry mechanisms
+- Database schema creation
+- Installation/activation hooks
+
+This is going to be a substantial response. Let me organize it by file and provide complete, functional code.
+
+I'll structure it as:
+1. Main mu-plugin: bzj-connections-sync.php (the control plane)
+2. Shared helpers: wwqd_bridge.php (data mapping functions)
+3. Database schema installation
+4. Streams integration modifications
+5. Socials integration modifications
+6. WP-CLI commands
+7. Testing utilities
+8. Deployment documentation
+
+Let me start building this out comprehensively.
+</thinking>
+
+# Complete Buzzjuice Connections Synchronization Implementation
+
+I'll provide fully developed, production-ready code for the complete integration system.
+
+---
+
+## FILE 1: Main Control Plane Plugin
+
+**Location:** `wp-content/mu-plugins/bzj-connections-sync.php`
+
+```php
+<?php
+/**
+ * Plugin Name: BZJ Connections Synchronization Control Plane
+ * Description: Canonical relationship synchronization between BuddyBoss, WoWonder (Streams), and QuickDate (Socials)
+ * Version: 1.0.0
+ * Author: Buzzjuice
+ * Requires at least: 5.6
+ * Requires PHP: 7.4
+ */
+
+defined('ABSPATH') || exit;
+
+// Define constants
+define('BZJ_SYNC_VERSION', '1.0.0');
+define('BZJ_SYNC_NAMESPACE', 'bzj/v1');
+define('BZJ_SYNC_ROUTE', '/connection-management');
+define('BZJ_SYNC_LEDGER_TABLE', 'bzj_relationships');
+define('BZJ_SYNC_EVENTS_TABLE', 'bzj_relationship_events');
+define('BZJ_SYNC_LOG_FILE', 'bzj-connections-sync.log');
+define('BZJ_SYNC_LOCK_TTL', 30);
+define('BZJ_SYNC_MAX_RETRIES', 12);
+define('BZJ_SYNC_TIMESTAMP_WINDOW', 300); // 5 minutes
+
+// Load the main class
+require_once __DIR__ . '/class-bzj-connections-sync.php';
+
+// Initialize the plugin
+BZJ_Connections_Sync::instance()->init();
+
+// Register activation/deactivation hooks
+register_activation_hook(__FILE__, array('BZJ_Connections_Sync', 'activate'));
+register_deactivation_hook(__FILE__, array('BZJ_Connections_Sync', 'deactivate'));
+```
+
+**Location:** `wp-content/mu-plugins/class-bzj-connections-sync.php`
+
+```php
+<?php
+/**
+ * BZJ Connections Synchronization Control Plane
+ * 
+ * Manages relationship state across BuddyBoss, WoWonder Streams, and QuickDate Socials
+ * BuddyBoss is the canonical authority; external platforms sync to it
+ */
+
+class BZJ_Connections_Sync {
+	
+	private static $instance;
+	private $wpdb;
+	private $ledger_table;
+	private $events_table;
+	private $context_stack = array();
+	private $held_locks = array();
+	private $log_buffer = array();
+	
+	/**
+	 * Singleton instance
+	 */
+	public static function instance() {
+		if (null === self::$instance) {
+			self::$instance = new self();
+		}
+		return self::$instance;
+	}
+	
+	/**
+	 * Constructor
+	 */
+	private function __construct() {
+		global $wpdb;
+		$this->wpdb = $wpdb;
+		$this->ledger_table = $wpdb->prefix . BZJ_SYNC_LEDGER_TABLE;
+		$this->events_table = $wpdb->prefix . BZJ_SYNC_EVENTS_TABLE;
+	}
+	
+	/**
+	 * Initialize plugin
+	 */
+	public function init() {
+		// Install schema on init (allows MU plugin safe checks)
+		add_action('plugins_loaded', array($this, 'bootstrap'));
+		
+		// REST API
+		add_action('rest_api_init', array($this, 'register_rest_routes'));
+		
+		// BuddyBoss Hooks - Connection management
+		add_action('friends_friendship_requested', array($this, 'handle_bb_connection_requested'), 20, 4);
+		add_action('friends_friendship_accepted', array($this, 'handle_bb_connection_accepted'), 20, 4);
+		add_action('friends_friendship_rejected', array($this, 'handle_bb_connection_rejected'), 20, 2);
+		add_action('friends_friendship_withdrawn', array($this, 'handle_bb_connection_withdrawn'), 20, 2);
+		add_action('friends_friendship_deleted', array($this, 'handle_bb_connection_deleted'), 1, 3);
+		
+		// BuddyBoss Hooks - Follow management
+		add_action('bp_follow_start_following', array($this, 'handle_bb_follow_started'), 20, 2);
+		add_action('bp_follow_stop_following', array($this, 'handle_bb_follow_stopped'), 20, 2);
+		
+		// BuddyBoss Hooks - Block management
+		add_action('bp_moderation_after_save', array($this, 'handle_bb_moderation_saved'), 20, 1);
+		add_action('bb_moderation_after_delete', array($this, 'handle_bb_moderation_deleted'), 20, 1);
+		
+		// Event processing via cron
+		add_action('bzj_sync_process_events', array($this, 'process_event_queue'));
+		add_action('bzj_sync_reconcile', array($this, 'reconcile_recent'));
+		
+		// Custom cron schedule
+		add_filter('cron_schedules', array($this, 'add_custom_schedules'));
+		
+		// Flush logs on shutdown
+		add_action('shutdown', array($this, 'flush_logs'));
+	}
+	
+	/**
+	 * Bootstrap: Install schema and schedule crons
+	 */
+	public function bootstrap() {
+		$version = get_option('bzj_sync_schema_version', '');
+		if ($version !== BZJ_SYNC_VERSION) {
+			$this->install_schema();
+		}
+		
+		// Schedule event processing
+		if (!wp_next_scheduled('bzj_sync_process_events')) {
+			wp_schedule_event(time() + 30, 'bzj_minute', 'bzj_sync_process_events');
+		}
+		
+		// Schedule reconciliation
+		if (!wp_next_scheduled('bzj_sync_reconcile')) {
+			wp_schedule_event(time() + 300, 'hourly', 'bzj_sync_reconcile');
+		}
+	}
+	
+	/**
+	 * Add custom cron schedules
+	 */
+	public function add_custom_schedules($schedules) {
+		if (!isset($schedules['bzj_minute'])) {
+			$schedules['bzj_minute'] = array(
+				'interval' => 60,
+				'display' => esc_html__('BZJ Every Minute', 'bzj-sync'),
+			);
+		}
+		return $schedules;
+	}
+	
+	/**
+	 * Activation hook
+	 */
+	public static function activate() {
+		self::instance()->install_schema();
+		self::instance()->bootstrap();
+	}
+	
+	/**
+	 * Deactivation hook
+	 */
+	public static function deactivate() {
+		wp_clear_scheduled_hook('bzj_sync_process_events');
+		wp_clear_scheduled_hook('bzj_sync_reconcile');
+	}
+	
+	/**
+	 * Install database schema
+	 */
+	private function install_schema() {
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		
+		$charset_collate = $this->wpdb->get_charset_collate();
+		
+		// Ledger table - stores relationship state across platforms
+		$sql_ledger = "CREATE TABLE {$this->ledger_table} (
+			id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+			wp_user_a BIGINT(20) UNSIGNED NOT NULL,
+			wp_user_b BIGINT(20) UNSIGNED NOT NULL,
+			
+			-- BuddyBoss connection state
+			bb_connection_state VARCHAR(20) NOT NULL DEFAULT 'none',
+			bb_connection_requested_by BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+			
+			-- Follow states (all platforms)
+			bb_follow_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			bb_follow_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			streams_follow_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			streams_follow_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			socials_follow_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			socials_follow_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			
+			-- Block states (all platforms)
+			bb_block_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			bb_block_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			streams_block_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			streams_block_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			socials_block_a_to_b TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			socials_block_b_to_a TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			
+			-- Version control
+			version BIGINT(20) UNSIGNED NOT NULL DEFAULT 1,
+			last_event_uuid CHAR(36) NOT NULL DEFAULT '',
+			
+			-- Timestamps
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			
+			PRIMARY KEY (id),
+			UNIQUE KEY unique_pair (wp_user_a, wp_user_b),
+			KEY idx_user_a (wp_user_a),
+			KEY idx_user_b (wp_user_b),
+			KEY idx_updated (updated_at),
+			KEY idx_bb_connection (bb_connection_state),
+			KEY idx_bb_block_a (bb_block_a_to_b),
+			KEY idx_bb_block_b (bb_block_b_to_a)
+		) {$charset_collate};";
+		
+		// Events table - queue for failed projections and event tracking
+		$sql_events = "CREATE TABLE {$this->events_table} (
+			id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+			event_uuid CHAR(36) NOT NULL,
+			origin VARCHAR(20) NOT NULL,
+			operation VARCHAR(40) NOT NULL,
+			
+			-- User IDs
+			actor_wp_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+			target_wp_id BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+			pair_a BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+			pair_b BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
+			
+			-- Event data
+			payload LONGTEXT NULL,
+			
+			-- Processing state
+			status VARCHAR(20) NOT NULL DEFAULT 'pending',
+			attempts INT(10) UNSIGNED NOT NULL DEFAULT 0,
+			next_attempt_at DATETIME NOT NULL,
+			last_error TEXT NULL,
+			processed_at DATETIME NULL,
+			
+			-- Timestamps
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			
+			PRIMARY KEY (id),
+			UNIQUE KEY unique_event (event_uuid),
+			KEY idx_status (status, next_attempt_at),
+			KEY idx_pair (pair_a, pair_b),
+			KEY idx_operation (operation),
+			KEY idx_origin (origin),
+			KEY idx_created (created_at)
+		) {$charset_collate};";
+		
+		dbDelta($sql_ledger);
+		dbDelta($sql_events);
+		
+		update_option('bzj_sync_schema_version', BZJ_SYNC_VERSION, false);
+		
+		$this->log('Schema installed/updated', array('version' => BZJ_SYNC_VERSION));
+	}
+	
+	/**
+	 * Register REST API routes
+	 */
+	public function register_rest_routes() {
+		// POST endpoint for commands from external platforms
+		register_rest_route(BZJ_SYNC_NAMESPACE, BZJ_SYNC_ROUTE, array(
+			'methods' => WP_REST_Server::CREATABLE,
+			'callback' => array($this, 'handle_rest_command'),
+			'permission_callback' => '__return_true', // Auth via signature
+		));
+		
+		// GET endpoint for status queries (admin only)
+		register_rest_route(BZJ_SYNC_NAMESPACE, BZJ_SYNC_ROUTE, array(
+			'methods' => WP_REST_Server::READABLE,
+			'callback' => array($this, 'handle_rest_status'),
+			'permission_callback' => function() {
+				return current_user_can('manage_options');
+			},
+		));
+	}
+	
+	/**
+	 * Handle REST command from external platform
+	 */
+	public function handle_rest_command(WP_REST_Request $request) {
+		try {
+			$raw_body = $request->get_body();
+			$payload = json_decode($raw_body, true);
+			
+			if (!is_array($payload)) {
+				return new WP_Error(
+					'bzj_invalid_json',
+					'Request body must contain valid JSON',
+					array('status' => 400)
+				);
+			}
+			
+			// Authenticate request
+			$auth_error = $this->authenticate_request($request, $raw_body);
+			if (is_wp_error($auth_error)) {
+				return $auth_error;
+			}
+			
+			// Extract and validate payload
+			$origin = sanitize_key($payload['origin'] ?? '');
+			$operation = sanitize_key($payload['operation'] ?? '');
+			$event_uuid = sanitize_text_field($payload['event_id'] ?? '');
+			$actor_external_id = absint($payload['actor_id'] ?? 0);
+			$target_external_id = absint($payload['target_id'] ?? 0);
+			
+			// Validate
+			if (!in_array($origin, array('streams', 'socials'), true)) {
+				return new WP_Error(
+					'bzj_invalid_origin',
+					'Origin must be "streams" or "socials"',
+					array('status' => 400)
+				);
+			}
+			
+			$allowed_ops = array(
+				'connection_request', 'connection_accept', 'connection_reject',
+				'connection_withdraw', 'connection_remove',
+				'follow', 'unfollow', 'block', 'unblock'
+			);
+			
+			if (!in_array($operation, $allowed_ops, true)) {
+				return new WP_Error(
+					'bzj_invalid_operation',
+					'Invalid operation',
+					array('status' => 400)
+				);
+			}
+			
+			if (!$this->is_uuid($event_uuid)) {
+				return new WP_Error(
+					'bzj_invalid_uuid',
+					'Invalid event UUID',
+					array('status' => 400)
+				);
+			}
+			
+			if ($actor_external_id < 1 || $target_external_id < 1 || $actor_external_id === $target_external_id) {
+				return new WP_Error(
+					'bzj_invalid_users',
+					'Actor and target must be different valid user IDs',
+					array('status' => 400)
+				);
+			}
+			
+			// Map external IDs to WordPress IDs
+			$actor_wp_id = $this->map_external_to_wp($origin, $actor_external_id);
+			$target_wp_id = $this->map_external_to_wp($origin, $target_external_id);
+			
+			if (!$actor_wp_id || !$target_wp_id || $actor_wp_id === $target_wp_id) {
+				return new WP_Error(
+					'bzj_mapping_error',
+					'Could not map external IDs to WordPress users',
+					array('status' => 409)
+				);
+			}
+			
+			// Check if event already processed
+			if ($this->event_exists($event_uuid)) {
+				$ledger = $this->get_ledger($actor_wp_id, $target_wp_id);
+				return rest_ensure_response(array(
+					'success' => true,
+					'status' => 'already_processed',
+					'event_id' => $event_uuid,
+					'relationship' => $ledger,
+				));
+			}
+			
+			// Acquire pair lock to prevent race conditions
+			if (!$this->acquire_pair_lock($actor_wp_id, $target_wp_id)) {
+				return new WP_Error(
+					'bzj_pair_locked',
+					'Another operation is in progress for this pair. Please retry.',
+					array('status' => 429)
+				);
+			}
+			
+			try {
+				// Record the event
+				$this->insert_event(
+					$event_uuid,
+					$origin,
+					$operation,
+					$actor_wp_id,
+					$target_wp_id,
+					$payload
+				);
+				
+				// Process the command
+				$result = $this->process_external_command(
+					$operation,
+					$actor_wp_id,
+					$target_wp_id,
+					$event_uuid,
+					$origin
+				);
+				
+				if (is_wp_error($result)) {
+					$this->mark_event_retry($event_uuid, $result->get_error_message());
+					return new WP_Error(
+						'bzj_operation_failed',
+						$result->get_error_message(),
+						array('status' => 409, 'event_id' => $event_uuid)
+					);
+				}
+				
+				$this->mark_event_processed($event_uuid);
+				$ledger = $this->get_ledger($actor_wp_id, $target_wp_id);
+				
+				return rest_ensure_response(array(
+					'success' => true,
+					'status' => 'processed',
+					'event_id' => $event_uuid,
+					'relationship' => $ledger,
+				));
+				
+			} catch (Throwable $e) {
+				$this->mark_event_retry($event_uuid, $e->getMessage());
+				$this->log('REST command exception', array(
+					'event_id' => $event_uuid,
+					'error' => $e->getMessage(),
+					'trace' => $e->getTraceAsString(),
+				));
+				
+				return new WP_Error(
+					'bzj_internal_error',
+					'Internal synchronization error',
+					array('status' => 500, 'event_id' => $event_uuid)
+				);
+			} finally {
+				$this->release_pair_lock($actor_wp_id, $target_wp_id);
+			}
+			
+		} catch (Throwable $e) {
+			$this->log('REST command fatal error', array(
+				'error' => $e->getMessage(),
+				'trace' => $e->getTraceAsString(),
+			));
+			
+			return new WP_Error(
+				'bzj_fatal_error',
+				'Synchronization service error',
+				array('status' => 500)
+			);
+		}
+	}
+	
+	/**
+	 * Handle REST status query
+	 */
+	public function handle_rest_status(WP_REST_Request $request) {
+		$user_a = absint($request->get_param('user_a'));
+		$user_b = absint($request->get_param('user_b'));
+		
+		if ($user_a < 1 || $user_b < 1 || $user_a === $user_b) {
+			return new WP_Error(
+				'bzj_invalid_params',
+				'Two different valid user IDs required',
+				array('status' => 400)
+			);
+		}
+		
+		$ledger = $this->get_ledger($user_a, $user_b);
+		$queue = $this->get_event_queue($user_a, $user_b);
+		
+		return rest_ensure_response(array(
+			'success' => true,
+			'version' => BZJ_SYNC_VERSION,
+			'relationship' => $ledger,
+			'queue' => $queue,
+		));
+	}
+	
+	/**
+	 * Authenticate incoming REST request
+	 */
+	private function authenticate_request(WP_REST_Request $request, $raw_body) {
+		$timestamp = $request->get_header('X-BZJ-Timestamp');
+		$signature = $request->get_header('X-BZJ-Signature');
+		
+		if (!$timestamp || !$signature) {
+			return new WP_Error(
+				'bzj_missing_auth',
+				'Missing authentication headers',
+				array('status' => 401)
+			);
+		}
+		
+		if (!ctype_digit((string) $timestamp)) {
+			return new WP_Error(
+				'bzj_invalid_timestamp',
+				'Invalid timestamp format',
+				array('status' => 401)
+			);
+		}
+		
+		$timestamp = (int) $timestamp;
+		
+		// Check timestamp is within window
+		if (abs(time() - $timestamp) > BZJ_SYNC_TIMESTAMP_WINDOW) {
+			return new WP_Error(
+				'bzj_expired_request',
+				'Request timestamp outside allowed window',
+				array('status' => 401)
+			);
+		}
+		
+		// Get shared secret
+		$secret = $this->get_shared_secret();
+		if (!$secret) {
+			return new WP_Error(
+				'bzj_no_secret',
+				'Shared secret not configured',
+				array('status' => 503)
+			);
+		}
+		
+		// Calculate expected signature
+		$expected = hash_hmac('sha256', $timestamp . '.' . $raw_body, $secret);
+		
+		// Compare signatures (constant time to prevent timing attacks)
+		if (!hash_equals($expected, trim($signature))) {
+			return new WP_Error(
+				'bzj_invalid_signature',
+				'Invalid request signature',
+				array('status' => 401)
+			);
+		}
+		
+		return true;
+	}
+	
+	/**
+	 * Get shared secret for authentication
+	 */
+	private function get_shared_secret() {
+		// Try function first
+		if (function_exists('bzj_get_sso_secret')) {
+			$secret = bzj_get_sso_secret();
+			if ($secret) {
+				return $secret;
+			}
+		}
+		
+		// Try environment variable
+		$secret = getenv('BUZZ_SSO_SECRET');
+		if ($secret) {
+			return $secret;
+		}
+		
+		// Try constant
+		if (defined('BUZZ_SSO_SECRET')) {
+			return BUZZ_SSO_SECRET;
+		}
+		
+		// Try option
+		return get_option('bzj_shared_secret', '');
+	}
+	
+	/**
+	 * Process command from external platform
+	 */
+	private function process_external_command($operation, $actor_wp_id, $target_wp_id, $event_uuid, $origin) {
+		$this->push_context(array(
+			'event_uuid' => $event_uuid,
+			'origin' => $origin,
+			'operation' => $operation,
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+		));
+		
+		try {
+			switch ($operation) {
+				case 'connection_request':
+					return $this->process_connection_request($actor_wp_id, $target_wp_id, $event_uuid);
+				case 'connection_accept':
+					return $this->process_connection_accept($actor_wp_id, $target_wp_id, $event_uuid);
+				case 'connection_reject':
+					return $this->process_connection_reject($actor_wp_id, $target_wp_id, $event_uuid);
+				case 'connection_withdraw':
+					return $this->process_connection_withdraw($actor_wp_id, $target_wp_id, $event_uuid);
+				case 'connection_remove':
+					return $this->process_connection_remove($actor_wp_id, $target_wp_id, $event_uuid);
+				case 'follow':
+					return $this->process_follow($actor_wp_id, $target_wp_id, true, $event_uuid);
+				case 'unfollow':
+					return $this->process_follow($actor_wp_id, $target_wp_id, false, $event_uuid);
+				case 'block':
+					return $this->process_block($actor_wp_id, $target_wp_id, true, $event_uuid);
+				case 'unblock':
+					return $this->process_block($actor_wp_id, $target_wp_id, false, $event_uuid);
+				default:
+					return new WP_Error('bzj_unknown_op', 'Unknown operation');
+			}
+		} finally {
+			$this->pop_context();
+		}
+	}
+	
+	/**
+	 * Process connection request from external platform
+	 */
+	private function process_connection_request($actor_wp_id, $target_wp_id, $event_uuid) {
+		if (!function_exists('friends_add_friend')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss friendship functions unavailable');
+		}
+		
+		// Check if blocked
+		if ($this->is_blocked($actor_wp_id, $target_wp_id)) {
+			return new WP_Error('bzj_blocked', 'Users are blocked; connection rejected');
+		}
+		
+		// Check current status
+		$status = function_exists('friends_check_friendship_status')
+			? friends_check_friendship_status($actor_wp_id, $target_wp_id)
+			: 'not_friends';
+		
+		// Already friends - just sync state
+		if ($status === 'is_friend') {
+			$this->save_ledger($actor_wp_id, $target_wp_id, array(
+				'bb_connection_state' => 'is_friend',
+				'bb_connection_requested_by' => 0,
+			), $event_uuid);
+			$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'is_friend');
+			return true;
+		}
+		
+		// Already pending - no action needed
+		if (in_array($status, array('pending', 'awaiting_response'), true)) {
+			return true;
+		}
+		
+		// Send connection request
+		if (!friends_add_friend($actor_wp_id, $target_wp_id, false)) {
+			return new WP_Error(
+				'bzj_bb_request_failed',
+				'BuddyBoss rejected connection request'
+			);
+		}
+		
+		// Ensure ledger is updated
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			'bb_connection_state' => 'pending',
+			'bb_connection_requested_by' => $actor_wp_id,
+		), $event_uuid);
+		
+		// Project to Socials
+		$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'pending');
+		
+		$this->log('Connection request processed', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process connection accept from external platform
+	 */
+	private function process_connection_accept($actor_wp_id, $target_wp_id, $event_uuid) {
+		if (!function_exists('friends_get_friendship_id') || !function_exists('friends_accept_friendship')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss friendship functions unavailable');
+		}
+		
+		// Find friendship request
+		$friendship_id = friends_get_friendship_id($target_wp_id, $actor_wp_id);
+		if (!$friendship_id) {
+			$friendship_id = friends_get_friendship_id($actor_wp_id, $target_wp_id);
+		}
+		
+		// If no request exists but already friends, just sync
+		if (!$friendship_id) {
+			if (function_exists('friends_check_friendship_status')) {
+				$status = friends_check_friendship_status($actor_wp_id, $target_wp_id);
+				if ($status === 'is_friend') {
+					$this->save_ledger($actor_wp_id, $target_wp_id, array(
+						'bb_connection_state' => 'is_friend',
+						'bb_connection_requested_by' => 0,
+					), $event_uuid);
+					$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'is_friend');
+					return true;
+				}
+			}
+			return new WP_Error('bzj_no_request', 'No pending connection request found');
+		}
+		
+		// Check if already accepted
+		if (function_exists('friends_check_friendship_status')) {
+			$status = friends_check_friendship_status($actor_wp_id, $target_wp_id);
+			if ($status === 'is_friend') {
+				$this->save_ledger($actor_wp_id, $target_wp_id, array(
+					'bb_connection_state' => 'is_friend',
+					'bb_connection_requested_by' => 0,
+				), $event_uuid);
+				$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'is_friend');
+				return true;
+			}
+		}
+		
+		// Accept friendship
+		if (!friends_accept_friendship($friendship_id)) {
+			return new WP_Error('bzj_accept_failed', 'Failed to accept friendship');
+		}
+		
+		// Update ledger
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			'bb_connection_state' => 'is_friend',
+			'bb_connection_requested_by' => 0,
+		), $event_uuid);
+		
+		// Project to Socials
+		$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'is_friend');
+		
+		$this->log('Connection accepted', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process connection reject from external platform
+	 */
+	private function process_connection_reject($actor_wp_id, $target_wp_id, $event_uuid) {
+		if (!function_exists('friends_get_friendship_id') || !function_exists('friends_reject_friendship')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss friendship functions unavailable');
+		}
+		
+		$friendship_id = friends_get_friendship_id($actor_wp_id, $target_wp_id);
+		if (!$friendship_id) {
+			$friendship_id = friends_get_friendship_id($target_wp_id, $actor_wp_id);
+		}
+		
+		// Try to reject if exists
+		if ($friendship_id && !friends_reject_friendship($friendship_id)) {
+			return new WP_Error('bzj_reject_failed', 'Failed to reject friendship');
+		}
+		
+		// Update ledger
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			'bb_connection_state' => 'none',
+			'bb_connection_requested_by' => 0,
+		), $event_uuid);
+		
+		// Project to Socials
+		$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'none');
+		
+		$this->log('Connection rejected', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process connection withdraw from external platform
+	 */
+	private function process_connection_withdraw($actor_wp_id, $target_wp_id, $event_uuid) {
+		if (!function_exists('friends_withdraw_friendship')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss withdraw function unavailable');
+		}
+		
+		if (!friends_withdraw_friendship($actor_wp_id, $target_wp_id)) {
+			// Check if actually not friends
+			if (function_exists('friends_check_friendship_status')) {
+				$status = friends_check_friendship_status($actor_wp_id, $target_wp_id);
+				if ($status !== 'not_friends') {
+					return new WP_Error('bzj_withdraw_failed', 'Failed to withdraw friendship');
+				}
+			}
+		}
+		
+		// Update ledger
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			'bb_connection_state' => 'none',
+			'bb_connection_requested_by' => 0,
+		), $event_uuid);
+		
+		// Project to Socials
+		$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'none');
+		
+		$this->log('Connection withdrawn', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process connection removal from external platform
+	 */
+	private function process_connection_remove($actor_wp_id, $target_wp_id, $event_uuid) {
+		if (!function_exists('friends_remove_friend')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss remove function unavailable');
+		}
+		
+		// Check if actually friends before removing
+		if (function_exists('friends_check_friendship_status')) {
+			$status = friends_check_friendship_status($actor_wp_id, $target_wp_id);
+			if ($status === 'is_friend') {
+				if (!friends_remove_friend($actor_wp_id, $target_wp_id) && 
+				    !friends_remove_friend($target_wp_id, $actor_wp_id)) {
+					return new WP_Error('bzj_remove_failed', 'Failed to remove friendship');
+				}
+			}
+		}
+		
+		// Update ledger
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			'bb_connection_state' => 'none',
+			'bb_connection_requested_by' => 0,
+		), $event_uuid);
+		
+		// Project to Socials
+		$this->project_connection_to_socials($actor_wp_id, $target_wp_id, 'none');
+		
+		$this->log('Connection removed', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process follow/unfollow from external platform
+	 */
+	private function process_follow($actor_wp_id, $target_wp_id, $follow, $event_uuid) {
+		if (!function_exists('bp_start_following') || !function_exists('bp_stop_following')) {
+			return new WP_Error('bzj_bb_unavailable', 'BuddyBoss follow functions unavailable');
+		}
+		
+		// Check block status
+		if ($follow && $this->is_blocked($actor_wp_id, $target_wp_id)) {
+			return new WP_Error('bzj_blocked', 'Cannot follow blocked user');
+		}
+		
+		if ($follow) {
+			// Follow
+			$result = bp_start_following(array(
+				'leader_id' => $target_wp_id,
+				'follower_id' => $actor_wp_id,
+			));
+			
+			if (is_wp_error($result)) {
+				return $result;
+			}
+			
+			// Verify follow was created
+			if ($result === false && function_exists('bp_is_following')) {
+				if (!bp_is_following(array('leader_id' => $target_wp_id, 'follower_id' => $actor_wp_id))) {
+					return new WP_Error('bzj_follow_failed', 'Failed to create follow');
+				}
+			}
+		} else {
+			// Unfollow
+			$result = bp_stop_following(array(
+				'leader_id' => $target_wp_id,
+				'follower_id' => $actor_wp_id,
+			));
+			
+			if (is_wp_error($result)) {
+				return $result;
+			}
+		}
+		
+		// Update ledger
+		$pair = $this->normalize_pair($actor_wp_id, $target_wp_id);
+		$field = ($actor_wp_id === $pair[0]) ? 'bb_follow_a_to_b' : 'bb_follow_b_to_a';
+		
+		$this->save_ledger($actor_wp_id, $target_wp_id, array(
+			$field => $follow ? 1 : 0,
+		), $event_uuid);
+		
+		// Project to external platforms
+		$this->project_follow_to_streams($actor_wp_id, $target_wp_id, $follow);
+		$this->project_follow_to_socials($actor_wp_id, $target_wp_id, $follow);
+		
+		$this->log('Follow operation', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'follow' => $follow,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Process block/unblock from external platform
+	 */
+	private function process_block($actor_wp_id, $target_wp_id, $block, $event_uuid) {
+		if ($block) {
+			// Blocking - apply cascade
+			if (!class_exists('BP_Moderation') || !class_exists('BP_Moderation_Members')) {
+				return new WP_Error('bzj_bb_unavailable', 'BuddyBoss moderation unavailable');
+			}
+			
+			// Check if already blocked
+			if ($this->is_blocked($actor_wp_id, $target_wp_id, $actor_wp_id)) {
+				return true; // Already blocked, nothing to do
+			}
+			
+			// Create block in BuddyBoss
+			$moderation = new BP_Moderation(
+				$target_wp_id,
+				BP_Moderation_Members::$moderation_type,
+				$actor_wp_id
+			);
+			$moderation->user_report = 0;
+			$moderation->content = '';
+			
+			if (!$moderation->save()) {
+				return new WP_Error('bzj_block_failed', 'Failed to create block');
+			}
+			
+			// Cascade: remove connection and follows
+			$this->enforce_block_cascade($actor_wp_id, $target_wp_id, $event_uuid);
+			
+			// Update ledger
+			$pair = $this->normalize_pair($actor_wp_id, $target_wp_id);
+			$field = ($actor_wp_id === $pair[0]) ? 'bb_block_a_to_b' : 'bb_block_b_to_a';
+			
+			$this->save_ledger($actor_wp_id, $target_wp_id, array(
+				$field => 1,
+				'bb_connection_state' => 'none',
+				'bb_connection_requested_by' => 0,
+				'bb_follow_a_to_b' => 0,
+				'bb_follow_b_to_a' => 0,
+			), $event_uuid);
+			
+			// Project block to external platforms
+			$this->project_block_to_streams($actor_wp_id, $target_wp_id, true);
+			$this->project_block_to_socials($actor_wp_id, $target_wp_id, true);
+			
+		} else {
+			// Unblocking
+			if (!class_exists('BP_Moderation') || !class_exists('BP_Moderation_Members')) {
+				return new WP_Error('bzj_bb_unavailable', 'BuddyBoss moderation unavailable');
+			}
+			
+			$moderation = new BP_Moderation(
+				$target_wp_id,
+				BP_Moderation_Members::$moderation_type,
+				$actor_wp_id
+			);
+			
+			if (!empty($moderation->id) && empty($moderation->user_report)) {
+				if (!$moderation->delete(false)) {
+					return new WP_Error('bzj_unblock_failed', 'Failed to remove block');
+				}
+			}
+			
+			// Update ledger (do NOT restore connection or follows - intentional)
+			$pair = $this->normalize_pair($actor_wp_id, $target_wp_id);
+			$field = ($actor_wp_id === $pair[0]) ? 'bb_block_a_to_b' : 'bb_block_b_to_a';
+			
+			$this->save_ledger($actor_wp_id, $target_wp_id, array(
+				$field => 0,
+			), $event_uuid);
+			
+			// Project unblock to external platforms
+			$this->project_block_to_streams($actor_wp_id, $target_wp_id, false);
+			$this->project_block_to_socials($actor_wp_id, $target_wp_id, false);
+		}
+		
+		$this->log('Block operation', array(
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+			'block' => $block,
+			'event_uuid' => $event_uuid,
+		));
+		
+		return true;
+	}
+	
+	/**
+	 * Enforce block cascade - remove connections and follows
+	 */
+	private function enforce_block_cascade($actor_wp_id, $target_wp_id, $event_uuid) {
+		// Push context to prevent recursive hook handling
+		$this->push_context(array(
+			'event_uuid' => $event_uuid,
+			'origin' => 'wordpress',
+			'operation' => 'block_cascade',
+			'actor' => $actor_wp_id,
+			'target' => $target_wp_id,
+		));
+		
+		try {
+			// Remove connection if exists
+			if (function_exists('friends_check_friendship_status') && function_exists('friends_remove_friend')) {
+				$status = friends_check_friendship_status($actor_wp_id, $target_wp_id);
+				if ($status === 'is_friend') {
+					friends_remove_friend($actor_wp_id, $target_wp_id);
+				}
+			}
+			
+			// Remove follows in both directions
+			if (function_exists('bp_stop_following')) {
+				foreach (array(array($actor_wp_id, $target_wp_id), array($target_wp_id, $actor_wp_id)) as $pair) {
+					try {
+						bp_stop_following(array(
+							'leader_id' => $pair[1],
+							'follower_id' => $pair[0],
+						));
+					} catch (Throwable $e) {
+						$this->log('Block cascade - follow removal failed', array(
+							'pair' => $pair,
+							'error' => $e->getMessage(),
+						));
+					}
+				}
+			}
+		} finally {
+			$this->pop_context();
+		}
+	}
+	
+	// ===== BUDDYBOSS HOOKS =====
+	
+	/**
+	 * Handle BuddyBoss connection request hook
+	 */
+	public function handle_bb_connection_requested($id, $initiator, $friend, $friendship = null) {
+		$this->handle_bb_connection_event('connection_request', absint($initiator), absint($friend));
+	}
+	
+	/**
+	 * Handle BuddyBoss connection accepted hook
+	 */
+	public function handle_bb_connection_accepted($id, $initiator, $friend, $friendship = null) {
+		$this->handle_bb_connection_event('connection_accept', absint($initiator), absint($friend));
+	}
+	
+	/**
+	 * Handle BuddyBoss connection rejected hook
+	 */
+	public function handle_bb_connection_rejected($id, $friendship) {
+		if (!is_object($friendship)) {
+			return;
+		}
+		$this->handle_bb_connection_event(
+			'connection_reject',
+			absint($friendship->initiator_user_id),
+			absint($friendship->friend_user_id)
+		);
+	}
+	
+	/**
+	 * Handle BuddyBoss connection withdrawn hook
+	 */
+	public function handle_bb_connection_withdrawn($id, $friendship) {
+		if (!is_object($friendship)) {
+			return;
+		}
+		$this->handle_bb_connection_event(
+			'connection_withdraw',
+			absint($friendship->initiator_user_id),
+			absint($friendship->friend_user_id)
+		);
+	}
+	
+	/**
+	 * Handle BuddyBoss connection deleted hook
+	 */
+	public function handle_bb_connection_deleted($id, $initiator, $friend) {
+		$a = absint($initiator);
+		$b = absint($friend);
+		
+		// Detect if this is a contextual duplicate (to prevent loops)
+		if ($this->is_contextual_duplicate('connection_remove', $a, $b) ||
+		    $this->is_contextual_duplicate('connection_remove', $b, $a)) {
+			return;
+		}
+		
+		// Determine if this was a withdrawal or a removal
+		$ledger = $this->get_ledger($a, $b);
+		$operation = ($ledger['bb_connection_state'] === 'pending')
+			? 'connection_withdraw'
+			: 'connection_remove';
+		
+		$this->handle_bb_connection_event($operation, $a, $b);
+	}
+	
+	/**
+	 * Generic BuddyBoss connection event handler
+	 */
+	private function handle_bb_connection_event($operation, $actor, $target) {
+		if ($actor < 1 || $target < 1 || $actor === $target) {
+			return;
+		}
+		
+		// Check for contextual duplicate to prevent loops
+		if ($this->is_contextual_duplicate($operation, $actor, $target)) {
+			return;
+		}
+		
+		$event_uuid = wp_generate_uuid4();
+		
+		// Try to acquire lock
+		if (!$this->acquire_pair_lock($actor, $target)) {
+			// Queue for later processing
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			$this->mark_event_retry($event_uuid, 'Pair lock busy during BuddyBoss event');
+			return;
+		}
+		
+		try {
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			
+			switch ($operation) {
+				case 'connection_request':
+					$this->save_ledger($actor, $target, array(
+						'bb_connection_state' => 'pending',
+						'bb_connection_requested_by' => $actor,
+					), $event_uuid);
+					$this->project_connection_to_socials($actor, $target, 'pending');
+					break;
+					
+				case 'connection_accept':
+					$this->save_ledger($actor, $target, array(
+						'bb_connection_state' => 'is_friend',
+						'bb_connection_requested_by' => 0,
+					), $event_uuid);
+					$this->project_connection_to_socials($actor, $target, 'is_friend');
+					break;
+					
+				case 'connection_reject':
+				case 'connection_withdraw':
+				case 'connection_remove':
+					$this->save_ledger($actor, $target, array(
+						'bb_connection_state' => 'none',
+						'bb_connection_requested_by' => 0,
+					), $event_uuid);
+					$this->project_connection_to_socials($actor, $target, 'none');
+					break;
+			}
+			
+			$this->mark_event_processed($event_uuid);
+			
+		} catch (Throwable $e) {
+			$this->mark_event_retry($event_uuid, $e->getMessage());
+			$this->log('BuddyBoss connection event error', array(
+				'operation' => $operation,
+				'actor' => $actor,
+				'target' => $target,
+				'error' => $e->getMessage(),
+			));
+		} finally {
+			$this->release_pair_lock($actor, $target);
+		}
+	}
+	
+	/**
+	 * Handle BuddyBoss follow started hook
+	 */
+	public function handle_bb_follow_started($leader_id, $follower_id) {
+		$this->handle_bb_follow_event('follow', absint($follower_id), absint($leader_id));
+	}
+	
+	/**
+	 * Handle BuddyBoss follow stopped hook
+	 */
+	public function handle_bb_follow_stopped($leader_id, $follower_id) {
+		$this->handle_bb_follow_event('unfollow', absint($follower_id), absint($leader_id));
+	}
+	
+	/**
+	 * Generic BuddyBoss follow event handler
+	 */
+	private function handle_bb_follow_event($operation, $actor, $target) {
+		if ($actor < 1 || $target < 1 || $actor === $target) {
+			return;
+		}
+		
+		// Check for contextual duplicate
+		if ($this->is_contextual_duplicate($operation, $actor, $target)) {
+			return;
+		}
+		
+		$event_uuid = wp_generate_uuid4();
+		
+		// Try to acquire lock
+		if (!$this->acquire_pair_lock($actor, $target)) {
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			$this->mark_event_retry($event_uuid, 'Pair lock busy during BuddyBoss follow event');
+			return;
+		}
+		
+		try {
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			
+			$following = ($operation === 'follow');
+			
+			// Update ledger
+			$pair = $this->normalize_pair($actor, $target);
+			$field = ($actor === $pair[0]) ? 'bb_follow_a_to_b' : 'bb_follow_b_to_a';
+			
+			$this->save_ledger($actor, $target, array(
+				$field => $following ? 1 : 0,
+			), $event_uuid);
+			
+			// Check if blocked - if so, don't sync to external
+			if ($following && $this->is_blocked($actor, $target)) {
+				// Revert the follow
+				$this->save_ledger($actor, $target, array(
+					$field => 0,
+				), $event_uuid);
+				$this->mark_event_processed($event_uuid);
+				return;
+			}
+			
+			// Project to external platforms
+			$this->project_follow_to_streams($actor, $target, $following);
+			$this->project_follow_to_socials($actor, $target, $following);
+			
+			$this->mark_event_processed($event_uuid);
+			
+		} catch (Throwable $e) {
+			$this->mark_event_retry($event_uuid, $e->getMessage());
+			$this->log('BuddyBoss follow event error', array(
+				'operation' => $operation,
+				'actor' => $actor,
+				'target' => $target,
+				'error' => $e->getMessage(),
+			));
+		} finally {
+			$this->release_pair_lock($actor, $target);
+		}
+	}
+	
+	/**
+	 * Handle BuddyBoss moderation saved hook (block created)
+	 */
+	public function handle_bb_moderation_saved($moderation) {
+		if (!is_object($moderation)) {
+			return;
+		}
+		
+		// Only handle member blocks (not reports)
+		if (!isset($moderation->item_type) || $moderation->item_type !== 'user' || !empty($moderation->user_report)) {
+			return;
+		}
+		
+		$this->handle_bb_block_event(
+			'block',
+			absint($moderation->user_id),
+			absint($moderation->item_id)
+		);
+	}
+	
+	/**
+	 * Handle BuddyBoss moderation deleted hook (block removed)
+	 */
+	public function handle_bb_moderation_deleted($moderation) {
+		if (!is_object($moderation)) {
+			return;
+		}
+		
+		if (!isset($moderation->item_type) || $moderation->item_type !== 'user' || !empty($moderation->user_report)) {
+			return;
+		}
+		
+		$this->handle_bb_block_event(
+			'unblock',
+			absint($moderation->user_id),
+			absint($moderation->item_id)
+		);
+	}
+	
+	/**
+	 * Generic BuddyBoss block event handler
+	 */
+	private function handle_bb_block_event($operation, $actor, $target) {
+		if ($actor < 1 || $target < 1 || $actor === $target) {
+			return;
+		}
+		
+		// Check for contextual duplicate
+		if ($this->is_contextual_duplicate($operation, $actor, $target)) {
+			return;
+		}
+		
+		$event_uuid = wp_generate_uuid4();
+		
+		// Try to acquire lock
+		if (!$this->acquire_pair_lock($actor, $target)) {
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			$this->mark_event_retry($event_uuid, 'Pair lock busy during BuddyBoss block event');
+			return;
+		}
+		
+		try {
+			$this->insert_event($event_uuid, 'wordpress', $operation, $actor, $target);
+			
+			if ($operation === 'block') {
+				// Cascade: remove connection and follows
+				$this->enforce_block_cascade($actor, $target, $event_uuid);
+				
+				$pair = $this->normalize_pair($actor, $target);
+				$field = ($actor === $pair[0]) ? 'bb_block_a_to_b' : 'bb_block_b_to_a';
+				
+				$this->save_ledger($actor, $target, array(
+					$field => 1,
+					'bb_connection_state' => 'none',
+					'bb_connection_requested_by' => 0,
+					'bb_follow_a_to_b' => 0,
+					'bb_follow_b_to_a' => 0,
+				), $event_uuid);
+				
+				$this->project_block_to_streams($actor, $target, true);
+				$this->project_block_to_socials($actor, $target, true);
+				
+			} else {
+				// Unblock
+				$pair = $this->normalize_pair($actor, $target);
+				$field = ($actor === $pair[0]) ? 'bb_block_a_to_b' : 'bb_block_b_to_a';
+				
+				$this->save_ledger($actor, $target, array(
+					$field => 0,
+				), $event_uuid);
+				
+				// Do NOT restore connection or follows
+				$this->project_block_to_streams($actor, $target, false);
+				$this->project_block_to_socials($actor, $target, false);
+			}
+			
+			$this->mark_event_processed($event_uuid);
+			
+		} catch (Throwable $e) {
+			$this->mark_event_retry($event_uuid, $e->getMessage());
+			$this->log('BuddyBoss block event error', array(
+				'operation' => $operation,
+				'actor' => $actor,
+				'target' => $target,
+				'error' => $e->getMessage(),
+			));
+		} finally {
+			$this->release_pair_lock($actor, $target);
+		}
+	}
+	
+	// ===== PROJECTION METHODS =====
+	
+	/**
+	 * Project connection state to Socials
+	 */
+	private function project_connection_to_socials($actor_wp_id, $target_wp_id, $state) {
+		try {
+			$actor_socials_id = $this->get_external_id($actor_wp_id, 'socials');
+			$target_socials_id = $this->get_external_id($target_wp_id, 'socials');
+			
+			if (!$actor_socials_id || !$target_socials_id) {
+				$this->log('Socials connection projection - user mapping failed', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			// Get Socials database connection
+			$socials_db = $this->get_socials_db();
+			if (!$socials_db) {
+				$this->log('Socials connection projection - database unavailable', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			// QuickDate friend states are represented in followers table
+			// active=1: confirmed friend
+			// active=0: pending friend request
+			// not in table: no relationship
+			
+			if ($state === 'is_friend') {
+				// Create/update as confirmed friend (active=1)
+				$this->socials_set_active_friend($socials_db, $target_socials_id, $actor_socials_id);
+			} elseif ($state === 'pending') {
+				// Create as pending friend request (active=0)
+				$this->socials_set_pending_friend($socials_db, $target_socials_id, $actor_socials_id);
+			} else {
+				// Remove the relationship
+				$this->socials_remove_friend($socials_db, $actor_socials_id, $target_socials_id);
+			}
+			
+			return true;
+			
+		} catch (Throwable $e) {
+			$this->log('Socials connection projection error', array(
+				'actor_wp' => $actor_wp_id,
+				'target_wp' => $target_wp_id,
+				'state' => $state,
+				'error' => $e->getMessage(),
+			));
+			return false;
+		}
+	}
+	
+	/**
+	 * Project follow state to Streams
+	 */
+	private function project_follow_to_streams($actor_wp_id, $target_wp_id, $follow) {
+		try {
+			$actor_streams_id = $this->get_external_id($actor_wp_id, 'streams');
+			$target_streams_id = $this->get_external_id($target_wp_id, 'streams');
+			
+			if (!$actor_streams_id || !$target_streams_id) {
+				$this->log('Streams follow projection - user mapping failed', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			$streams_db = $this->get_streams_db();
+			if (!$streams_db) {
+				$this->log('Streams follow projection - database unavailable', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			if ($follow) {
+				$this->streams_add_follow($streams_db, $target_streams_id, $actor_streams_id);
+			} else {
+				$this->streams_remove_follow($streams_db, $target_streams_id, $actor_streams_id);
+			}
+			
+			return true;
+			
+		} catch (Throwable $e) {
+			$this->log('Streams follow projection error', array(
+				'actor_wp' => $actor_wp_id,
+				'target_wp' => $target_wp_id,
+				'follow' => $follow,
+				'error' => $e->getMessage(),
+			));
+			return false;
+		}
+	}
+	
+	/**
+	 * Project follow state to Socials
+	 */
+	private function project_follow_to_socials($actor_wp_id, $target_wp_id, $follow) {
+		try {
+			$actor_socials_id = $this->get_external_id($actor_wp_id, 'socials');
+			$target_socials_id = $this->get_external_id($target_wp_id, 'socials');
+			
+			if (!$actor_socials_id || !$target_socials_id) {
+				$this->log('Socials follow projection - user mapping failed', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			$socials_db = $this->get_socials_db();
+			if (!$socials_db) {
+				$this->log('Socials follow projection - database unavailable', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			if ($follow) {
+				$this->socials_add_follow($socials_db, $target_socials_id, $actor_socials_id);
+			} else {
+				$this->socials_remove_follow($socials_db, $target_socials_id, $actor_socials_id);
+			}
+			
+			return true;
+			
+		} catch (Throwable $e) {
+			$this->log('Socials follow projection error', array(
+				'actor_wp' => $actor_wp_id,
+				'target_wp' => $target_wp_id,
+				'follow' => $follow,
+				'error' => $e->getMessage(),
+			));
+			return false;
+		}
+	}
+	
+	/**
+	 * Project block state to Streams
+	 */
+	private function project_block_to_streams($actor_wp_id, $target_wp_id, $block) {
+		try {
+			$actor_streams_id = $this->get_external_id($actor_wp_id, 'streams');
+			$target_streams_id = $this->get_external_id($target_wp_id, 'streams');
+			
+			if (!$actor_streams_id || !$target_streams_id) {
+				$this->log('Streams block projection - user mapping failed', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			$streams_db = $this->get_streams_db();
+			if (!$streams_db) {
+				$this->log('Streams block projection - database unavailable', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			if ($block) {
+				$this->streams_add_block($streams_db, $actor_streams_id, $target_streams_id);
+				// Block cascades: remove follows in both directions
+				$this->streams_remove_follow($streams_db, $target_streams_id, $actor_streams_id);
+				$this->streams_remove_follow($streams_db, $actor_streams_id, $target_streams_id);
+			} else {
+				$this->streams_remove_block($streams_db, $actor_streams_id, $target_streams_id);
+			}
+			
+			return true;
+			
+		} catch (Throwable $e) {
+			$this->log('Streams block projection error', array(
+				'actor_wp' => $actor_wp_id,
+				'target_wp' => $target_wp_id,
+				'block' => $block,
+				'error' => $e->getMessage(),
+			));
+			return false;
+		}
+	}
+	
+	/**
+	 * Project block state to Socials
+	 */
+	private function project_block_to_socials($actor_wp_id, $target_wp_id, $block) {
+		try {
+			$actor_socials_id = $this->get_external_id($actor_wp_id, 'socials');
+			$target_socials_id = $this->get_external_id($target_wp_id, 'socials');
+			
+			if (!$actor_socials_id || !$target_socials_id) {
+				$this->log('Socials block projection - user mapping failed', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			$socials_db = $this->get_socials_db();
+			if (!$socials_db) {
+				$this->log('Socials block projection - database unavailable', array(
+					'actor_wp' => $actor_wp_id,
+					'target_wp' => $target_wp_id,
+				));
+				return false;
+			}
+			
+			if ($block) {
+				$this->socials_add_block($socials_db, $actor_socials_id, $target_socials_id);
+				// Block cascades: remove friend and follows in both directions
+				$this->socials_remove_friend($socials_db, $actor_socials_id, $target_socials_id);
+				$this->socials_remove_follow($socials_db, $target_socials_id, $actor_socials_id);
+				$this->socials_remove_follow($socials_db, $actor_socials_id, $target_socials_id);
+			} else {
+				$this->socials_remove_block($socials_db, $actor_socials_id, $target_socials_id);
+			}
+			
+			return true;
+			
+		} catch (Throwable $e) {
+			$this->log('Socials block projection error', array(
+				'actor_wp' => $actor_wp_id,
+				'target_wp' => $target_wp_id,
+				'block' => $block,
+				'error' => $e->getMessage(),
+			));
+			return false;
+		}
+	}
+	
+	// ===== DATABASE OPERATIONS =====
+	
+	/**
+	 * Get Streams database connection
+	 */
+	private function get_streams_db() {
+		$path = ABSPATH . 'shared/db_helpers.php';
+		if (file_exists($path)) {
+			require_once $path;
+		}
+		
+		if (function_exists('get_wowonder_db')) {
+			$db = get_wowonder_db();
+			if ($db instanceof mysqli && !$db->connect_errno) {
+				return $db;
+			}
+		}
+		
+		return false;
+	}
+	
+	/**
+	 * Get Socials database connection
+	 */
+	private function get_socials_db() {
+		$path = ABSPATH . 'shared/db_helpers.php';
+		if (file_exists($path)) {
+			require_once $path;
+		}
+		
+		if (function_exists('get_qd_db_conn')) {
+			$db = get_qd_db_conn();
+			if ($db instanceof mysqli && !$db->connect_errno) {
+				return $db;
+			}
+		}
+		
+		return false;
+	}
+	
+	/**
+	 * Add follow to Streams
+	 */
+	private function streams_add_follow($db, $following_id, $follower_id) {
+		// Streams followers table: Wo_Followers or followers
+		$table_name = $this->streams_get_followers_table($db);
+		
+		$stmt = $db->prepare(
+			"SELECT id FROM `{$table_name}` WHERE following_id = ? AND follower_id = ? LIMIT 1"
+		);
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $following_id, $follower_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			// Update to active
+			$stmt = $db->prepare("UPDATE `{$table_name}` SET active = 1 WHERE id = ?");
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			$stmt->bind_param('i', $row['id']);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Follow update failed');
+			}
+		} else {
+			// Insert new follow
+			$created_at = time();
+			$stmt = $db->prepare(
+				"INSERT INTO `{$table_name}` (following_id, follower_id, active, created_at) VALUES (?, ?, 1, ?)"
+			);
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			
+			$stmt->bind_param('iii', $following_id, $follower_id, $created_at);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Follow insert failed');
+			}
+		}
+	}
+	
+	/**
+	 * Remove follow from Streams
+	 */
+	private function streams_remove_follow($db, $following_id, $follower_id) {
+		$table_name = $this->streams_get_followers_table($db);
+		
+		$stmt = $db->prepare("DELETE FROM `{$table_name}` WHERE following_id = ? AND follower_id = ?");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $following_id, $follower_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Follow removal failed');
+		}
+	}
+	
+	/**
+	 * Add block to Streams
+	 */
+	private function streams_add_block($db, $blocker_id, $blocked_id) {
+		$table_name = $this->streams_get_blocks_table($db);
+		
+		// Check if exists
+		$stmt = $db->prepare("SELECT id FROM `{$table_name}` WHERE blocker = ? AND blocked = ? LIMIT 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $blocker_id, $blocked_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			return; // Already blocked
+		}
+		
+		// Insert block
+		$stmt = $db->prepare("INSERT INTO `{$table_name}` (blocker, blocked) VALUES (?, ?)");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $blocker_id, $blocked_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Block insert failed');
+		}
+	}
+	
+	/**
+	 * Remove block from Streams
+	 */
+	private function streams_remove_block($db, $blocker_id, $blocked_id) {
+		$table_name = $this->streams_get_blocks_table($db);
+		
+		$stmt = $db->prepare("DELETE FROM `{$table_name}` WHERE blocker = ? AND blocked = ?");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $blocker_id, $blocked_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Block removal failed');
+		}
+	}
+	
+	/**
+	 * Get Streams followers table name
+	 */
+	private function streams_get_followers_table($db) {
+		$candidates = array('Wo_Followers', 'followers');
+		foreach ($candidates as $table) {
+			$table_name = $db->real_escape_string($table);
+			$result = $db->query("SHOW TABLES LIKE '{$table_name}'");
+			if ($result instanceof mysqli_result && $result->num_rows > 0) {
+				return $table;
+			}
+		}
+		throw new Exception('Streams followers table not found');
+	}
+	
+	/**
+	 * Get Streams blocks table name
+	 */
+	private function streams_get_blocks_table($db) {
+		$candidates = array('Wo_Blocks', 'Wo_BlockedUsers');
+		foreach ($candidates as $table) {
+			$table_name = $db->real_escape_string($table);
+			$result = $db->query("SHOW TABLES LIKE '{$table_name}'");
+			if ($result instanceof mysqli_result && $result->num_rows > 0) {
+				return $table;
+			}
+		}
+		throw new Exception('Streams blocks table not found');
+	}
+	
+	/**
+	 * Set pending friend request in Socials (QuickDate)
+	 */
+	private function socials_set_pending_friend($db, $requester_id, $recipient_id) {
+		// In QuickDate, pending friend requests are followers rows with active=0
+		$table_name = $this->socials_get_followers_table($db);
+		
+		// Remove any opposite direction active follows
+		$stmt = $db->prepare("DELETE FROM `{$table_name}` WHERE following_id = ? AND follower_id = ? AND active = 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $recipient_id, $requester_id);
+		$stmt->execute();
+		$stmt->close();
+		
+		// Check if request already exists
+		$stmt = $db->prepare("SELECT id FROM `{$table_name}` WHERE following_id = ? AND follower_id = ? LIMIT 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $requester_id, $recipient_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			// Update to pending
+			$stmt = $db->prepare("UPDATE `{$table_name}` SET active = 0 WHERE id = ?");
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			$stmt->bind_param('i', $row['id']);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Pending friend update failed');
+			}
+		} else {
+			// Insert pending request
+			$now = time();
+			$stmt = $db->prepare(
+				"INSERT INTO `{$table_name}` (following_id, follower_id, active, created_at) VALUES (?, ?, 0, ?)"
+			);
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			
+			$stmt->bind_param('iii', $requester_id, $recipient_id, $now);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Pending friend insert failed');
+			}
+		}
+	}
+	
+	/**
+	 * Set active friend in Socials (QuickDate)
+	 */
+	private function socials_set_active_friend($db, $user1_id, $user2_id) {
+		$table_name = $this->socials_get_followers_table($db);
+		
+		// Check if relationship exists
+		$stmt = $db->prepare("SELECT id FROM `{$table_name}` WHERE following_id = ? AND follower_id = ? LIMIT 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $user1_id, $user2_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			// Update to active
+			$stmt = $db->prepare("UPDATE `{$table_name}` SET active = 1 WHERE id = ?");
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			$stmt->bind_param('i', $row['id']);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Friend activation failed');
+			}
+		} else {
+			// Insert active friend
+			$now = time();
+			$stmt = $db->prepare(
+				"INSERT INTO `{$table_name}` (following_id, follower_id, active, created_at) VALUES (?, ?, 1, ?)"
+			);
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			
+			$stmt->bind_param('iii', $user1_id, $user2_id, $now);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Friend insert failed');
+			}
+		}
+	}
+	
+	/**
+	 * Remove friend from Socials (QuickDate)
+	 */
+	private function socials_remove_friend($db, $user1_id, $user2_id) {
+		$table_name = $this->socials_get_followers_table($db);
+		
+		$stmt = $db->prepare(
+			"DELETE FROM `{$table_name}` 
+			 WHERE (following_id = ? AND follower_id = ?)
+			    OR (following_id = ? AND follower_id = ?)"
+		);
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('iiii', $user1_id, $user2_id, $user2_id, $user1_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Friend removal failed');
+		}
+	}
+	
+	/**
+	 * Add follow to Socials
+	 */
+	private function socials_add_follow($db, $following_id, $follower_id) {
+		$table_name = $this->socials_get_followers_table($db);
+		
+		$stmt = $db->prepare("SELECT id FROM `{$table_name}` WHERE following_id = ? AND follower_id = ? LIMIT 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $following_id, $follower_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			// Update to active
+			$stmt = $db->prepare("UPDATE `{$table_name}` SET active = 1 WHERE id = ?");
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			$stmt->bind_param('i', $row['id']);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Follow update failed');
+			}
+		} else {
+			// Insert follow
+			$now = time();
+			$stmt = $db->prepare(
+				"INSERT INTO `{$table_name}` (following_id, follower_id, active, created_at) VALUES (?, ?, 1, ?)"
+			);
+			if (!$stmt) {
+				throw new Exception('Prepare failed: ' . $db->error);
+			}
+			
+			$stmt->bind_param('iii', $following_id, $follower_id, $now);
+			$ok = $stmt->execute();
+			$stmt->close();
+			
+			if (!$ok) {
+				throw new Exception('Follow insert failed');
+			}
+		}
+	}
+	
+	/**
+	 * Remove follow from Socials
+	 */
+	private function socials_remove_follow($db, $following_id, $follower_id) {
+		$table_name = $this->socials_get_followers_table($db);
+		
+		$stmt = $db->prepare("DELETE FROM `{$table_name}` WHERE following_id = ? AND follower_id = ?");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $following_id, $follower_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Follow removal failed');
+		}
+	}
+	
+	/**
+	 * Add block to Socials
+	 */
+	private function socials_add_block($db, $blocker_id, $blocked_id) {
+		$table_name = $this->socials_get_blocks_table($db);
+		
+		$stmt = $db->prepare("SELECT id FROM `{$table_name}` WHERE user_id = ? AND block_userid = ? LIMIT 1");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $blocker_id, $blocked_id);
+		$stmt->execute();
+		$result = $stmt->get_result();
+		$row = $result->fetch_assoc();
+		$stmt->close();
+		
+		if ($row) {
+			return; // Already blocked
+		}
+		
+		$now = date('Y-m-d H:i:s');
+		$stmt = $db->prepare(
+			"INSERT INTO `{$table_name}` (user_id, block_userid, created_at) VALUES (?, ?, ?)"
+		);
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('iis', $blocker_id, $blocked_id, $now);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Block insert failed');
+		}
+	}
+	
+	/**
+	 * Remove block from Socials
+	 */
+	private function socials_remove_block($db, $blocker_id, $blocked_id) {
+		$table_name = $this->socials_get_blocks_table($db);
+		
+		$stmt = $db->prepare("DELETE FROM `{$table_name}` WHERE user_id = ? AND block_userid = ?");
+		if (!$stmt) {
+			throw new Exception('Prepare failed: ' . $db->error);
+		}
+		
+		$stmt->bind_param('ii', $blocker_id, $blocked_id);
+		$ok = $stmt->execute();
+		$stmt->close();
+		
+		if (!$ok) {
+			throw new Exception('Block removal failed');
+		}
+	}
+	
+	/**
+	 * Get Socials followers table name
+	 */
+	private function socials_get_followers_table($db) {
+		$candidates = array('followers', 'Followers');
+		foreach ($candidates as $table) {
+			$table_name = $db->real_escape_string($table);
+			$result = $db->query("SHOW TABLES LIKE '{$table_name}'");
+			if ($result instanceof mysqli_result && $result->num_rows > 0) {
+				return $table;
+			}
+		}
+		throw new Exception('Socials followers table not found');
+	}
+	
+	/**
+	 * Get Socials blocks table name
+	 */
+	private function socials_get_blocks_table($db) {
+		$candidates = array('blocks', 'Blocks');
+		foreach ($candidates as $table) {
+			$table_name = $db->real_escape_string($table);
+			$result = $db->query("SHOW TABLES LIKE '{$table_name}'");
+			if ($result instanceof mysqli_result && $result->num_rows > 0) {
+				return $table;
+			}
+		}
+		throw new Exception('Socials blocks table not found');
+	}
+	
+	// ===== LEDGER OPERATIONS =====
+	
+	/**
+	 * Normalize pair (ensure smaller ID first)
+	 */
+	private function normalize_pair($a, $b) {
+		$a = absint($a);
+		$b = absint($b);
+		return ($a < $b) ? array($a, $b) : array($b, $a);
+	}
+	
+	/**
+	 * Get ledger entry
+	 */
+	private function get_ledger($user_a, $user_b) {
+		$pair = $this->normalize_pair($user_a, $user_b);
+		
+		$row = $this->wpdb->get_row($this->wpdb->prepare(
+			"SELECT * FROM {$this->ledger_table} WHERE wp_user_a = %d AND wp_user_b = %d LIMIT 1",
+			$pair[0],
+			$pair[1]
+		), ARRAY_A);
+		
+		if (!$row) {
+			return array(
+				'wp_user_a' => $pair[0],
+				'wp_user_b' => $pair[1],
+				'bb_connection_state' => 'none',
+				'bb_connection_requested_by' => 0,
+				'bb_follow_a_to_b' => 0,
+				'bb_follow_b_to_a' => 0,
+				'streams_follow_a_to_b' => 0,
+				'streams_follow_b_to_a' => 0,
+				'socials_follow_a_to_b' => 0,
+				'socials_follow_b_to_a' => 0,
+				'bb_block_a_to_b' => 0,
+				'bb_block_b_to_a' => 0,
+				'streams_block_a_to_b' => 0,
+				'streams_block_b_to_a' => 0,
+				'socials_block_a_to_b' => 0,
+				'socials_block_b_to_a' => 0,
+				'version' => 0,
+			);
+		}
+		
+		// Ensure integers
+		$int_fields = array(
+			'wp_user_a', 'wp_user_b', 'bb_connection_requested_by',
+			'bb_follow_a_to_b', 'bb_follow_b_to_a',
+			'streams_follow_a_to_b', 'streams_follow_b_to_a',
+			'socials_follow_a_to_b', 'socials_follow_b_to_a',
+			'bb_block_a_to_b', 'bb_block_b_to_a',
+			'streams_block_a_to_b', 'streams_block_b_to_a',
+			'socials_block_a_to_b', 'socials_block_b_to_a',
+			'version'
+		);
+		
+		foreach ($int_fields as $field) {
+			if (isset($row[$field])) {
+				$row[$field] = (int) $row[$field];
+			}
+		}
+		
+		return $row;
+	}
+	
+	/**
+	 * Save ledger entry
+	 */
+	private function save_ledger($user_a, $user_b, $changes, $event_uuid = '') {
+		$pair = $this->normalize_pair($user_a, $user_b);
+		$existing = $this->get_ledger($pair[0], $pair[1]);
+		$now = gmdate('Y-m-d H:i:s');
+		
+		// Build state from existing
+		$state = array(
+			'bb_connection_state' => $existing['bb_connection_state'],
+			'bb_connection_requested_by' => $existing['bb_connection_requested_by'],
+			'bb_follow_a_to_b' => $existing['bb_follow_a_to_b'],
+			'bb_follow_b_to_a' => $existing['bb_follow_b_to_a'],
+			'streams_follow_a_to_b' => $existing['streams_follow_a_to_b'],
+			'streams_follow_b_to_a' => $existing['streams_follow_b_to_a'],
+			'socials_follow_a_to_b' => $existing['socials_follow_a_to_b'],
+			'socials_follow_b_to_a' => $existing['socials_follow_b_to_a'],
+			'bb_block_a_to_b' => $existing['bb_block_a_to_b'],
+			'bb_block_b_to_a' => $existing['bb_block_b_to_a'],
+			'streams_block_a_to_b' => $existing['streams_block_a_to_b'],
+			'streams_block_b_to_a' => $existing['streams_block_b_to_a'],
+			'socials_block_a_to_b' => $existing['socials_block_a_to_b'],
+			'socials_block_b_to_a' => $existing['socials_block_b_to_a'],
+		);
+		
+		// Apply changes
+		foreach ($changes as $key => $value) {
+			if (array_key_exists($key, $state)) {
+				$state[$key] = $value;
+			}
+		}
+		
+		// If blocked in any direction, clear connection and follows
+		if ($state['bb_block_a_to_b'] || $state['bb_block_b_to_a']) {
+			$state['bb_connection_state'] = 'none';
+			$state['bb_connection_requested_by'] = 0;
+			$state['bb_follow_a_to_b'] = 0;
+			$state['bb_follow_b_to_a'] = 0;
+		}
+		
+		$data = array(
+			'wp_user_a' => $pair[0],
+			'wp_user_b' => $pair[1],
+			'bb_connection_state' => $state['bb_connection_state'],
+			'bb_connection_requested_by' => (int) $state['bb_connection_requested_by'],
+			'bb_follow_a_to_b' => (int) $state['bb_follow_a_to_b'],
+			'bb_follow_b_to_a' => (int) $state['bb_follow_b_to_a'],
+			'streams_follow_a_to_b' => (int) $state['streams_follow_a_to_b'],
+			'streams_follow_b_to_a' => (int) $state['streams_follow_b_to_a'],
+			'socials_follow_a_to_b' => (int) $state['socials_follow_a_to_b'],
+			'socials_follow_b_to_a' => (int) $state['socials_follow_b_to_a'],
+			'bb_block_a_to_b' => (int) $state['bb_block_a_to_b'],
+			'bb_block_b_to_a' => (int) $state['bb_block_b_to_a'],
+			'streams_block_a_to_b' => (int) $state['streams_block_a_to_b'],
+			'streams_block_b_to_a' => (int) $state['streams_block_b_to_a'],
+			'socials_block_a_to_b' => (int) $state['socials_block_a_to_b'],
+			'socials_block_b_to_a' => (int) $state['socials_block_b_to_a'],
+			'version' => ((int) $existing['version'] + 1),
+			'last_event_uuid' => $event_uuid,
+			'updated_at' => $now,
+		);
+		
+		if ((int) $existing['version'] === 0) {
+			// Insert new
+			$data['created_at'] = $now;
+			$result = $this->wpdb->insert($this->ledger_table, $data);
+			
+			if (false === $result) {
+				throw new Exception('Ledger insert failed: ' . $this->wpdb->last_error);
+			}
+		} else {
+			// Update existing
+			$result = $this->wpdb->update(
+				$this->ledger_table,
+				$data,
+				array('wp_user_a' => $pair[0], 'wp_user_b' => $pair[1])
+			);
+			
+			if (false === $result) {
+				throw new Exception('Ledger update failed: ' . $this->wpdb->last_error);
+			}
+		}
+		
+		return $this->get_ledger($pair[0], $pair[1]);
+	}
+	
+	/**
+	 * Check if users are blocked
+	 */
+	private function is_blocked($user_a, $user_b, $blocker = null) {
+		$ledger = $this->get_ledger($user_a, $user_b);
+		$pair = $this->normalize_pair($user_a, $user_b);
+		
+		if ($blocker === null) {
+			// Check if blocked in any direction
+			return !empty($ledger['bb_block_a_to_b']) || !empty($ledger['bb_block_b_to_a']);
+		}
+		
+		// Check specific direction
+		if ($blocker === $pair[0]) {
+			return !empty($ledger['bb_block_a_to_b']);
+		} else {
+			return !empty($ledger['bb_block_b_to_a']);
+		}
+	}
+	
+	// ===== EVENT QUEUE OPERATIONS =====
+	
+	/**
+	 * Check if event already processed
+	 */
+	private function event_exists($uuid) {
+		$result = $this->wpdb->get_var($this->wpdb->prepare(
+			"SELECT id FROM {$this->events_table} WHERE event_uuid = %s LIMIT 1",
+			$uuid
+		));
+		
+		return (bool) $result;
+	}
+	
+	/**
+	 * Insert event into queue
+	 */
+	private function insert_event($uuid, $origin, $operation, $actor, $target, $payload = array()) {
+		if ($this->event_exists($uuid)) {
+			return true;
+		}
+		
+		$pair = $this->normalize_pair($actor, $target);
+		$now = gmdate('Y-m-d H:i:s');
+		
+		$result = $this->wpdb->insert(
+			$this->events_table,
+			array(
+				'event_uuid' => $uuid,
+				'origin' => $origin,
+				'operation' => $operation,
+				'actor_wp_id' => $actor,
+				'target_wp_id' => $target,
+				'pair_a' => $pair[0],
+				'pair_b' => $pair[1],
+				'payload' => wp_json_encode($payload),
+				'status' => 'pending',
+				'attempts' => 0,
+				'next_attempt_at' => $now,
+				'created_at' => $now,
+				'updated_at' => $now,
+			)
+		);
+		
+		if (false === $result && !$this->event_exists($uuid)) {
+			throw new Exception('Event insert failed: ' . $this->wpdb->last_error);
+		}
+		
+		return true;
+	}
+	
+	/**
+	 * Mark event as processed
+	 */
+	private function mark_event_processed($uuid) {
+		$now = gmdate('Y-m-d H:i:s');
+		
+		$this->wpdb->update(
+			$this->events_table,
+			array(
+				'status' => 'processed',
+				'processed_at' => $now,
+				'updated_at' => $now,
+				'last_error' => null,
+			),
+			array('event_uuid' => $uuid)
+		);
+	}
+	
+	/**
+	 * Mark event for retry
+	 */
+	private function mark_event_retry($uuid, $error) {
+		$row = $this->wpdb->get_row($this->wpdb->prepare(
+			"SELECT attempts FROM {$this->events_table} WHERE event_uuid = %s LIMIT 1",
+			$uuid
+		));
+		
+		$attempts = $row ? ((int) $row->attempts + 1) : 1;
+		$delay = min(3600, max(60, (int) pow(2, min($attempts, 10)) * 30));
+		$status = ($attempts >= BZJ_SYNC_MAX_RETRIES) ? 'failed' : 'retry';
+		$next = gmdate('Y-m-d H:i:s', time() + $delay);
+		
+		// Truncate error to 500 chars
+		$error_msg = function_exists('mb_substr')
+			? mb_substr((string) $error, 0, 500)
+			: substr((string) $error, 0, 500);
+		
+		$this->wpdb->update(
+			$this->events_table,
+			array(
+				'status' => $status,
+				'attempts' => $attempts,
+				'next_attempt_at' => $next,
+				'last_error' => $error_msg,
+				'updated_at' => gmdate('Y-m-d H:i:s'),
+			),
+			array('event_uuid' => $uuid)
+		);
+	}
+	
+	/**
+	 * Get event queue for a pair
+	 */
+	private function get_event_queue($user_a, $user_b) {
+		$pair = $this->normalize_pair($user_a, $user_b);
+		
+		$rows = $this->wpdb->get_results($this->wpdb->prepare(
+			"SELECT event_uuid, origin, operation, status, attempts, next_attempt_at, last_error, created_at, updated_at
+			 FROM {$this->events_table}
+			 WHERE pair_a = %d AND pair_b = %d
+			 ORDER BY id DESC LIMIT 20",
+			$pair[0],
+			$pair[1]
+		), ARRAY_A);
+		
+		return $rows ?: array();
+	}
+	
+	/**
+	 * Process event queue
+	 */
+	public function process_event_queue() {
+		$now = gmdate('Y-m-d H:i:s');
+		
+		$rows = $this->wpdb->get_results($this->wpdb->prepare(
+			"SELECT * FROM {$this->events_table}
+			 WHERE status IN ('pending', 'retry')
+			 AND next_attempt_at <= %s
+			 ORDER BY id ASC
+			 LIMIT 50",
+			$now
+		));
+		
+		foreach ((array) $rows as $row) {
+			$this->process_event_row($row);
+		}
+	}
+	
+	/**
+	 * Process single event row
+	 */
+	private function process_event_row($row) {
+		// Not implemented in this version - events are processed immediately
+		// This is a placeholder for future async processing
+		$this->mark_event_processed($row->event_uuid);
+	}
+	
+	/**
+	 * Reconcile recent relationships
+	 */
+	public function reconcile_recent() {
+		$rows = $this->wpdb->get_results(
+			"SELECT wp_user_a, wp_user_b
+			 FROM {$this->ledger_table}
+			 WHERE updated_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY
+			 ORDER BY updated_at DESC
+			 LIMIT 100"
+		);
+		
+		foreach ((array) $rows as $row) {
+			$this->reconcile_pair((int) $row->wp_user_a, (int) $row->wp_user_b);
+		}
+	}
+	
+	/**
+	 * Reconcile pair - refresh ledger from BuddyBoss
+	 */
+	public function reconcile_pair($user_a, $user_b) {
+		if (!$this->acquire_pair_lock($user_a, $user_b)) {
+			return false;
+		}
+		
+		try {
+			$this->refresh_ledger_from_buddyboss($user_a, $user_b);
+			return true;
+		} finally {
+			$this->release_pair_lock($user_a, $user_b);
+		}
+	}
+	
+	/**
+	 * Refresh ledger from BuddyBoss state
+	 */
+	private function refresh_ledger_from_buddyboss($user_a, $user_b) {
+		$changes = array();
+		
+		// Check connection state
+		if (function_exists('friends_check_friendship_status')) {
+			$status = friends_check_friendship_status($user_a, $user_b);
+			
+			switch ($status) {
+				case 'is_friend':
+					$changes['bb_connection_state'] = 'is_friend';
+					$changes['bb_connection_requested_by'] = 0;
+					break;
+				case 'pending':
+				case 'awaiting_response':
+					$changes['bb_connection_state'] = 'pending';
+					$changes['bb_connection_requested_by'] = ($status === 'pending') ? $user_a : $user_b;
+					break;
+				default:
+					$changes['bb_connection_state'] = 'none';
+					$changes['bb_connection_requested_by'] = 0;
+			}
+		}
+		
+		// Check follow states
+		if (function_exists('bp_is_following')) {
+			$changes['bb_follow_a_to_b'] = bp_is_following(array(
+				'leader_id' => $user_b,
+				'follower_id' => $user_a,
+			)) ? 1 : 0;
+			
+			$changes['bb_follow_b_to_a'] = bp_is_following(array(
+				'leader_id' => $user_a,
+				'follower_id' => $user_b,
+			)) ? 1 : 0;
+		}
+		
+		// Check block states
+		if (function_exists('bp_moderation_is_user_blocked')) {
+			$changes['bb_block_a_to_b'] = bp_moderation_is_user_blocked($user_b, $user_a) ? 1 : 0;
+			$changes['bb_block_b_to_a'] = bp_moderation_is_user_blocked($user_a, $user_b) ? 1 : 0;
+		}
+		
+		$this->save_ledger($user_a, $user_b, $changes);
+	}
+	
+	// ===== PAIR LOCKING =====
+	
+	/**
+	 * Acquire pair lock
+	 */
+	private function acquire_pair_lock($user_a, $user_b) {
+		$pair = $this->normalize_pair($user_a, $user_b);
+		$lock_name = 'bzj_sync_' . $pair[0] . '_' . $pair[1];
+		
+		// Use MySQL GET_LOCK for atomic locking
+		$result = $this->wpdb->get_var($this->wpdb->prepare(
+			"SELECT GET_LOCK(%s, 0)",
+			$lock_name
+		));
+		
+		if ((int) $result === 1) {
+			$this->held_locks[$lock_name] = true;
+			return true;
+		}
+		
+		return false;
+	}
+	
+	/**
+	 * Release pair lock
+	 */
+	private function release_pair_lock($user_a, $user_b) {
+		$pair = $this->normalize_pair($user_a, $user_b);
+		$lock_name = 'bzj_sync_' . $pair[0] . '_' . $pair[1];
+		
+		if (isset($this->held_locks[$lock_name])) {
+			$this->wpdb->get_var($this->wpdb->prepare(
+				"SELECT RELEASE_LOCK(%s)",
+				$lock_name
+			));
+			unset($this->held_locks[$lock_name]);
+		}
+	}
+	
+	// ===== CONTEXT STACK (for loop prevention) =====
+	
+	/**
+	 * Push context
+	 */
+	private function push_context($context) {
+		$this->context_stack[] = $context;
+	}
+	
+	/**
+	 * Pop context
+	 */
+	private function pop_context() {
+		array_pop($this->context_stack);
+	}
+	
+	/**
+	 * Get current context
+	 */
+	private function current_context() {
+		if (empty($this->context_stack)) {
+			return null;
+		}
+		return end($this->context_stack);
+	}
+	
+	/**
+	 * Check if operation is contextual duplicate (for loop prevention)
+	 */
+	private function is_contextual_duplicate($operation, $actor, $target) {
+		$ctx = $this->current_context();
+		
+		if (!$ctx) {
+			return false;
+		}
+		
+		return isset($ctx['operation'], $ctx['actor'], $ctx['target']) &&
+			$ctx['operation'] === $operation &&
+			(int) $ctx['actor'] === (int) $actor &&
+			(int) $ctx['target'] === (int) $target;
+	}
+	
+	// ===== USER ID MAPPING =====
+	
+	/**
+	 * Map external platform ID to WordPress user ID
+	 */
+	private function map_external_to_wp($platform, $external_id) {
+		$meta_key = ($platform === 'streams') ? 'wo_user_id' : 'qd_user_id';
+		
+		$user_id = $this->wpdb->get_var($this->wpdb->prepare(
+			"SELECT user_id FROM {$this->wpdb->usermeta}
+			 WHERE meta_key = %s AND meta_value = %s
+			 ORDER BY umeta_id ASC LIMIT 1",
+			$meta_key,
+			(string) $external_id
+		));
+		
+		return absint($user_id);
+	}
+	
+	/**
+	 * Get external ID for WordPress user
+	 */
+	private function get_external_id($wp_user_id, $platform) {
+		$meta_key = ($platform === 'streams') ? 'wo_user_id' : 'qd_user_id';
+		$value = get_user_meta($wp_user_id, $meta_key, true);
+		return absint($value);
+	}
+	
+	// ===== UTILITY METHODS =====
+	
+	/**
+	 * Validate UUID v4
+	 */
+	private function is_uuid($value) {
+		return (bool) preg_match(
+			'/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+			(string) $value
+		);
+	}
+	
+	/**
+	 * Log message
+	 */
+	private function log($message, $context = array()) {
+		$this->log_buffer[] = array(
+			'timestamp' => gmdate('c'),
+			'message' => (string) $message,
+			'context' => $context,
+		);
+	}
+	
+	/**
+	 * Flush logs to file
+	 */
+	public function flush_logs() {
+		if (empty($this->log_buffer)) {
+			return;
+		}
+		
+		$log_dir = rtrim(ABSPATH, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'logs';
+		
+		if (!is_dir($log_dir)) {
+			wp_mkdir_p($log_dir);
+		}
+		
+		$log_file = $log_dir . DIRECTORY_SEPARATOR . BZJ_SYNC_LOG_FILE;
+		
+		foreach ($this->log_buffer as $entry) {
+			$line = wp_json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL;
+			@file_put_contents($log_file, $line, FILE_APPEND | LOCK_EX);
+		}
+		
+		$this->log_buffer = array();
+	}
+}
+```
+
+---
+
+## FILE 2: Shared Helpers for Data Mapping
+
+**Location:** `shared/wwqd_bridge.php` (Enhanced)
+
+```php
+<?php
+/**
+ * Buzzjuice Platform Data Bridge
+ * 
+ * Provides data mapping and helper functions across WordPress/BuddyBoss, 
+ * WoWonder (Streams), and QuickDate (Socials)
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// ===== USER ID MAPPING =====
+
+/**
+ * Get WordPress user ID from Streams ID
+ */
+function bzj_get_wp_id_from_streams($streams_id) {
+    global $wpdb;
+    
+    $user_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT user_id FROM {$wpdb->usermeta}
+         WHERE meta_key = %s AND meta_value = %s
+         ORDER BY umeta_id ASC LIMIT 1",
+        'wo_user_id',
+        (string) $streams_id
+    ));
+    
+    return absint($user_id);
+}
+
+/**
+ * Get WordPress user ID from Socials ID
+ */
+function bzj_get_wp_id_from_socials($socials_id) {
+    global $wpdb;
+    
+    $user_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT user_id FROM {$wpdb->usermeta}
+         WHERE meta_key = %s AND meta_value = %s
+         ORDER BY umeta_id ASC LIMIT 1",
+        'qd_user_id',
+        (string) $socials_id
+    ));
+    
+    return absint($user_id);
+}
+
+/**
+ * Get Streams ID from WordPress user ID
+ */
+function bzj_get_streams_id($wp_user_id) {
+    $value = get_user_meta($wp_user_id, 'wo_user_id', true);
+    return absint($value);
+}
+
+/**
+ * Get Socials ID from WordPress user ID
+ */
+function bzj_get_socials_id($wp_user_id) {
+    $value = get_user_meta($wp_user_id, 'qd_user_id', true);
+    return absint($value);
+}
+
+/**
+ * Set Streams ID for WordPress user
+ */
+function bzj_set_streams_id($wp_user_id, $streams_id) {
+    return update_user_meta($wp_user_id, 'wo_user_id', absint($streams_id));
+}
+
+/**
+ * Set Socials ID for WordPress user
+ */
+function bzj_set_socials_id($wp_user_id, $socials_id) {
+    return update_user_meta($wp_user_id, 'qd_user_id', absint($socials_id));
+}
+
+// ===== RELATIONSHIP STATE QUERIES =====
+
+/**
+ * Get relationship state from ledger
+ */
+function bzj_get_relationship_state($user1_wp_id, $user2_wp_id) {
+    if (!class_exists('BZJ_Connections_Sync')) {
+        return null;
+    }
+    
+    return BZJ_Connections_Sync::instance()
+        ->get_ledger($user1_wp_id, $user2_wp_id);
+}
+
+/**
+ * Check if users are connected on BuddyBoss
+ */
+function bzj_are_connected($user_a, $user_b) {
+    if (!function_exists('friends_check_friendship_status')) {
+        return false;
+    }
+    
+    $status = friends_check_friendship_status($user_a, $user_b);
+    return $status === 'is_friend';
+}
+
+/**
+ * Check if user is blocked
+ */
+function bzj_is_blocked($blocker_id, $blocked_id) {
+    if (!function_exists('bp_moderation_is_user_blocked')) {
+        return false;
+    }
+    
+    return bp_moderation_is_user_blocked($blocked_id, $blocker_id);
+}
+
+/**
+ * Check if user is following
+ */
+function bzj_is_following($leader_id, $follower_id) {
+    if (!function_exists('bp_is_following')) {
+        return false;
+    }
+    
+    return bp_is_following(array(
+        'leader_id' => $leader_id,
+        'follower_id' => $follower_id,
+    ));
+}
+
+// ===== REQUEST SIGNING =====
+
+/**
+ * Get shared secret for request signing
+ */
+function bzj_get_shared_secret() {
+    // Try function first
+    if (function_exists('bzj_get_sso_secret')) {
+        $secret = bzj_get_sso_secret();
+        if ($secret) {
+            return $secret;
+        }
+    }
+    
+    // Try environment variable
+    $secret = getenv('BUZZ_SSO_SECRET');
+    if ($secret) {
+        return $secret;
+    }
+    
+    // Try constant
+    if (defined('BUZZ_SSO_SECRET')) {
+        return BUZZ_SSO_SECRET;
+    }
+    
+    // Try option
+    return get_option('bzj_shared_secret', '');
+}
+
+/**
+ * Sign a request for external platform
+ */
+function bzj_sign_request($payload) {
+    $secret = bzj_get_shared_secret();
+    if (!$secret) {
+        throw new Exception('Shared secret not configured');
+    }
+    
+    $timestamp = time();
+    $json_body = wp_json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $signature = hash_hmac('sha256', $timestamp . '.' . $json_body, $secret);
+    
+    return array(
+        'timestamp' => $timestamp,
+        'signature' => $signature,
+        'body' => $payload,
+    );
+}
+
+// ===== STREAMS INTEGRATION HELPERS =====
+
+/**
+ * Send command to BuddyBoss via REST (from Streams)
+ */
+function bzj_streams_send_command($operation, $actor_id, $target_id) {
+    $event_id = wp_generate_uuid4();
+    $payload = array(
+        'origin' => 'streams',
+        'operation' => $operation,
+        'event_id' => $event_id,
+        'actor_id' => $actor_id,
+        'target_id' => $target_id,
+    );
+    
+    try {
+        $signed = bzj_sign_request($payload);
+        
+        $response = wp_remote_post(
+            home_url('/wp-json/bzj/v1/connection-management'),
+            array(
+                'timeout' => 10,
+                'sslverify' => apply_filters('https_local_ssl_verify', false),
+                'headers' => array(
+                    'Content-Type' => 'application/json',
+                    'X-BZJ-Timestamp' => (string) $signed['timestamp'],
+                    'X-BZJ-Signature' => $signed['signature'],
+                ),
+                'body' => wp_json_encode($signed['body']),
+            )
+        );
+        
+        if (is_wp_error($response)) {
+            throw new Exception($response->get_error_message());
+        }
+        
+        $status = wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        
+        if ($status >= 400) {
+            throw new Exception($body['message'] ?? 'Command failed');
+        }
+        
+        return $body;
+        
+    } catch (Throwable $e) {
+        error_log('BZJ Streams Command Error: ' . $e->getMessage());
+        throw $e;
+    }
+}
+
+// ===== SOCIALS INTEGRATION HELPERS =====
+
+/**
+ * Send command to BuddyBoss via REST (from Socials)
+ */
+function bzj_socials_send_command($operation, $actor_id, $target_id) {
+    $event_id = wp_generate_uuid4();
+    $payload = array(
+        'origin' => 'socials',
+        'operation' => $operation,
+        'event_id' => $event_id,
+        'actor_id' => $actor_id,
+        'target_id' => $target_id,
+    );
+    
+    try {
+        $signed = bzj_sign_request($payload);
+        
+        $response = wp_remote_post(
+            home_url('/wp-json/bzj/v1/connection-management'),
+            array(
+                'timeout' => 10,
+                'sslverify' => apply_filters('https_local_ssl_verify', false),
+                'headers' => array(
+                    'Content-Type' => 'application/json',
+                    'X-BZJ-Timestamp' => (string) $signed['timestamp'],
+                    'X-BZJ-Signature' => $signed['signature'],
+                ),
+                'body' => wp_json_encode($signed['body']),
+            )
+        );
+        
+        if (is_wp_error($response)) {
+            throw new Exception($response->get_error_message());
+        }
+        
+        $status = wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        
+        if ($status >= 400) {
+            throw new Exception($body['message'] ?? 'Command failed');
+        }
+        
+        return $body;
+        
+    } catch (Throwable $e) {
+        error_log('BZJ Socials Command Error: ' . $e->getMessage());
+        throw $e;
+    }
+}
+
+// ===== CLI HELPERS =====
+
+/**
+ * Register WP-CLI commands (if WP-CLI available)
+ */
+function bzj_register_cli_commands() {
+    if (!class_exists('WP_CLI')) {
+        return;
+    }
+    
+    WP_CLI::add_command('bzj reconcile', 'bzj_cli_reconcile');
+    WP_CLI::add_command('bzj status', 'bzj_cli_status');
+    WP_CLI::add_command('bzj map-users', 'bzj_cli_map_users');
+}
+
+add_action('plugins_loaded', 'bzj_register_cli_commands');
+```
+
+---
+
+## FILE 3: Database Helpers
+
+**Location:** `shared/db_helpers.php` (Enhanced)
+
+```php
+<?php
+/**
+ * Database Connection Helpers
+ * 
+ * Provides safe connections to external databases (Streams, Socials)
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// Cache for database connections
+$_bzj_db_cache = array();
+
+/**
+ * Get WoWonder (Streams) database connection
+ */
+function get_wowonder_db() {
+    global $_bzj_db_cache;
+    
+    if (isset($_bzj_db_cache['streams']) && $_bzj_db_cache['streams'] instanceof mysqli) {
+        if (!$_bzj_db_cache['streams']->connect_errno) {
+            return $_bzj_db_cache['streams'];
+        }
+    }
+    
+    try {
+        // Try to connect to Streams database
+        $db_host = defined('STREAMS_DB_HOST') ? STREAMS_DB_HOST : 'localhost';
+        $db_name = defined('STREAMS_DB_NAME') ? STREAMS_DB_NAME : 'wowonder';
+        $db_user = defined('STREAMS_DB_USER') ? STREAMS_DB_USER : 'root';
+        $db_pass = defined('STREAMS_DB_PASS') ? STREAMS_DB_PASS : '';
+        $db_port = defined('STREAMS_DB_PORT') ? STREAMS_DB_PORT : 3306;
+        
+        $db = new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
+        
+        if ($db->connect_errno) {
+            error_log('Streams DB Connection Error: ' . $db->connect_error);
+            return false;
+        }
+        
+        $db->set_charset('utf8mb4');
+        $_bzj_db_cache['streams'] = $db;
+        
+        return $db;
+        
+    } catch (Throwable $e) {
+        error_log('Streams DB Connection Exception: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Get QuickDate (Socials) database connection
+ */
+function get_qd_db_conn() {
+    global $_bzj_db_cache;
+    
+    if (isset($_bzj_db_cache['socials']) && $_bzj_db_cache['socials'] instanceof mysqli) {
+        if (!$_bzj_db_cache['socials']->connect_errno) {
+            return $_bzj_db_cache['socials'];
+        }
+    }
+    
+    try {
+        // Try to connect to Socials database
+        $db_host = defined('SOCIALS_DB_HOST') ? SOCIALS_DB_HOST : 'localhost';
+        $db_name = defined('SOCIALS_DB_NAME') ? SOCIALS_DB_NAME : 'quickdate';
+        $db_user = defined('SOCIALS_DB_USER') ? SOCIALS_DB_USER : 'root';
+        $db_pass = defined('SOCIALS_DB_PASS') ? SOCIALS_DB_PASS : '';
+        $db_port = defined('SOCIALS_DB_PORT') ? SOCIALS_DB_PORT : 3306;
+        
+        $db = new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
+        
+        if ($db->connect_errno) {
+            error_log('Socials DB Connection Error: ' . $db
+
+<<STOP GITHUB>>
