@@ -1,0 +1,102 @@
+BUZZJUICE NETWORK — CONNECTION SYNCHRONIZATION v8.1.2
+IMPLEMENTATION PATCHES
+
+A. BuddyBoss / MU plugin
+1. Replace /wp-content/mu-plugins/bzj-connections-sync.php with:
+   bzj-connections-sync-v8.1.2.php
+2. Do not leave v8.1.0 or v8.1.1 copies in mu-plugins.
+3. This version keeps BuddyBoss as the canonical relationship authority.
+4. The endpoint is:
+   POST /wp-json/bzj/v6/connection-management
+5. Admin diagnostics:
+   GET /wp-json/bzj/v6/connection-management/diagnostics
+6. Logs:
+   /data/logs/bzj-connections-sync.log
+7. The plugin creates:
+   wp_bzj_relationships
+   wp_bzj_relationship_events
+   These are synchronization state/recovery records, not an application relationship authority.
+
+B. Streams
+1. Load streams-bzj-sync.php from the Streams bootstrap/functions context.
+2. After Wo_RegisterFollow() succeeds:
+   bzj_streams_sync_command('follow', $follower_id, $following_id)
+3. After Wo_DeleteFollow() succeeds:
+   bzj_streams_sync_command('unfollow', $follower_id, $following_id)
+4. After Wo_RegisterBlock() succeeds:
+   bzj_streams_sync_command('block', $logged_user_id, $user_id)
+5. After Wo_RemoveBlock() succeeds:
+   bzj_streams_sync_command('unblock', $logged_user_id, $user_id)
+
+C. Streams automatic follow acceptance
+Add immediately before Wo_IsFollowRequested():
+
+function Wo_AutoAcceptFollowRequest($following_id, $follower_id)
+{
+    global $sqlConnect;
+    $following_id=(int)$following_id;
+    $follower_id=(int)$follower_id;
+    if ($following_id<1 || $follower_id<1 || $following_id===$follower_id) return false;
+    $query=mysqli_query($sqlConnect,
+        "UPDATE ".T_FOLLOWERS."
+         SET active='1'
+         WHERE following_id={$following_id}
+           AND follower_id={$follower_id}
+           AND active='0'
+         LIMIT 1");
+    if (!$query) {
+        error_log('[BZJ Streams] Automatic follow acceptance failed: '.mysqli_error($sqlConnect));
+        return false;
+    }
+    return mysqli_affected_rows($sqlConnect)>0;
+}
+
+Replace Wo_IsFollowRequested() with the non-recursive implementation from the deployment response:
+- query active=0;
+- if no row, return false;
+- call Wo_AutoAcceptFollowRequest();
+- return true.
+
+Also keep ordinary new Streams follows at active=1:
+$active = 1;
+Do not use confirm_followers/connectivitySystem to create a user-facing approval flow in Streams.
+
+D. Socials
+Load socials-bzj-sync.php from QuickDate's loaded core/bootstrap file.
+At successful QuickDate boundaries call:
+add_friend()             -> connection_request
+approve_friend_request() -> connection_accept
+recipient decline       -> connection_reject
+requester cancellation  -> connection_withdraw
+unfriend                 -> connection_remove
+block                    -> block
+unblock                  -> unblock
+ordinary follow          -> follow
+ordinary unfollow        -> unfollow
+
+The local QuickDate followers row remains:
+following_id = recipient
+follower_id  = requester
+active       = 0 for a pending friend request.
+
+Do NOT route QuickDate add_friend through ordinary follow synchronization.
+
+E. wwqd_bridge.php
+Do not put relationship orchestration into wwqd_bridge.php.
+It remains a profile/identity bridge.
+If required, retain/add only ID mapping helpers using:
+wo_user_id
+qd_user_id
+The synchronization control plane belongs in bzj-connections-sync.php.
+
+F. Important semantics
+- Streams Friends System remains disabled.
+- BuddyBoss Connection is the canonical connection state.
+- BuddyBoss Follow is the canonical ordinary follow state.
+- BuddyBoss Block is dominant.
+- A block removes the BuddyBoss connection and both BuddyBoss follow directions, then projects the destructive state externally.
+- Unblock removes only the block. It never restores prior relationships automatically.
+- QuickDate uses one followers table for friend requests, accepted friends and follows; projection therefore derives the desired row state from the canonical BuddyBoss state and preserves ordinary follows where appropriate.
+- External platforms never write the BuddyBoss database directly.
+- External platforms call only the signed WordPress command endpoint.
+- The MU plugin writes Streams/Socials directly through shared/db_helpers.php.
