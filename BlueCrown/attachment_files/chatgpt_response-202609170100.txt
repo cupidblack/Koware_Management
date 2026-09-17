@@ -1,0 +1,1587 @@
+<<START CHATGPT>>
+
+I reviewed the integration proposal, the two GitHub responses, the v8.1.2 implementation, the BuddyBoss friendship functions, the shared database helpers, and the current QuickDate/WoWonder relationship code. The important conclusion is that **v8.1.2 should not be deployed unchanged**. The GitHub review correctly identified several architectural problems, but its proposed implementation also needs another correction around QuickDate's shared `followers` table.
+
+The verified BuddyBoss code confirms that the connection lifecycle hooks are available: requests use `friends_friendship_requested`, acceptance uses `friends_friendship_accepted`, rejection uses `friends_friendship_rejected`, withdrawal uses `friends_friendship_withdrawn`, and removal uses `friends_friendship_deleted`/`friends_friendship_post_delete`. ([GitHub][1])
+
+## 1. Final architecture
+
+The integration should now be treated as a **three-platform projection system with BuddyBoss as the authoritative control plane**:
+
+```text
+                         ┌──────────────────────────────┐
+                         │       WORDPRESS / BB         │
+                         │      SOURCE OF TRUTH         │
+                         │                              │
+                         │  Connections                 │
+                         │  Follows                     │
+                         │  Blocks                      │
+                         └──────────────┬───────────────┘
+                                        │
+                           BZJ Sync Control Plane
+                                        │
+                  ┌─────────────────────┴─────────────────────┐
+                  │                                           │
+          Direct DB projection                         Direct DB projection
+                  │                                           │
+                  ▼                                           ▼
+       ┌─────────────────────┐                    ┌─────────────────────┐
+       │  BUZZJUICE STREAMS  │                    │  BUZZJUICE SOCIALS  │
+       │      WoWonder       │                    │      QuickDate      │
+       │                     │                    │                     │
+       │ Follow              │                    │ Follow              │
+       │ Block               │                    │ Friend request      │
+       │                     │                    │ Friendship          │
+       └─────────────────────┘                    │ Block               │
+                                                 └─────────────────────┘
+```
+
+The current `db_helpers.php` confirms that the WordPress, QuickDate and WoWonder databases can be opened directly from the shared helper layer. It also confirms the relevant WordPress usermeta mapping fields. ([GitHub][2])
+
+The Streams friends system remains **disabled**. Consequently:
+
+* Streams `followers` = actual Streams follow relationship.
+* QuickDate friend = BuddyBoss connection.
+* BuddyBoss follow = Streams/QuickDate follow.
+* QuickDate follow must **never** be interpreted as a BuddyBoss connection.
+* QuickDate friend must **never** create a Streams follow merely because it is a friend.
+
+That correction agrees with the strongest part of the GitHub review. ([GitHub][3])
+
+---
+
+# 2. Critical correction to v8.1.2
+
+There is one particularly important problem that must be fixed before using the previous plugin.
+
+The current QuickDate implementation uses the `followers` table for both:
+
+```text
+ordinary follow
+        AND
+friend request / friendship
+```
+
+The actual QuickDate code confirms this. `Wo_RegisterFollow()` inserts:
+
+```text
+following_id
+follower_id
+active
+created_at
+```
+
+into `followers`; `active=0` represents a pending request and `active=1` represents an active relationship. 
+
+QuickDate's `add_friend()` ultimately calls `Wo_RegisterFollow()`, while its accept/reject routines operate on the same `followers` row. 
+
+Therefore, this is **not safe**:
+
+```php
+if ($friendship_is_connected) {
+    $active = 1;
+} elseif ($friendship_is_pending) {
+    $active = 0;
+} else {
+    $active = $ordinary_follow;
+}
+```
+
+because an ordinary follow can already occupy the same directional row.
+
+### Example
+
+A already follows B:
+
+```text
+followers
+following_id = B
+follower_id  = A
+active       = 1
+```
+
+A subsequently sends B a QuickDate/BuddyBoss friend request.
+
+Changing the existing row to:
+
+```text
+active = 0
+```
+
+would turn the ordinary follow into a friend request.
+
+Likewise, deleting the row when a friend request is withdrawn could accidentally delete a legitimate ordinary follow.
+
+**Therefore v8.1.3 must preserve the pre-existing ordinary follow state separately from the QuickDate friend-request projection.**
+
+This is the most important additional correction to the previous GitHub implementation.
+
+---
+
+# 3. Final relationship rules
+
+## 3.1 BuddyBoss connection
+
+| User action  | BuddyBoss          | Streams        | Socials                           |
+| ------------ | ------------------ | -------------- | --------------------------------- |
+| A requests B | Pending            | No change      | Friend-request projection         |
+| B accepts    | Connected          | No change      | Friend projection accepted        |
+| A withdraws  | Removed            | No change      | Friend-request projection removed |
+| B rejects    | Removed            | No change      | Friend-request projection removed |
+| A/B unfriend | Removed            | No change      | Friend projection removed         |
+| Block        | Connection removed | Follow removed | Friend/follow projection removed  |
+| Unblock      | Block removed      | Block removed  | Block removed                     |
+
+The BuddyBoss functions themselves confirm the lifecycle. `friends_add_friend()` creates the pending friendship and fires the request hook; `friends_accept_friendship()` accepts it and fires the accepted hook; `friends_reject_friendship()` fires the rejected hook; `friends_withdraw_friendship()` fires the withdrawal hook; and `friends_remove_friend()` fires deletion hooks. ([GitHub][1])
+
+---
+
+# 4. Final follow rules
+
+A follow is directional.
+
+If A follows B:
+
+```text
+BuddyBoss:
+A → B follow
+
+Streams:
+A → B follow
+
+Socials:
+A → B follow
+```
+
+If A unfollows B:
+
+```text
+BuddyBoss:
+A → B follow removed
+
+Streams:
+A → B follow removed
+
+Socials:
+A → B follow removed
+```
+
+A follow must **not** become a friendship.
+
+This is particularly important because the Streams database implementation uses:
+
+```text
+following_id = B
+follower_id  = A
+active       = 1
+```
+
+for A → B. 
+
+---
+
+# 5. Final friend projection rules
+
+QuickDate friend relationships are now explicitly treated as a **projection of BuddyBoss connections**.
+
+### BuddyBoss → QuickDate
+
+```text
+BB request
+    ↓
+QD pending friend request
+
+BB accept
+    ↓
+QD active friendship
+
+BB reject/withdraw
+    ↓
+QD pending friend request removed
+
+BB unfriend
+    ↓
+QD friendship removed
+```
+
+But the ordinary QuickDate follow must be preserved independently.
+
+Therefore the synchronization ledger must remember:
+
+```text
+qd_friend_projection
+qd_friend_pending
+qd_follow
+```
+
+conceptually separately, even though QuickDate itself stores the directional relationship in the same `followers` table.
+
+---
+
+# 6. Blocking becomes the dominant operation
+
+Blocking should be treated differently from ordinary relationship removal.
+
+When A blocks B:
+
+```text
+1. BuddyBoss creates block
+2. BuddyBoss connection A↔B is removed
+3. BuddyBoss A→B follow is removed
+4. BuddyBoss B→A follow is removed
+5. Streams A→B follow removed
+6. Streams B→A follow removed
+7. Streams A→B block created
+8. Socials A→B follow removed
+9. Socials B→A follow removed
+10. Socials friend projection removed
+11. Socials A→B block created
+```
+
+The previous GitHub response correctly identified blocking as a dominant/destructive relationship state. ([GitHub][3])
+
+### Unblocking
+
+Unblocking does **only this**:
+
+```text
+BuddyBoss block removed
+Streams block removed
+Socials block removed
+```
+
+It does **not** restore:
+
+* friendship
+* previous follow
+* previous friend request
+
+This prevents stale relationships from silently reappearing.
+
+---
+
+# 7. BuddyBoss restrictions must remain authoritative
+
+This is another change I would make to the previous implementation.
+
+The custom REST endpoint must **not become an alternative friendship-policy engine**.
+
+BuddyBoss currently has its own rules controlling who may send connection requests. Those restrictions must continue to apply.
+
+Therefore:
+
+### When the action originates in BuddyBoss
+
+Use the normal BuddyBoss functions/hooks.
+
+### When the action originates externally
+
+The synchronization endpoint should invoke the BuddyBoss relationship function **only after performing the same relevant BuddyBoss relationship eligibility checks**.
+
+The endpoint should not simply execute:
+
+```php
+friends_add_friend($actor, $target);
+```
+
+blindly.
+
+The connection-management endpoint is a **bridge into BuddyBoss**, not a mechanism for bypassing BuddyBoss.
+
+The existing BuddyBoss REST friends endpoint should also remain the preferred public BuddyBoss interface where it can perform the required operation without bypassing existing permissions. The repository contains a dedicated `BP_REST_Friends_Endpoint`, confirming that BuddyBoss already has a REST relationship layer. ([GitHub][4])
+
+---
+
+# 8. Revised control-plane design
+
+The previous `bzj-connections-sync-v8.1.2.php` has a useful foundation:
+
+* pair locking
+* event UUIDs
+* recovery queue
+* database error handling
+* direct external DB projection
+* usermeta mapping
+* scheduled recovery
+
+Those ideas should remain.
+
+However, the implementation should become:
+
+```text
+                   External event
+                         │
+                         ▼
+              signed connection-management
+                         │
+                         ▼
+                Validate + authenticate
+                         │
+                         ▼
+                 Acquire pair lock
+                         │
+                         ▼
+             Read authoritative BB state
+                         │
+                         ▼
+              Apply requested BB action
+                         │
+                         ▼
+              BuddyBoss fires lifecycle hook
+                         │
+                         ▼
+              BZJ sync engine receives hook
+                         │
+                         ▼
+             Project current BB state
+              ┌──────────┴──────────┐
+              ▼                     ▼
+          WoWonder              QuickDate
+```
+
+This avoids the dangerous situation where:
+
+```text
+Streams → BuddyBoss
+        → Streams again
+        → Socials
+        → BuddyBoss again
+        → ...
+```
+
+causes recursive loops.
+
+---
+
+# 9. Idempotency
+
+Every external request should carry:
+
+```text
+event_uuid
+timestamp
+origin
+operation
+actor
+target
+signature
+```
+
+For example:
+
+```json
+{
+  "event_uuid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "origin": "streams",
+  "operation": "follow",
+  "actor": 123,
+  "target": 456,
+  "timestamp": 1790123456
+}
+```
+
+The signature should be:
+
+```text
+HMAC-SHA256(
+    timestamp + "." + raw_json_body,
+    BUZZ_SSO_SECRET
+)
+```
+
+The WordPress endpoint verifies:
+
+1. secret exists;
+2. timestamp is within the permitted window;
+3. event UUID is valid;
+4. event UUID has not already been processed;
+5. actor and target are valid mapped users;
+6. operation is permitted;
+7. pair lock is acquired.
+
+This is safer than placing WordPress usernames/passwords inside the external platforms.
+
+---
+
+# 10. REST endpoint
+
+The canonical endpoint remains:
+
+```text
+/wp-json/bzj/v6/connection-management
+```
+
+not:
+
+```text
+/wp-json/bzj/v6/relationship
+```
+
+The latter is unnecessarily broad and could conflict with a future general relationship API.
+
+The endpoint is intended for:
+
+```text
+Streams → WordPress
+Socials → WordPress
+```
+
+It is **not** the normal path for:
+
+```text
+BuddyBoss → Streams
+BuddyBoss → Socials
+```
+
+Those use the BuddyBoss hooks directly.
+
+---
+
+# 11. Database strategy
+
+The shared database helper is suitable for this architecture.
+
+It provides:
+
+```php
+get_wp_db_conn()
+get_qd_db_conn()
+get_wowonder_db()
+```
+
+and the database credentials for all three systems. ([GitHub][2])
+
+The integration should therefore **not** use:
+
+```text
+WoWonder API
+QuickDate API
+WordPress API for internal BuddyBoss → external projections
+```
+
+for normal synchronization.
+
+Direct external DB writes are appropriate here.
+
+---
+
+# 12. Logging and recovery
+
+The primary operational log should be:
+
+```text
+/data/logs/bzj-connections-sync.log
+```
+
+Each entry should include:
+
+```text
+timestamp
+event_uuid
+origin
+operation
+actor_wp_id
+target_wp_id
+streams_actor_id
+streams_target_id
+socials_actor_id
+socials_target_id
+before_state
+after_state
+database
+SQL operation
+affected_rows
+success/failure
+error
+```
+
+The GitHub response correctly recommended this file-based operational logging. ([GitHub][5])
+
+### One exception to the "no tables" preference
+
+A small WordPress recovery queue is justified.
+
+It is **not an audit/logging table**.
+
+It exists only to make an unsuccessful cross-database operation recoverable.
+
+The previous v8.1.2 design already distinguished:
+
+```text
+relationship ledger
+relationship events
+```
+
+but I would simplify this.
+
+### Recommended
+
+```text
+wp_bzj_relationship_events
+```
+
+only.
+
+Do **not** create a separate permanent relationship ledger unless later reconciliation requirements prove it necessary.
+
+The event queue can contain:
+
+```text
+event_uuid
+origin
+operation
+actor_wp_id
+target_wp_id
+payload
+status
+attempts
+next_attempt_at
+last_error
+processed_at
+created_at
+updated_at
+```
+
+This gives the integration reliable recovery without creating a second authoritative relationship database.
+
+---
+
+# 13. Pair locking
+
+The pair lock from v8.1.2 should remain.
+
+For users 25 and 103:
+
+```text
+bzj_pair_25_103
+```
+
+Both:
+
+```text
+25 → 103
+103 → 25
+```
+
+must resolve to the same lock.
+
+This prevents:
+
+```text
+A follows B
+A unfollows B
+```
+
+from executing concurrently and leaving the projections in an indeterminate state.
+
+---
+
+# 14. Mapping
+
+The authoritative mapping remains:
+
+```text
+wp_usermeta
+    wo_user_id → WoWonder user ID
+    qd_user_id → QuickDate user ID
+```
+
+The plugin must never assume:
+
+```text
+WP ID == Streams ID
+WP ID == Socials ID
+Streams ID == Socials ID
+```
+
+Every operation must resolve:
+
+```text
+WP actor
+WP target
+     ↓
+Streams actor/target
+Socials actor/target
+```
+
+before writing to either external database.
+
+---
+
+# 15. WoWonder Streams changes
+
+The existing Streams functions confirm that follow relationships are stored in:
+
+```text
+followers
+```
+
+and blocks in:
+
+```text
+blocks
+```
+
+The important point is that the current Streams implementation already has no active friend network to synchronize. 
+
+## 15.1 `Wo_RegisterFollow()`
+
+The synchronization version should create:
+
+```text
+active = 1
+```
+
+for a normal follow.
+
+Because the Streams Friends System is disabled, the integration should **not** deliberately create `active=0` friend-style requests.
+
+---
+
+# 16. Required Streams `Wo_IsFollowRequested()` change
+
+There is a subtle problem with the requested modification.
+
+The current function merely detects an `active=0` row. 
+
+The requested behavior is to automatically accept it.
+
+However, simply putting:
+
+```php
+Wo_AcceptFollowRequest(...)
+```
+
+inside:
+
+```php
+Wo_IsFollowRequested()
+```
+
+would create recursion:
+
+```text
+Wo_IsFollowRequested()
+    ↓
+Wo_AcceptFollowRequest()
+    ↓
+Wo_IsFollowRequested()
+    ↓
+Wo_AcceptFollowRequest()
+    ↓
+...
+```
+
+The GitHub response correctly identified this danger. ([GitHub][3])
+
+### Correct implementation
+
+Do **not** call `Wo_AcceptFollowRequest()` from `Wo_IsFollowRequested()`.
+
+Instead, change `Wo_IsFollowRequested()` so that it directly promotes the pending row:
+
+```php
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $conn;
+
+    if (!isset($following_id) || empty($following_id) || !is_numeric($following_id) || $following_id < 1) {
+        return false;
+    }
+
+    if (!isset($follower_id) || empty($follower_id) || !is_numeric($follower_id) || $follower_id < 1) {
+        return false;
+    }
+
+    $following_id = Secure($following_id);
+    $follower_id  = Secure($follower_id);
+
+    $query = "
+        SELECT `id`
+        FROM `followers`
+        WHERE `follower_id` = {$following_id}
+          AND `following_id` = {$follower_id}
+          AND `active` = '0'
+        LIMIT 1
+    ";
+
+    $sql_query = mysqli_query($conn, $query);
+
+    if (!$sql_query) {
+        return false;
+    }
+
+    if (mysqli_num_rows($sql_query) === 0) {
+        return false;
+    }
+
+    /*
+     * Streams has Friends disabled.
+     *
+     * Therefore a pending follow request is automatically converted
+     * into an active follow. Do this directly rather than calling
+     * Wo_AcceptFollowRequest(), which itself calls this function.
+     */
+    $update = mysqli_query(
+        $conn,
+        "
+        UPDATE `followers`
+        SET `active` = '1'
+        WHERE `follower_id` = {$following_id}
+          AND `following_id` = {$follower_id}
+          AND `active` = '0'
+        LIMIT 1
+        "
+    );
+
+    if (!$update) {
+        return false;
+    }
+
+    return true;
+}
+```
+
+But there is an additional required change.
+
+`Wo_AcceptFollowRequest()` currently expects `Wo_IsFollowRequested()` to leave the request pending and then performs its own `UPDATE`. 
+
+Therefore, after implementing automatic acceptance, **`Wo_AcceptFollowRequest()` must no longer be used as the normal acceptance path for Streams**.
+
+Its callers should either be removed from the active Streams UI or converted into a simple idempotent:
+
+```text
+if already active → success
+```
+
+operation.
+
+This is preferable because Streams should no longer have a meaningful pending-follow state under the new architecture.
+
+---
+
+# 17. QuickDate friend-request implementation
+
+This is where the biggest refactoring is required.
+
+The existing QuickDate code demonstrates that:
+
+```text
+add_friend()
+    ↓
+Wo_RegisterFollow()
+    ↓
+followers
+```
+
+and:
+
+```text
+approve_friend_request()
+    ↓
+UPDATE followers SET active=1
+```
+
+while rejection deletes the pending row. 
+
+Therefore the synchronization layer must know whether a row is:
+
+```text
+ordinary follow
+```
+
+or:
+
+```text
+friend projection
+```
+
+before changing it.
+
+---
+
+# 18. Recommended QuickDate projection state
+
+I recommend adding these fields to the **WordPress recovery/relationship state**, not QuickDate:
+
+```text
+qd_friend_projection
+qd_friend_pending
+qd_follow_a_to_b
+qd_follow_b_to_a
+```
+
+This lets the sync engine reconstruct the correct QuickDate row.
+
+For example:
+
+### Ordinary follow
+
+```text
+qd_follow_a_to_b = 1
+qd_friend_projection = 0
+```
+
+QuickDate:
+
+```text
+A → B
+active = 1
+```
+
+### Friend request with no ordinary follow
+
+```text
+qd_follow_a_to_b = 0
+qd_friend_pending = 1
+```
+
+QuickDate:
+
+```text
+A → B
+active = 0
+```
+
+### Friend request while A already follows B
+
+```text
+qd_follow_a_to_b = 1
+qd_friend_pending = 1
+```
+
+The QuickDate `followers` row must remain:
+
+```text
+A → B
+active = 1
+```
+
+because QuickDate cannot simultaneously encode both states in that single directional row.
+
+The pending friend-request state is consequently maintained by the synchronization layer until the QuickDate UI can represent it independently.
+
+This is an important limitation of the current QuickDate schema, rather than something that the synchronization code should pretend does not exist.
+
+---
+
+# 19. What happens when an existing follow becomes a friend request?
+
+Example:
+
+```text
+A follows B
+```
+
+Results:
+
+```text
+BB follow A→B
+Streams follow A→B
+Socials follow A→B
+```
+
+Then:
+
+```text
+A sends B connection request
+```
+
+BuddyBoss becomes:
+
+```text
+pending
+```
+
+Socials already has:
+
+```text
+A → B active follow
+```
+
+Therefore **do not change it to active=0**.
+
+Instead:
+
+```text
+BB connection = pending
+Socials ordinary follow = active
+BZJ friend projection = pending
+```
+
+When B accepts:
+
+```text
+BB connection = connected
+Socials friendship = active
+Socials follow remains active
+Streams follow remains active if it independently existed
+```
+
+When B rejects:
+
+```text
+BB connection = removed
+Socials ordinary follow remains active
+```
+
+That is the correct projection model.
+
+---
+
+# 20. QuickDate unfriend
+
+If:
+
+```text
+A and B are friends
+```
+
+and A unfriends B:
+
+```text
+BuddyBoss connection removed
+```
+
+but if an independent ordinary follow still exists:
+
+```text
+QuickDate follow remains active
+Streams follow remains active
+```
+
+The previous proposal's blanket:
+
+```sql
+DELETE FROM followers
+```
+
+would incorrectly destroy that follow.
+
+Therefore **QuickDate unfriend must remove only the friend projection, not every directional follower row.**
+
+---
+
+# 21. QuickDate ordinary follow
+
+This remains independent.
+
+```text
+Socials A follows B
+        ↓
+WordPress endpoint
+        ↓
+BuddyBoss A follows B
+        ↓
+BuddyBoss hook
+        ↓
+Streams A follows B
+```
+
+The QuickDate follow itself remains active.
+
+When A stops following B:
+
+```text
+Socials follow removed
+        ↓
+WordPress endpoint
+        ↓
+BuddyBoss follow removed
+        ↓
+BuddyBoss hook
+        ↓
+Streams follow removed
+```
+
+The action must **not** unfriend A and B if they are still friends.
+
+That is another important correction to the original proposal.
+
+---
+
+# 22. Directionality matrix
+
+The final matrix should therefore be:
+
+| Source action           | BuddyBoss                    | Streams                 | Socials                      |
+| ----------------------- | ---------------------------- | ----------------------- | ---------------------------- |
+| BB connection request   | pending                      | —                       | friend request projection    |
+| BB connection accepted  | connected                    | —                       | friend projection accepted   |
+| BB connection rejected  | removed                      | —                       | friend request removed       |
+| BB connection withdrawn | removed                      | —                       | friend request removed       |
+| BB unfriend             | removed                      | —                       | friend projection removed    |
+| BB follow               | follow                       | follow                  | follow                       |
+| BB unfollow             | removed                      | removed                 | removed                      |
+| BB block                | block + relationship cleanup | block + follows removed | block + relationship cleanup |
+| BB unblock              | unblock                      | unblock                 | unblock                      |
+| Streams follow          | follow                       | follow                  | follow                       |
+| Streams unfollow        | unfollow                     | removed                 | removed                      |
+| Streams block           | block                        | block                   | block                        |
+| Streams unblock         | unblock                      | removed                 | unblock                      |
+| Socials friend request  | pending                      | —                       | pending                      |
+| Socials friend accept   | connected                    | —                       | accepted friend              |
+| Socials friend reject   | removed                      | —                       | request removed              |
+| Socials unfriend        | removed                      | —                       | friend removed               |
+| Socials follow          | follow                       | follow                  | follow                       |
+| Socials unfollow        | unfollow                     | removed                 | removed                      |
+| Socials block           | block                        | block                   | block                        |
+| Socials unblock         | unblock                      | unblock                 | unblock                      |
+
+The key distinction is the `—` for Streams friendship: **there is no Streams friendship projection because the Friends System is disabled.**
+
+---
+
+# 23. Required external bridge files
+
+The existing:
+
+```text
+streams-bzj-sync.php
+socials-bzj-sync.php
+```
+
+should remain very small.
+
+They should not contain relationship business logic.
+
+Their job is simply:
+
+```text
+detect local action
+      ↓
+construct event
+      ↓
+sign event
+      ↓
+POST /wp-json/bzj/v6/connection-management
+      ↓
+handle response
+```
+
+They should never independently decide:
+
+```text
+"this means friend"
+"this means follow"
+"this means unfriend"
+```
+
+beyond identifying the local action that actually occurred.
+
+---
+
+# 24. Event examples
+
+### Streams follow
+
+```json
+{
+  "event_uuid": "...",
+  "origin": "streams",
+  "operation": "follow",
+  "actor": 101,
+  "target": 205,
+  "timestamp": 1790123456
+}
+```
+
+### Socials friend acceptance
+
+```json
+{
+  "event_uuid": "...",
+  "origin": "socials",
+  "operation": "connection_accept",
+  "actor": 205,
+  "target": 101,
+  "timestamp": 1790123456
+}
+```
+
+The actor/target fields should always represent **WordPress IDs after resolution where possible**. If the originating system only knows its own ID, the endpoint should receive:
+
+```text
+platform
+external_actor_id
+external_target_id
+```
+
+and resolve them using:
+
+```text
+wo_user_id
+qd_user_id
+```
+
+before changing BuddyBoss.
+
+---
+
+# 25. Important change to v8.1.2 database schema
+
+I would **not carry the v8.1.2 `bzj_relationships` table forward unchanged**.
+
+The previous table tries to become a second relationship authority:
+
+```text
+connection_state
+follow_a_to_b
+follow_b_to_a
+block_a_to_b
+block_b_to_a
+```
+
+That creates an unnecessary third state store.
+
+Instead:
+
+```text
+BuddyBoss = relationship authority
+QuickDate = projection
+Streams = projection
+bzj event queue = recovery mechanism
+log = diagnostics
+```
+
+That is cleaner.
+
+---
+
+# 26. Revised plugin version
+
+The installed MU plugin should therefore become:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+with a new version identifier such as:
+
+```text
+8.2.0
+```
+
+rather than continuing to increment 8.1.x.
+
+The reason is that the architecture is being materially changed rather than merely patched.
+
+The old:
+
+```text
+bzj-connections-sync-v8.1.1.php
+bzj-connections-sync-v8.1.2.php
+```
+
+should **not** coexist in `mu-plugins`.
+
+Only:
+
+```text
+bzj-connections-sync.php
+```
+
+should be active.
+
+The GitHub review also explicitly warned against keeping old and new MU-plugin copies simultaneously. ([GitHub][3])
+
+---
+
+# 27. Revised implementation phases
+
+## Phase 0 — Backup
+
+Before changing anything:
+
+```text
+WordPress DB
+WoWonder DB
+QuickDate DB
+```
+
+must be backed up.
+
+Also preserve copies of:
+
+```text
+wwqd_bridge.php
+functions_one.php
+social/core.php
+social/requests/ajax/profile.php
+social/requests/ajax/useractions.php
+```
+
+and the existing MU plugin.
+
+---
+
+## Phase 1 — Deploy the new control plane
+
+Install:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+The plugin must:
+
+* load `db_helpers.php`;
+* resolve WP ↔ Streams ↔ Socials IDs;
+* register BuddyBoss lifecycle hooks;
+* register `/wp-json/bzj/v6/connection-management`;
+* authenticate signed external requests;
+* implement pair locking;
+* implement idempotency;
+* write operational logs;
+* queue failed external projections;
+* retry failed projections;
+* prevent recursion.
+
+---
+
+## Phase 2 — BuddyBoss → external projections
+
+First test:
+
+```text
+BB connection request
+BB connection accept
+BB connection reject
+BB connection withdraw
+BB unfriend
+```
+
+Then:
+
+```text
+BB follow
+BB unfollow
+```
+
+Then:
+
+```text
+BB block
+BB unblock
+```
+
+Only after these work should external-origin actions be enabled.
+
+---
+
+## Phase 3 — Streams bridge
+
+Modify the existing Streams code so that:
+
+```text
+follow
+unfollow
+block
+unblock
+```
+
+send signed events to WordPress.
+
+Do **not** modify the Streams Friends System.
+
+It remains disabled.
+
+---
+
+## Phase 4 — QuickDate bridge
+
+Modify:
+
+```text
+social/requests/ajax/profile.php
+social/requests/ajax/useractions.php
+social/core.php
+```
+
+so that:
+
+```text
+friend request
+friend accept
+friend reject
+friend unfriend
+follow
+unfollow
+block
+unblock
+```
+
+send signed events.
+
+The local QuickDate database operation must occur first where necessary, followed by synchronization to BuddyBoss.
+
+---
+
+# 28. `wwqd_bridge.php`
+
+I agree with the GitHub finding that `wwqd_bridge.php` should **not become the synchronization control plane**.
+
+The current bridge is large—over 2,000 lines—and contains compatibility/fallback logic. ([GitHub][6])
+
+The new architecture should use it only for:
+
+```text
+shared database helpers
+user mapping
+legacy compatibility functions
+```
+
+where appropriate.
+
+Do not introduce a new chain such as:
+
+```text
+BZJ Sync
+ → wwqd_bridge
+   → BZJ Sync
+     → wwqd_bridge
+```
+
+because that recreates the recursion problem.
+
+---
+
+# 29. Error handling
+
+Every external SQL operation should check:
+
+```php
+$stmt !== false
+```
+
+and then:
+
+```php
+$stmt->execute()
+```
+
+and then record:
+
+```php
+$stmt->affected_rows
+$stmt->error
+$db->error
+```
+
+The previous implementation was correct to strengthen database error reporting, and this should remain. The GitHub review specifically identified inconsistent surfacing of external DB failures. ([GitHub][3])
+
+---
+
+# 30. `created_at` correction
+
+The actual Streams database uses:
+
+```text
+created_at = UNIX timestamp
+```
+
+as demonstrated by the current `Wo_RegisterFollow()` implementation. 
+
+Therefore the synchronization code must **inspect the actual column type before deciding whether to insert**:
+
+```text
+time()
+```
+
+or:
+
+```text
+Y-m-d H:i:s
+```
+
+The generic v8.1.2 logic that tries `created_at` versus `time` based only on column name is directionally useful, but the value type should also be verified.
+
+This was another valid point in the GitHub review. ([GitHub][3])
+
+---
+
+# 31. Verification procedure
+
+After deployment, test with two dedicated test accounts:
+
+```text
+TEST-A
+TEST-B
+```
+
+Run every operation independently.
+
+### Test group A — Connections
+
+```text
+A → B request
+B accepts
+A unfriends
+A → B request
+B rejects
+A → B request
+A withdraws
+```
+
+Expected result:
+
+```text
+BuddyBoss = authoritative
+Socials = correct friend projection
+Streams = no friend record
+```
+
+### Test group B — Follow
+
+```text
+A follows B
+A unfollows B
+B follows A
+B unfollows A
+```
+
+Verify all three systems.
+
+### Test group C — Mixed relationship
+
+This is essential:
+
+```text
+A follows B
+A sends B connection request
+B rejects
+```
+
+Expected:
+
+```text
+follow remains
+friendship removed
+```
+
+Then:
+
+```text
+A follows B
+A sends B connection request
+B accepts
+A unfriends B
+```
+
+Expected:
+
+```text
+follow remains
+friendship removed
+```
+
+This specifically validates the QuickDate shared-table problem.
+
+### Test group D — Block
+
+Start with:
+
+```text
+A ↔ B friendship
+A → B follow
+B → A follow
+```
+
+Then block.
+
+Expected:
+
+```text
+all relationships removed
+A → B block exists everywhere
+```
+
+Unblock.
+
+Expected:
+
+```text
+only block disappears
+nothing automatically returns
+```
+
+---
+
+# 32. Final recommended file set
+
+The finished integration should consist of:
+
+```text
+WORDPRESS
+└── wp-content/
+    └── mu-plugins/
+        └── bzj-connections-sync.php
+
+SHARED
+└── shared/
+    ├── db_helpers.php
+    └── wwqd_bridge.php
+
+STREAMS
+└── streams/
+    └── assets/
+        └── includes/
+            └── functions_one.php
+
+SOCIALS
+└── social/
+    ├── core.php
+    └── requests/
+        └── ajax/
+            ├── profile.php
+            └── useractions.php
+
+LOGS
+└── data/
+    └── logs/
+        └── bzj-connections-sync.log
+```
+
+No WoWonder or QuickDate API is required for synchronization.
+
+---
+
+## 33. Bottom line
+
+The **concept** of the previous implementation was sound, but I would not install v8.1.2 as-is.
+
+The important corrections are:
+
+1. **BuddyBoss remains the source of truth.**
+2. **Streams Friends stays disabled.**
+3. **Streams follow ≠ friendship.**
+4. **QuickDate friend ≠ follow.**
+5. **QuickDate's shared `followers` table must not be blindly rewritten when friend state changes.**
+6. **An existing QuickDate follow must survive a pending friend request and an unfriend operation.**
+7. **Blocking removes relationship state and dominates other relationships.**
+8. **Unblocking never restores old relationships.**
+9. **`Wo_IsFollowRequested()` must not recursively call `Wo_AcceptFollowRequest()`.**
+10. **Streams pending follows should be automatically promoted to active follows because the Streams Friends system is disabled.**
+11. **External actions must enter BuddyBoss through one authenticated connection-management control plane.**
+12. **BuddyBoss-originating events must synchronize through hooks, not HTTP calls back into WordPress.**
+13. **Pair locking and idempotent event IDs are retained.**
+14. **Operational logging stays in `/data/logs`.**
+15. **A small recovery queue is justified; a second permanent relationship authority is not.**
+16. **The existing BuddyBoss connection restrictions must not be bypassed by the integration endpoint.**
+17. **The old v8.1.x MU-plugin copies must not remain active.**
+
+The actual repository code supports the critical lifecycle assumptions above, particularly the BuddyBoss hooks and the QuickDate/WoWonder `followers` semantics. ([GitHub][1])
+
+**I would therefore designate this architecture as `BZJ Connections Sync v8.2.0`, rather than applying another incremental v8.1.2 patch.**
+
+One caution before treating any generated PHP as production-ready: the repository-visible QuickDate schema is sufficiently clear about its `followers` behavior, but the exact deployed database schema should still be inspected on the live database before a final migration that depends on additional QuickDate tables/columns. The current source establishes the `followers` behavior; it does not justify inventing a separate QuickDate friendship table.
+
+[1]: https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-functions.php "buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/bp-friends-functions.php at main · cupidblack/buzzjuice.net · GitHub"
+[2]: https://github.com/cupidblack/buzzjuice.net/blob/main/shared/db_helpers.php "buzzjuice.net/shared/db_helpers.php at main · cupidblack/buzzjuice.net · GitHub"
+[3]: https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/attachment_files/github_response-202609170011.txt "Koware_Management/BlueCrown/attachment_files/github_response-202609170011.txt at main · cupidblack/Koware_Management · GitHub"
+[4]: https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/plugins/buddyboss-platform/bp-friends/classes/class-bp-rest-friends-endpoint.php "buzzjuice.net/wp-content/plugins/buddyboss-platform/bp-friends/classes/class-bp-rest-friends-endpoint.php at main · cupidblack/buzzjuice.net · GitHub"
+[5]: https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/attachment_files/github_response-202609170042.txt "Koware_Management/BlueCrown/attachment_files/github_response-202609170042.txt at main · cupidblack/Koware_Management · GitHub"
+[6]: https://github.com/cupidblack/buzzjuice.net/blob/main/shared/wwqd_bridge.php "buzzjuice.net/shared/wwqd_bridge.php at main · cupidblack/buzzjuice.net · GitHub"
+
+
+<<STOP CHATGPT>>
