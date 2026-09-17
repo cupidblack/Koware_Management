@@ -1,0 +1,748 @@
+# BUZZJUICE NETWORK — CONNECTION SYNCHRONIZATION v8.2.0
+## Integration Proposal + Implementation Plan + Surgical Patches
+
+### 1. Architecture
+
+BuddyBoss is the canonical/source-of-truth relationship system.
+
+There are three relationship classes:
+
+1. BuddyBoss Connection — canonical friendship/connection.
+2. BuddyBoss Follow — canonical ordinary follow.
+3. BuddyBoss Block — dominant moderation state.
+
+WoWonder Streams and QuickDate Socials are projections/adapters. They must never write BuddyBoss tables directly.
+
+External actions call only:
+
+`POST /wp-json/bzj/v6/connection-management`
+
+using HMAC headers:
+
+- `X-BZJ-Timestamp`
+- `X-BZJ-Signature`
+
+The signature is HMAC-SHA256 of:
+
+`timestamp + "." + raw JSON body`
+
+using `BUZZ_SSO_SECRET`.
+
+The endpoint is intentionally `/connection-management`, not `/relationship`.
+
+### 2. Relationship semantics
+
+#### BuddyBoss connection request
+
+A -> B connection request:
+
+- BuddyBoss: pending connection remains normal.
+- Socials: A -> B `followers` row exists with `active=0`.
+- Streams: no relationship row is created.
+
+Withdrawal or rejection:
+
+- BuddyBoss request is removed.
+- Socials pending row is removed.
+- Streams unchanged.
+
+Acceptance:
+
+- BuddyBoss: connected.
+- Socials: reciprocal A -> B and B -> A rows, both `active=1`.
+- Streams: unchanged unless an ordinary follow already exists.
+
+Connection removal:
+
+- BuddyBoss: connection removed.
+- Socials: remove only the friend-projection rows; an independent ordinary follow survives if BuddyBoss still has that ordinary follow.
+- Streams: independent ordinary follows survive.
+
+#### Ordinary follow
+
+A -> B follow:
+
+- BuddyBoss: A follows B.
+- Streams: A follows B, always `active=1`.
+- Socials: A follows B, `active=1`.
+
+A -> B unfollow:
+
+- remove the A -> B ordinary follow from BuddyBoss, Streams and Socials.
+
+Ordinary follows never become friend requests.
+
+#### Block
+
+A blocks B:
+
+1. BuddyBoss block becomes canonical.
+2. Existing BuddyBoss connection is removed.
+3. Both BuddyBoss follow directions are removed.
+4. Streams A -> B follow is removed.
+5. Streams A blocks B.
+6. Socials A -> B follow/friend direction is removed.
+7. Socials A blocks B.
+
+The block is directional: A blocking B does not imply B blocks A.
+
+Unblock:
+
+- removes only the corresponding block on all three platforms.
+- never restores a previous connection or follow automatically.
+
+This preserves BuddyBoss's existing request restrictions and moderation rules because external connection requests are created through BuddyBoss's own connection functions rather than direct DB inserts.
+
+### 3. Why the v8.1.2 design required refactoring
+
+The GitHub review correctly identified several important requirements:
+
+- the control plane belongs in the MU plugin;
+- `wwqd_bridge.php` should remain primarily an identity/profile bridge;
+- Streams and Socials should call the signed WordPress endpoint rather than manipulate WordPress directly;
+- ordinary Streams follows must be active immediately;
+- QuickDate's single `followers` table requires projection logic that distinguishes friend state from ordinary follow state;
+- blocking must proactively destroy existing connection/follow state;
+- unblock must not restore it;
+- every external DB write should be verified;
+- synchronization must be idempotent and protected against recursive hooks.
+
+The v8.2.0 implementation supplied with this document incorporates those principles.
+
+### 4. Files
+
+Deploy:
+
+1. `/wp-content/mu-plugins/bzj-connections-sync.php`
+   - use `bzj-connections-sync-v8.2.0.php`.
+
+2. `/streams/.../streams-bzj-sync.php`
+   - use `streams-bzj-sync-v8.2.0.php`.
+
+3. `/social/.../socials-bzj-sync.php`
+   - use `socials-bzj-sync-v8.2.0.php`.
+
+Do not leave older `bzj-connections-sync-v8.1.0.php` or `v8.1.1.php` copies active in `mu-plugins`.
+
+### 5. Database responsibility
+
+The synchronizer creates two WordPress tables:
+
+- `wp_bzj_relationships`
+- `wp_bzj_relationship_events`
+
+These are synchronization ledger/recovery records only. They are NOT the application relationship authority.
+
+The application relationship authority remains BuddyBoss.
+
+The event table is needed because a pure file log cannot safely provide durable idempotency/retry state. Human-readable diagnostics remain in:
+
+`/data/logs/bzj-connections-sync.log`
+
+Platform-specific adapter logs:
+
+- `/data/logs/bzj-streams-sync.log`
+- `/data/logs/bzj-socials-sync.log`
+
+### 6. Required Streams patches
+
+The current Streams source confirms:
+
+- `Wo_RegisterFollow()` currently calculates `$active` from `confirm_followers` and `connectivitySystem`;
+- `Wo_IsFollowRequested()` currently only reports pending rows;
+- `Wo_DeleteFollow()` removes a local row;
+- `Wo_RegisterBlock()` inserts `blocker/blocked`;
+- `Wo_RemoveBlock()` deletes `blocker/blocked`.
+
+Therefore the integration must:
+
+1. force integration-created ordinary follows to `active=1`;
+2. auto-accept any pending follow row encountered by `Wo_IsFollowRequested()`;
+3. call the adapter only after the local SQL operation succeeds.
+
+#### 6.1 Add this helper immediately before `Wo_IsFollowRequested()`
+
+```php
+function Wo_AutoAcceptFollowRequest($following_id, $follower_id)
+{
+    global $sqlConnect;
+
+    $following_id = (int) $following_id;
+    $follower_id  = (int) $follower_id;
+
+    if (
+        $following_id < 1 ||
+        $follower_id < 1 ||
+        $following_id === $follower_id
+    ) {
+        return false;
+    }
+
+    $query = mysqli_query(
+        $sqlConnect,
+        "UPDATE " . T_FOLLOWERS . "
+         SET `active` = '1'
+         WHERE `following_id` = {$following_id}
+           AND `follower_id` = {$follower_id}
+           AND `active` = '0'
+         LIMIT 1"
+    );
+
+    if (!$query) {
+        if (function_exists('bzj_streams_sync_log')) {
+            bzj_streams_sync_log(
+                'Automatic follow acceptance failed',
+                array(
+                    'following_id' => $following_id,
+                    'follower_id'  => $follower_id,
+                    'error'        => mysqli_error($sqlConnect),
+                )
+            );
+        }
+        return false;
+    }
+
+    return mysqli_affected_rows($sqlConnect) > 0;
+}
+```
+
+#### 6.2 Replace only `Wo_IsFollowRequested()` with
+
+```php
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $sqlConnect, $wo;
+
+    if ($wo['loggedin'] == false) {
+        return false;
+    }
+
+    if (
+        !isset($following_id) ||
+        empty($following_id) ||
+        !is_numeric($following_id) ||
+        $following_id < 1
+    ) {
+        return false;
+    }
+
+    if (
+        !isset($follower_id) ||
+        empty($follower_id) ||
+        !is_numeric($follower_id) ||
+        $follower_id < 1
+    ) {
+        $follower_id = $wo['user']['user_id'];
+    }
+
+    if (!is_numeric($follower_id) || $follower_id < 1) {
+        return false;
+    }
+
+    $following_id = (int) Wo_Secure($following_id);
+    $follower_id  = (int) Wo_Secure($follower_id);
+
+    $query = mysqli_query(
+        $sqlConnect,
+        "SELECT `id`
+         FROM " . T_FOLLOWERS . "
+         WHERE `follower_id` = {$follower_id}
+           AND `following_id` = {$following_id}
+           AND `active` = '0'
+         LIMIT 1"
+    );
+
+    if (!$query) {
+        if (function_exists('bzj_streams_sync_log')) {
+            bzj_streams_sync_log(
+                'Pending-follow lookup failed',
+                array(
+                    'following_id' => $following_id,
+                    'follower_id'  => $follower_id,
+                    'error'        => mysqli_error($sqlConnect),
+                )
+            );
+        }
+        return false;
+    }
+
+    if (mysqli_num_rows($query) < 1) {
+        return false;
+    }
+
+    Wo_AutoAcceptFollowRequest($following_id, $follower_id);
+
+    return true;
+}
+```
+
+#### 6.3 In `Wo_RegisterFollow()`
+
+Keep:
+
+```php
+$active = 1;
+```
+
+For the Buzzjuice integration, do not allow `confirm_followers` or `connectivitySystem` to create a pending Streams follow.
+
+Immediately after a successful insert and cache invalidation, call:
+
+```php
+if (function_exists('bzj_streams_sync_command')) {
+    bzj_streams_sync_command(
+        'follow',
+        (int) $follower_id,
+        (int) $following_id
+    );
+}
+```
+
+Do this only inside the successful `$query` branch.
+
+#### 6.4 In `Wo_DeleteFollow()`
+
+Inside:
+
+```php
+if ($query) {
+```
+
+and after cache invalidation, add:
+
+```php
+if (function_exists('bzj_streams_sync_command')) {
+    bzj_streams_sync_command(
+        'unfollow',
+        (int) $follower_id,
+        (int) $following_id
+    );
+}
+```
+
+Do not call the adapter when the DELETE failed.
+
+#### 6.5 In `Wo_RegisterBlock()`
+
+Change the final success branch from:
+
+```php
+return ($query) ? true : false;
+```
+
+to:
+
+```php
+if (!$query) {
+    return false;
+}
+
+if (function_exists('bzj_streams_sync_command')) {
+    bzj_streams_sync_command(
+        'block',
+        (int) $logged_user_id,
+        (int) $user_id
+    );
+}
+
+return true;
+```
+
+#### 6.6 In `Wo_RemoveBlock()`
+
+Change the final success branch to:
+
+```php
+if (!$query) {
+    return false;
+}
+
+if (function_exists('bzj_streams_sync_command')) {
+    bzj_streams_sync_command(
+        'unblock',
+        (int) $logged_user_id,
+        (int) $user_id
+    );
+}
+
+return true;
+```
+
+### 7. Streams bootstrap
+
+Load `streams-bzj-sync-v8.2.0.php` from a bootstrap/functions location that is loaded before the modified relationship functions execute.
+
+Do not load it through WordPress `wp-load.php`.
+
+Streams remains a standalone application.
+
+### 8. Required Socials patches
+
+The current QuickDate source confirms:
+
+- `add_friend()` eventually calls `Wo_RegisterFollow()`;
+- pending friend requests are represented by `followers.active=0`;
+- `approve_friend_request()` updates the pending row to active;
+- `disapprove_friend_request()` deletes the pending row;
+- `block()` writes `blocks.user_id/block_userid`;
+- `unblock()` removes the corresponding block;
+- QuickDate ordinary follows also use the same `followers` table.
+
+Therefore friend operations and ordinary follows MUST be separated at the synchronization boundary.
+
+### 9. Socials bootstrap
+
+Load:
+
+`socials-bzj-sync-v8.2.0.php`
+
+from the QuickDate core/bootstrap context.
+
+Do not use `wp-load.php`.
+
+### 10. Socials `add_friend()` patch
+
+The successful new-request branch must remain local first:
+
+```php
+if (Wo_RegisterFollow($to, (int) self::ActiveUser()->id)) {
+```
+
+Immediately inside the success branch add:
+
+```php
+if (function_exists('bzj_socials_sync_command')) {
+    bzj_socials_sync_command(
+        'connection_request',
+        (int) self::ActiveUser()->id,
+        (int) $to
+    );
+}
+```
+
+The important rule is that the adapter runs only after the QuickDate INSERT succeeds.
+
+For the existing-row/cancellation branch, determine whether the row being deleted is:
+
+- a pending friend request -> `connection_withdraw` if the current user is the requester;
+- an accepted friend -> `connection_remove`;
+- an ordinary follow -> `unfollow`.
+
+Do not route every `add_friend()` deletion through ordinary unfollow.
+
+### 11. Socials `disapprove_friend_request()`
+
+After the pending DELETE succeeds, add:
+
+```php
+if (function_exists('bzj_socials_sync_command')) {
+    bzj_socials_sync_command(
+        'connection_reject',
+        (int) $friend_request_userid,
+        (int) $friend_request_to_userid
+    );
+}
+```
+
+Here the active user is the recipient of the request.
+
+### 12. Socials `approve_friend_request()`
+
+After:
+
+```php
+UPDATE `followers`
+SET `active` = '1'
+...
+```
+
+succeeds, add:
+
+```php
+if (function_exists('bzj_socials_sync_command')) {
+    bzj_socials_sync_command(
+        'connection_accept',
+        (int) $friend_request_userid,
+        (int) $friend_request_to_userid
+    );
+}
+```
+
+This causes BuddyBoss to perform the canonical acceptance.
+
+### 13. Socials `Wo_DeleteFollow()`
+
+This function serves both ordinary unfollow and accepted-friend removal.
+
+Before deleting the local row, determine whether the relationship is a QuickDate friend by checking that both directions are active.
+
+If it is a friend:
+
+```php
+bzj_socials_sync_command(
+    'connection_remove',
+    $actor_id,
+    $target_id
+);
+```
+
+If it is only a directional ordinary follow:
+
+```php
+bzj_socials_sync_command(
+    'unfollow',
+    $actor_id,
+    $target_id
+);
+```
+
+The local DELETE must succeed before either command is sent.
+
+Do not delete the reciprocal ordinary-follow row merely because an accepted friend row is being removed.
+
+### 14. Socials `block()`
+
+After the local `blocks` INSERT succeeds:
+
+```php
+if (function_exists('bzj_socials_sync_command')) {
+    bzj_socials_sync_command(
+        'block',
+        (int) self::ActiveUser()->id,
+        (int) $userid
+    );
+}
+```
+
+### 15. Socials `unblock()`
+
+After the local block DELETE succeeds:
+
+```php
+if (function_exists('bzj_socials_sync_command')) {
+    bzj_socials_sync_command(
+        'unblock',
+        (int) $target_id,
+        (int) $userid
+    );
+}
+```
+
+### 16. Do not put orchestration into `wwqd_bridge.php`
+
+Keep `/shared/wwqd_bridge.php` focused on:
+
+- identity mapping;
+- profile synchronization;
+- existing backward-compatible bridge functions.
+
+The connection control plane belongs in:
+
+`bzj-connections-sync.php`
+
+The current bridge already loads `db_helpers.php`, and `db_helpers.php` exposes:
+
+- `get_wowonder_db()`
+- `get_qd_db_conn()`
+- `bzj_get_sso_secret()`
+
+These are used by the control plane. citeturn7view0
+
+### 17. REST authentication
+
+Do NOT expose the command endpoint as an unauthenticated public action merely because its `permission_callback` is `__return_true`.
+
+The endpoint is public at the WordPress routing layer only so standalone Streams/Socials can reach it. The actual security boundary is the HMAC authentication performed inside the callback.
+
+Reject:
+
+- missing timestamp;
+- invalid timestamp;
+- stale timestamp;
+- missing secret;
+- invalid HMAC.
+
+Never accept the WordPress API username/password as the synchronization credential.
+
+The existing API credentials may remain available for unrelated WordPress API administration, but this synchronization channel uses the shared `BUZZ_SSO_SECRET`.
+
+### 18. Idempotency and recursion
+
+Every external command receives a UUID.
+
+The event UUID is recorded before the operation.
+
+If the same UUID arrives again, return `already_processed`.
+
+BuddyBoss-originated projections are protected by the internal-depth guard.
+
+This is essential because an external command can cause BuddyBoss hooks, and those hooks can themselves project data back to the external platforms.
+
+### 19. Verification rules
+
+Every external write must:
+
+1. execute the prepared statement;
+2. inspect the execution result;
+3. verify the final row state with a SELECT;
+4. log any mismatch.
+
+A zero-row DELETE is not automatically a fatal synchronization error because the desired final state may already have been reached. It is logged for diagnosis.
+
+A failed INSERT/UPDATE/DELETE or failed read-back verification is a retryable synchronization error.
+
+### 20. Failure handling
+
+A failed external operation does not roll back the already-completed local source operation.
+
+Instead:
+
+1. the event remains pending;
+2. the error is stored;
+3. retry metadata is updated;
+4. the recovery task detects it;
+5. logs identify the affected pair.
+
+This is preferable to silently reporting success while leaving the platforms divergent.
+
+### 21. Reconciliation
+
+The first deployment should include a one-time reconciliation exercise:
+
+For every mapped WP user pair that has an external relationship:
+
+- compare BuddyBoss connection state;
+- compare BuddyBoss follow A -> B;
+- compare BuddyBoss follow B -> A;
+- compare BuddyBoss block A -> B;
+- compare BuddyBoss block B -> A;
+- compare Streams rows;
+- compare Socials rows.
+
+Do not bulk-delete discrepancies blindly.
+
+For each discrepancy, classify:
+
+- canonical state missing externally;
+- stale external state;
+- missing identity mapping;
+- invalid external row;
+- blocked relationship;
+- ambiguous QuickDate friend/follow collision.
+
+Then apply the BuddyBoss-derived state.
+
+### 22. Test matrix
+
+#### Connection
+
+- BuddyBoss request -> Socials pending.
+- BuddyBoss withdraw -> Socials pending removed.
+- BuddyBoss reject -> Socials pending removed.
+- BuddyBoss accept -> reciprocal Socials active rows.
+- BuddyBoss remove -> Socials friend rows removed but independent ordinary follows retained.
+- Socials add friend -> BuddyBoss request.
+- Socials approve -> BuddyBoss connection.
+- Socials reject -> BuddyBoss request removed.
+- Socials unfriend -> BuddyBoss connection removed.
+
+#### Follow
+
+- BuddyBoss follow -> Streams + Socials active.
+- BuddyBoss unfollow -> Streams + Socials removed.
+- Streams follow -> BuddyBoss + Socials follow.
+- Streams unfollow -> BuddyBoss + Socials unfollow.
+- Socials follow -> BuddyBoss + Streams follow.
+- Socials unfollow -> BuddyBoss + Streams unfollow.
+
+#### Block
+
+- BuddyBoss block -> connection removed, both BuddyBoss follows removed, Streams block, Socials block.
+- Streams block -> BuddyBoss block and Socials block.
+- Socials block -> BuddyBoss block and Streams block.
+- BuddyBoss unblock -> only unblock; no relationship restoration.
+- Streams unblock -> BuddyBoss + Socials unblock.
+- Socials unblock -> BuddyBoss + Streams unblock.
+
+#### Moderation/request restrictions
+
+Verify that BuddyBoss role/profile/gender/request filters continue to operate when a request originates in Streams/Socials. External systems must not bypass those BuddyBoss filters by direct insertion.
+
+### 23. Deployment order
+
+1. Back up WordPress DB, Streams DB and Socials DB.
+2. Back up existing `functions_one.php`, `social/core.php`, `social/requests/ajax/profile.php`, `social/requests/ajax/useractions.php`.
+3. Install `bzj-connections-sync-v8.2.0.php`.
+4. Confirm the MU plugin creates its two synchronization tables.
+5. Confirm `/data/logs` is writable.
+6. Install the Streams adapter.
+7. Apply only the listed surgical Streams function changes.
+8. Install the Socials adapter.
+9. Apply only the listed surgical Socials changes.
+10. Run PHP syntax checks.
+11. Run mapping diagnostics.
+12. Test with two dedicated test accounts.
+13. Test every item in the matrix above.
+14. Inspect all three logs.
+15. Only then enable production use.
+
+### 24. Important correction to the original implementation plan
+
+The original four-step plan should NOT be implemented as unrestricted bidirectional database synchronization.
+
+Correct flow:
+
+`BuddyBoss action`
+-> BuddyBoss hook
+-> control plane
+-> direct external DB projection
+
+`Streams/Socials action`
+-> local external DB operation succeeds
+-> signed WordPress endpoint
+-> BuddyBoss native function
+-> BuddyBoss hook
+-> external projections
+
+This avoids:
+
+- direct external writes to BuddyBoss tables;
+- recursive API chains;
+- competing sources of truth;
+- bypassing BuddyBoss connection restrictions;
+- treating QuickDate friend requests as ordinary follows.
+
+### 25. Final authority model
+
+```text
+                         BUZZJUICE NETWORK
+                                |
+                       +-------------------+
+                       |    BUDDYBOSS      |
+                       |  SOURCE OF TRUTH  |
+                       +---------+---------+
+                                 |
+                  +--------------+--------------+
+                  |                             |
+          canonical connections          canonical follows
+          canonical blocks               canonical moderation
+                  |                             |
+                  +--------------+--------------+
+                                 |
+                       BZJ SYNC CONTROL PLANE
+                         /connection-management
+                         HMAC + UUID + locks
+                                 |
+                    +------------+------------+
+                    |                         |
+              WO WONDER STREAMS          QUICKDATE SOCIALS
+                projection                 projection
+              + adapter                   + adapter
+                    |                         |
+              direct DB only              direct DB only
+              via db_helpers              via db_helpers
+```
+
+The critical rule is:
+
+**External platforms may request a canonical BuddyBoss action, but they never become the authority for the resulting relationship state.**
