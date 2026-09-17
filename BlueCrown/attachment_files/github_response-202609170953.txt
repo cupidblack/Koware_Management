@@ -1,0 +1,665 @@
+<<START GITHUB>>
+
+Use this as the full WordPress/BuddyBoss-side implementation. It is intentionally self-contained and can be dropped into:
+
+wp-content/mu-plugins/bzj-connections-sync.php
+
+```php name=wp-content/mu-plugins/bzj-connections-sync.php
+<?php
+/**
+ * Plugin Name: Buzzjuice Connection Sync
+ * Description: Keep BuddyBoss as the source-of-truth and mirror all social/follow/block state to Streams and QuickDate.
+ * Version: 1.0.0
+ *
+ * Notes:
+ * - BuddyBoss is authoritative for connection, block, and follow state.
+ * - Streams and QuickDate are mirrored subscribers.
+ * - No direct Stream or QuickDate API calls are used; DB writes are performed via the helper functions below.
+ * - The project expects the "Friends System" in Streams to be disabled and the Follow system to remain active.
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Logging
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_sync_log')) {
+    function bzj_sync_log($message, $context = array(), $log_name = 'bzj-sync.log') {
+        $log_dir = WP_CONTENT_DIR . '/uploads/bzj-logs';
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0775, true);
+        }
+
+        $entry = array(
+            'time'    => current_time('mysql', true),
+            'message' => $message,
+            'context' => $context,
+        );
+
+        $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL;
+
+        @file_put_contents($log_dir . '/' . $log_name, $line, FILE_APPEND | LOCK_EX);
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * DB config + connector helpers
+ * ---------------------------------------------------------------------------
+ *
+ * Add the following constants in your environment if your Streams/QuickDate DBs are separate:
+ *
+ *   BZJ_WOWONDER_DB_HOST
+ *   BZJ_WOWONDER_DB_NAME
+ *   BZJ_WOWONDER_DB_USER
+ *   BZJ_WOWONDER_DB_PASS
+ *
+ *   BZJ_QD_DB_HOST
+ *   BZJ_QD_DB_NAME
+ *   BZJ_QD_DB_USER
+ *   BZJ_QD_DB_PASS
+ *
+ * If those are not defined, the code falls back to the current WordPress DB and common app constants.
+ */
+if (!function_exists('bzj_db_config')) {
+    function bzj_db_config($platform) {
+        $platform = strtolower((string) $platform);
+
+        if ($platform === 'wowonder') {
+            $host = defined('BZJ_WOWONDER_DB_HOST') ? constant('BZJ_WOWONDER_DB_HOST') : (defined('WO_DB_HOST') ? constant('WO_DB_HOST') : (defined('DB_HOST') ? DB_HOST : getenv('WOWONDER_DB_HOST') ?: 'localhost'));
+            $name = defined('BZJ_WOWONDER_DB_NAME') ? constant('BZJ_WOWONDER_DB_NAME') : (defined('WO_DB_NAME') ? constant('WO_DB_NAME') : (defined('DB_NAME') ? DB_NAME : getenv('WOWONDER_DB_NAME') ?: ''));
+            $user = defined('BZJ_WOWONDER_DB_USER') ? constant('BZJ_WOWONDER_DB_USER') : (defined('WO_DB_USER') ? constant('WO_DB_USER') : (defined('DB_USER') ? DB_USER : getenv('WOWONDER_DB_USER') ?: ''));
+            $pass = defined('BZJ_WOWONDER_DB_PASS') ? constant('BZJ_WOWONDER_DB_PASS') : (defined('WO_DB_PASS') ? constant('WO_DB_PASS') : (defined('DB_PASSWORD') ? DB_PASSWORD : getenv('WOWONDER_DB_PASS') ?: ''));
+            return compact('host', 'name', 'user', 'pass');
+        }
+
+        if ($platform === 'quickdate' || $platform === 'social') {
+            $host = defined('BZJ_QD_DB_HOST') ? constant('BZJ_QD_DB_HOST') : (defined('QD_DB_HOST') ? constant('QD_DB_HOST') : (defined('DB_HOST') ? DB_HOST : getenv('QD_DB_HOST') ?: 'localhost'));
+            $name = defined('BZJ_QD_DB_NAME') ? constant('BZJ_QD_DB_NAME') : (defined('QD_DB_NAME') ? constant('QD_DB_NAME') : (defined('DB_NAME') ? DB_NAME : getenv('QD_DB_NAME') ?: ''));
+            $user = defined('BZJ_QD_DB_USER') ? constant('BZJ_QD_DB_USER') : (defined('QD_DB_USER') ? constant('QD_DB_USER') : (defined('DB_USER') ? DB_USER : getenv('QD_DB_USER') ?: ''));
+            $pass = defined('BZJ_QD_DB_PASS') ? constant('BZJ_QD_DB_PASS') : (defined('QD_DB_PASS') ? constant('QD_DB_PASS') : (defined('DB_PASSWORD') ? DB_PASSWORD : getenv('QD_DB_PASS') ?: ''));
+            return compact('host', 'name', 'user', 'pass');
+        }
+
+        return array(
+            'host' => defined('DB_HOST') ? DB_HOST : 'localhost',
+            'name' => defined('DB_NAME') ? DB_NAME : '',
+            'user' => defined('DB_USER') ? DB_USER : '',
+            'pass' => defined('DB_PASSWORD') ? DB_PASSWORD : '',
+        );
+    }
+}
+
+if (!function_exists('bzj_connect_db')) {
+    function bzj_connect_db($platform) {
+        $cfg = bzj_db_config($platform);
+        if (empty($cfg['name']) || empty($cfg['user'])) {
+            return null;
+        }
+
+        $mysqli = @new mysqli($cfg['host'], $cfg['user'], $cfg['pass'], $cfg['name']);
+        if ($mysqli->connect_error) {
+            bzj_sync_log('DB connection failed', array(
+                'platform' => $platform,
+                'host'     => $cfg['host'],
+                'db'       => $cfg['name'],
+                'error'    => $mysqli->connect_error,
+            ));
+            return null;
+        }
+
+        return $mysqli;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Meta lookup
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_get_wp_user_meta_value')) {
+    function bzj_get_wp_user_meta_value($wp_user_id, $meta_key) {
+        global $wpdb;
+
+        if (empty($wp_user_id) || empty($meta_key)) {
+            return null;
+        }
+
+        $value = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = %s LIMIT 1",
+                (int) $wp_user_id,
+                $meta_key
+            )
+        );
+
+        return $value;
+    }
+}
+
+if (!function_exists('bzj_get_platform_user_id')) {
+    function bzj_get_platform_user_id($wp_user_id, $platform) {
+        $platform = strtolower((string) $platform);
+
+        if ((int) $wp_user_id <= 0) {
+            return 0;
+        }
+
+        if ($platform === 'wowonder') {
+            return (int) bzj_get_wp_user_meta_value((int) $wp_user_id, 'wo_user_id');
+        }
+
+        if ($platform === 'quickdate' || $platform === 'social') {
+            return (int) bzj_get_wp_user_meta_value((int) $wp_user_id, 'qd_user_id');
+        }
+
+        return 0;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Streams sync: follow
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_sync_streams_follow')) {
+    function bzj_sync_streams_follow($source_wp_user_id, $target_wp_user_id, $action = 'add') {
+        if (empty($source_wp_user_id) || empty($target_wp_user_id)) {
+            return false;
+        }
+
+        $source_streams_id = bzj_get_platform_user_id((int) $source_wp_user_id, 'wowonder');
+        $target_streams_id = bzj_get_platform_user_id((int) $target_wp_user_id, 'wowonder');
+
+        if (empty($source_streams_id) || empty($target_streams_id)) {
+            bzj_sync_log('Streams follow sync skipped: missing mapped user IDs', array(
+                'source_wp_user_id' => $source_wp_user_id,
+                'target_wp_user_id' => $target_wp_user_id,
+            ));
+            return false;
+        }
+
+        $conn = bzj_connect_db('wowonder');
+        if (!$conn) {
+            bzj_sync_log('Streams follow sync failed: cannot connect to Wowonder DB', array(
+                'source_streams_id' => $source_streams_id,
+                'target_streams_id' => $target_streams_id,
+            ));
+            return false;
+        }
+
+        $followers_table = defined('T_FOLLOWERS') ? T_FOLLOWERS : 'followers';
+
+        if ($action === 'add') {
+            $exists = $conn->query(
+                "SELECT id FROM `{$followers_table}` WHERE follower_id = {$source_streams_id} AND following_id = {$target_streams_id} LIMIT 1"
+            );
+
+            if ($exists && $exists->num_rows > 0) {
+                return true;
+            }
+
+            $query = $conn->query(
+                "INSERT INTO `{$followers_table}` (`follower_id`, `following_id`, `active`) VALUES ({$source_streams_id}, {$target_streams_id}, 1)"
+            );
+
+            if ($query) {
+                bzj_sync_log('Streams follow created', array(
+                    'follower_id'  => $source_streams_id,
+                    'following_id' => $target_streams_id,
+                ));
+                return true;
+            }
+
+            bzj_sync_log('Streams follow insert failed', array(
+                'follower_id'  => $source_streams_id,
+                'following_id' => $target_streams_id,
+                'errno'        => $conn->errno,
+                'error'        => $conn->error,
+            ));
+            return false;
+        }
+
+        if ($action === 'remove') {
+            $query = $conn->query(
+                "DELETE FROM `{$followers_table}` WHERE follower_id = {$source_streams_id} AND following_id = {$target_streams_id}"
+            );
+
+            if ($query) {
+                bzj_sync_log('Streams follow removed', array(
+                    'follower_id'  => $source_streams_id,
+                    'following_id' => $target_streams_id,
+                ));
+                return true;
+            }
+
+            bzj_sync_log('Streams follow delete failed', array(
+                'follower_id'  => $source_streams_id,
+                'following_id' => $target_streams_id,
+                'errno'        => $conn->errno,
+                'error'        => $conn->error,
+            ));
+            return false;
+        }
+
+        return false;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * QuickDate sync: friend request / accept / remove
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_sync_quickdate_friend')) {
+    function bzj_sync_quickdate_friend($source_wp_user_id, $target_wp_user_id, $action = 'request') {
+        if (empty($source_wp_user_id) || empty($target_wp_user_id)) {
+            return false;
+        }
+
+        $source_qd_id = bzj_get_platform_user_id((int) $source_wp_user_id, 'quickdate');
+        $target_qd_id = bzj_get_platform_user_id((int) $target_wp_user_id, 'quickdate');
+
+        if (empty($source_qd_id) || empty($target_qd_id)) {
+            bzj_sync_log('QuickDate friend sync skipped: missing mapped user IDs', array(
+                'source_wp_user_id' => $source_wp_user_id,
+                'target_wp_user_id' => $target_wp_user_id,
+            ));
+            return false;
+        }
+
+        $conn = bzj_connect_db('quickdate');
+        if (!$conn) {
+            bzj_sync_log('QuickDate friend sync failed: cannot connect to QuickDate DB', array(
+                'source_qd_id' => $source_qd_id,
+                'target_qd_id' => $target_qd_id,
+            ));
+            return false;
+        }
+
+        $followers_table = 'followers';
+
+        if ($action === 'request') {
+            $exists = $conn->query(
+                "SELECT id FROM `{$followers_table}` WHERE follower_id = {$source_qd_id} AND following_id = {$target_qd_id} LIMIT 1"
+            );
+
+            if ($exists && $exists->num_rows > 0) {
+                return true;
+            }
+
+            $query = $conn->query(
+                "INSERT INTO `{$followers_table}` (`follower_id`, `following_id`, `active`) VALUES ({$source_qd_id}, {$target_qd_id}, 0)"
+            );
+
+            if ($query) {
+                bzj_sync_log('QuickDate friend request created', array(
+                    'follower_id'  => $source_qd_id,
+                    'following_id' => $target_qd_id,
+                ));
+                return true;
+            }
+
+            bzj_sync_log('QuickDate friend request insert failed', array(
+                'follower_id'  => $source_qd_id,
+                'following_id' => $target_qd_id,
+                'errno'        => $conn->errno,
+                'error'        => $conn->error,
+            ));
+            return false;
+        }
+
+        if ($action === 'accept') {
+            $query = $conn->query(
+                "UPDATE `{$followers_table}` SET `active` = 1 WHERE follower_id = {$source_qd_id} AND following_id = {$target_qd_id}"
+            );
+
+            if ($query) {
+                bzj_sync_log('QuickDate friend accepted', array(
+                    'follower_id'  => $source_qd_id,
+                    'following_id' => $target_qd_id,
+                ));
+                return true;
+            }
+
+            bzj_sync_log('QuickDate friend accept failed', array(
+                'follower_id'  => $source_qd_id,
+                'following_id' => $target_qd_id,
+                'errno'        => $conn->errno,
+                'error'        => $conn->error,
+            ));
+            return false;
+        }
+
+        if ($action === 'remove') {
+            $query = $conn->query(
+                "DELETE FROM `{$followers_table}` WHERE follower_id = {$source_qd_id} AND following_id = {$target_qd_id}"
+            );
+
+            if ($query) {
+                bzj_sync_log('QuickDate friend removed', array(
+                    'follower_id'  => $source_qd_id,
+                    'following_id' => $target_qd_id,
+                ));
+                return true;
+            }
+
+            bzj_sync_log('QuickDate friend delete failed', array(
+                'follower_id'  => $source_qd_id,
+                'following_id' => $target_qd_id,
+                'errno'        => $conn->errno,
+                'error'        => $conn->error,
+            ));
+            return false;
+        }
+
+        return false;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Blocks
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_sync_platform_block')) {
+    function bzj_sync_platform_block($blocker_wp_user_id, $blocked_wp_user_id, $action = 'block') {
+        if (empty($blocker_wp_user_id) || empty($blocked_wp_user_id)) {
+            return false;
+        }
+
+        $blocker_wo = bzj_get_platform_user_id((int) $blocker_wp_user_id, 'wowonder');
+        $blocked_wo = bzj_get_platform_user_id((int) $blocked_wp_user_id, 'wowonder');
+        $blocker_qd = bzj_get_platform_user_id((int) $blocker_wp_user_id, 'quickdate');
+        $blocked_qd = bzj_get_platform_user_id((int) $blocked_wp_user_id, 'quickdate');
+
+        $ok = true;
+
+        if (!empty($blocker_wo) && !empty($blocked_wo)) {
+            $conn = bzj_connect_db('wowonder');
+            if ($conn) {
+                $blocks_table = defined('T_BLOCKS') ? T_BLOCKS : 'blocks';
+                if ($action === 'block') {
+                    $conn->query(
+                        "INSERT IGNORE INTO `{$blocks_table}` (`blocker`, `blocked`) VALUES ({$blocker_wo}, {$blocked_wo})"
+                    );
+                } else {
+                    $conn->query(
+                        "DELETE FROM `{$blocks_table}` WHERE blocker = {$blocker_wo} AND blocked = {$blocked_wo}"
+                    );
+                }
+            }
+        }
+
+        if (!empty($blocker_qd) && !empty($blocked_qd)) {
+            $conn = bzj_connect_db('quickdate');
+            if ($conn) {
+                $blocks_table = 'blocks';
+                if ($action === 'block') {
+                    $conn->query(
+                        "INSERT IGNORE INTO `{$blocks_table}` (`blocker`, `blocked`) VALUES ({$blocker_qd}, {$blocked_qd})"
+                    );
+                } else {
+                    $conn->query(
+                        "DELETE FROM `{$blocks_table}` WHERE blocker = {$blocker_qd} AND blocked = {$blocked_qd}"
+                    );
+                }
+            }
+        }
+
+        return $ok;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Cleanup stale follow/friend rows when block is created
+ * ---------------------------------------------------------------------------
+ */
+if (!function_exists('bzj_remove_relationship_if_blocked')) {
+    function bzj_remove_relationship_if_blocked($user_a_wp_id, $user_b_wp_id) {
+        if (empty($user_a_wp_id) || empty($user_b_wp_id)) {
+            return false;
+        }
+
+        $user_a_wo = bzj_get_platform_user_id((int) $user_a_wp_id, 'wowonder');
+        $user_b_wo = bzj_get_platform_user_id((int) $user_b_wp_id, 'wowonder');
+        $user_a_qd = bzj_get_platform_user_id((int) $user_a_wp_id, 'quickdate');
+        $user_b_qd = bzj_get_platform_user_id((int) $user_b_wp_id, 'quickdate');
+
+        if (!empty($user_a_wo) && !empty($user_b_wo)) {
+            $conn = bzj_connect_db('wowonder');
+            if ($conn) {
+                $followers_table = defined('T_FOLLOWERS') ? T_FOLLOWERS : 'followers';
+                $conn->query(
+                    "DELETE FROM `{$followers_table}` WHERE
+                        (follower_id = {$user_a_wo} AND following_id = {$user_b_wo})
+                     OR (follower_id = {$user_b_wo} AND following_id = {$user_a_wo})"
+                );
+            }
+        }
+
+        if (!empty($user_a_qd) && !empty($user_b_qd)) {
+            $conn = bzj_connect_db('quickdate');
+            if ($conn) {
+                $conn->query(
+                    "DELETE FROM `followers` WHERE
+                        (follower_id = {$user_a_qd} AND following_id = {$user_b_qd})
+                     OR (follower_id = {$user_b_qd} AND following_id = {$user_a_qd})"
+                );
+            }
+        }
+
+        return true;
+    }
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * BuddyBoss hooks: authoritative direction
+ * ---------------------------------------------------------------------------
+ */
+add_action('friends_friendship_requested', 'bzj_buddyboss_friend_requested', 10, 4);
+add_action('friends_friendship_withdrawn', 'bzj_buddyboss_friend_withdrawn', 10, 2);
+add_action('friends_friendship_deleted', 'bzj_buddyboss_friend_deleted', 10, 3);
+add_action('friends_friendship_accepted', 'bzj_buddyboss_friend_accepted', 10, 4);
+
+add_action('bp_moderation_block_created', 'bzj_buddyboss_block_created', 10, 2);
+add_action('bp_moderation_unblock_user', 'bzj_buddyboss_block_removed', 10, 2);
+
+add_action('bp_follow_start_following', 'bzj_buddyboss_follow_started', 10, 1);
+add_action('bp_follow_stop_following', 'bzj_buddyboss_follow_stopped', 10, 1);
+
+if (!function_exists('bzj_buddyboss_friend_requested')) {
+    function bzj_buddyboss_friend_requested($friendship_id, $initiator_user_id, $friend_user_id, $friendship = null) {
+        bzj_sync_log('BuddyBoss friend request created', array(
+            'friendship_id'     => $friendship_id,
+            'initiator_user_id' => $initiator_user_id,
+            'friend_user_id'    => $friend_user_id,
+        ));
+
+        bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'request');
+
+        // Streams follow is intentionally NOT forced here unless product policy requires it.
+        // If you want Streams to mirror accepted BuddyBoss connections, uncomment the next line:
+        // bzj_sync_streams_follow($initiator_user_id, $friend_user_id, 'add');
+    }
+}
+
+if (!function_exists('bzj_buddyboss_friend_withdrawn')) {
+    function bzj_buddyboss_friend_withdrawn($friendship_id, $friendship) {
+        if (empty($friendship)) {
+            return;
+        }
+
+        $initiator_user_id = !empty($friendship->initiator_user_id) ? (int) $friendship->initiator_user_id : 0;
+        $friend_user_id    = !empty($friendship->friend_user_id) ? (int) $friendship->friend_user_id : 0;
+
+        if (empty($initiator_user_id) || empty($friend_user_id)) {
+            return;
+        }
+
+        bzj_sync_log('BuddyBoss friend withdrawal processed', array(
+            'friendship_id'     => $friendship_id,
+            'initiator_user_id' => $initiator_user_id,
+            'friend_user_id'    => $friend_user_id,
+        ));
+
+        bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'remove');
+    }
+}
+
+if (!function_exists('bzj_buddyboss_friend_deleted')) {
+    function bzj_buddyboss_friend_deleted($friendship_id, $initiator_user_id, $friend_user_id) {
+        bzj_sync_log('BuddyBoss friendship deleted', array(
+            'friendship_id'     => $friendship_id,
+            'initiator_user_id' => $initiator_user_id,
+            'friend_user_id'    => $friend_user_id,
+        ));
+
+        bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'remove');
+        bzj_remove_relationship_if_blocked($initiator_user_id, $friend_user_id);
+    }
+}
+
+if (!function_exists('bzj_buddyboss_friend_accepted')) {
+    function bzj_buddyboss_friend_accepted($friendship_id, $initiator_user_id, $friend_user_id, $friendship = null) {
+        bzj_sync_log('BuddyBoss friendship accepted', array(
+            'friendship_id'     => $friendship_id,
+            'initiator_user_id' => $initiator_user_id,
+            'friend_user_id'    => $friend_user_id,
+        ));
+
+        bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'accept');
+
+        // If you want BuddyBoss accepted connections to appear as active follows in Streams:
+        // bzj_sync_streams_follow($initiator_user_id, $friend_user_id, 'add');
+    }
+}
+
+if (!function_exists('bzj_buddyboss_block_created')) {
+    function bzj_buddyboss_block_created($block_id, $block_object) {
+        if (empty($block_object) || empty($block_object->user_id) || empty($block_object->item_id)) {
+            return;
+        }
+
+        $blocker_id = (int) $block_object->user_id;
+        $blocked_id = (int) $block_object->item_id;
+
+        bzj_sync_log('BuddyBoss block created', array(
+            'block_id'   => $block_id,
+            'blocker_id' => $blocker_id,
+            'blocked_id' => $blocked_id,
+        ));
+
+        bzj_sync_platform_block($blocker_id, $blocked_id, 'block');
+        bzj_remove_relationship_if_blocked($blocker_id, $blocked_id);
+    }
+}
+
+if (!function_exists('bzj_buddyboss_block_removed')) {
+    function bzj_buddyboss_block_removed($user_id, $item_id) {
+        $blocker_id = (int) $user_id;
+        $blocked_id = (int) $item_id;
+
+        bzj_sync_log('BuddyBoss block removed', array(
+            'blocker_id' => $blocker_id,
+            'blocked_id' => $blocked_id,
+        ));
+
+        bzj_sync_platform_block($blocker_id, $blocked_id, 'unblock');
+    }
+}
+
+if (!function_exists('bzj_buddyboss_follow_started')) {
+    function bzj_buddyboss_follow_started($args) {
+        $leader_id = !empty($args['leader_id']) ? (int) $args['leader_id'] : 0;
+        $follower_id = !empty($args['follower_id']) ? (int) $args['follower_id'] : 0;
+
+        if (empty($leader_id) || empty($follower_id)) {
+            return;
+        }
+
+        bzj_sync_log('BuddyBoss follow started', array(
+            'leader_id'  => $leader_id,
+            'follower_id' => $follower_id,
+        ));
+
+        bzj_sync_streams_follow($follower_id, $leader_id, 'add');
+    }
+}
+
+if (!function_exists('bzj_buddyboss_follow_stopped')) {
+    function bzj_buddyboss_follow_stopped($args) {
+        $leader_id = !empty($args['leader_id']) ? (int) $args['leader_id'] : 0;
+        $follower_id = !empty($args['follower_id']) ? (int) $args['follower_id'] : 0;
+
+        if (empty($leader_id) || empty($follower_id)) {
+            return;
+        }
+
+        bzj_sync_log('BuddyBoss follow stopped', array(
+            'leader_id'  => $leader_id,
+            'follower_id' => $follower_id,
+        ));
+
+        bzj_sync_streams_follow($follower_id, $leader_id, 'remove');
+    }
+}
+```
+
+This is the patch to apply inside the Streams codebase, specifically where `Wo_IsFollowRequested()` is defined. It keeps the existing boolean behavior while auto-accepting a pending follow so it does not remain stuck in a pending-only state.
+
+```php name=streams/assets/includes/functions_one.php
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $sqlConnect, $wo;
+
+    if ($wo['loggedin'] == false) {
+        return false;
+    }
+
+    if (!isset($following_id) || empty($following_id) || !is_numeric($following_id) || $following_id < 1) {
+        return false;
+    }
+
+    if ((!isset($follower_id) || empty($follower_id) || !is_numeric($follower_id) || $follower_id < 1)) {
+        $follower_id = $wo['user']['user_id'];
+    }
+
+    if (!is_numeric($follower_id) || $follower_id < 1) {
+        return false;
+    }
+
+    $following_id = Wo_Secure($following_id);
+    $follower_id = Wo_Secure($follower_id);
+
+    $query = "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '0' LIMIT 1";
+    $sql_query = mysqli_query($sqlConnect, $query);
+
+    if (mysqli_num_rows($sql_query) > 0) {
+        // Auto-accept the pending request so the relationship is immediately usable and not left pending forever.
+        if (function_exists('Wo_AcceptFollowRequest')) {
+            Wo_AcceptFollowRequest($following_id, $follower_id);
+        } else {
+            $accept_query = "UPDATE " . T_FOLLOWERS . " SET `active` = '1' WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '0' LIMIT 1";
+            mysqli_query($sqlConnect, $accept_query);
+        }
+
+        return true;
+    }
+
+    return false;
+}
+```
+
+If you want, I can also give you:
+- a second version split into separate WordPress plugin + shared helper file
+- a version that uses WordPress REST endpoints instead of direct DB sync
+- a migration checklist for the exact usermeta keys and DB table structures in your environment
+
+<<STOP GITHUB>>
