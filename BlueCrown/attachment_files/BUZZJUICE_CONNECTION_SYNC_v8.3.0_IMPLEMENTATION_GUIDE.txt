@@ -1,0 +1,386 @@
+BUZZJUICE NETWORK CONNECTION MANAGEMENT SYNCHRONIZATION
+VERSION 8.3.0 — IMPLEMENTATION GUIDE
+
+ARCHITECTURE
+============
+BuddyBoss/WordPress is the only canonical authority. Streams and Socials are local projections and signed synchronization clients. External platforms never write BuddyBoss tables directly.
+
+REST COMMAND ENDPOINT
+POST /wp-json/bzj/v6/connection-management
+
+Authentication:
+HMAC-SHA256(timestamp + '.' + raw_json_body, platform_secret)
+Headers:
+X-BZJ-Timestamp
+X-BZJ-Signature
+
+Secrets:
+BZJ_STREAMS_SYNC_SECRET and BZJ_SOCIALS_SYNC_SECRET are preferred. BUZZ_SSO_SECRET is the fallback.
+Do NOT use WORDPRESS_API_USERNAME / WORDPRESS_API_PASSWORD for synchronization.
+
+FILES
+=====
+1. /wp-content/mu-plugins/bzj-connections-sync.php
+   Use bzj-connections-sync-v8.3.0.php.
+
+2. /shared/bzj-connection-client.php
+   Use bzj-connection-client-v8.3.0.php.
+
+3. /streams/assets/includes/functions_one.php
+   Surgical replacements below.
+
+4. /streams/themes/sunshine/layout/extra_js/content.phtml
+   Surgical replacement below.
+
+5. /social/requests/ajax/profile.php
+   Require client once and patch Add Friend actions below.
+
+6. /social/requests/ajax/useractions.php
+   Require client once and patch block/unblock below.
+
+IMPORTANT SEMANTIC CORRECTION
+=============================
+QuickDate Add Friend and QuickDate Follow are NOT the same relationship.
+
+Add Friend -> BuddyBoss connection request.
+Follow -> BuddyBoss ordinary follow -> Streams ordinary follow.
+
+This correction is deliberate. QuickDate's followers table is overloaded and cannot safely infer semantic intent from a row alone.
+
+BUDDYBOSS MATRIX
+================
+Connection request -> QuickDate pending row active=0; no Streams follow.
+Connection accept -> reciprocal QuickDate active=1 rows; no Streams friendship.
+Connection reject/withdraw -> remove the connection-owned QuickDate pending row.
+Connection remove -> remove connection-owned QuickDate friendship projection only; preserve independent follows.
+Follow -> Streams active=1; QuickDate unchanged.
+Unfollow -> Streams directional follow removed; QuickDate unchanged.
+Block -> remove connection, pending requests and both follows; create directional block in Streams and Socials.
+Unblock -> remove directional blocks only; never restore previous relationship automatically.
+
+STREAMS — functions_one.php
+===========================
+A. Replace Wo_IsFollowRequested() with:
+
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $sqlConnect, $wo;
+    if ($wo['loggedin'] == false) return false;
+    if (!isset($following_id) || empty($following_id) || !is_numeric($following_id) || $following_id < 1) return false;
+    if (!isset($follower_id) || empty($follower_id) || !is_numeric($follower_id) || $follower_id < 1) {
+        $follower_id = $wo['user']['user_id'];
+    }
+    if (!is_numeric($follower_id) || $follower_id < 1 || (int)$following_id === (int)$follower_id) return false;
+    $following_id = (int)Wo_Secure($following_id);
+    $follower_id  = (int)Wo_Secure($follower_id);
+
+    $query = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '0' LIMIT 1");
+    if (!$query) {
+        error_log('[BZJ Streams] Wo_IsFollowRequested SELECT failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+    if (mysqli_num_rows($query) < 1) return false;
+
+    $update = mysqli_query($sqlConnect, "UPDATE " . T_FOLLOWERS . " SET `active` = '1' WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '0'");
+    if (!$update) {
+        error_log('[BZJ Streams] Automatic follow acceptance failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+
+    $verify = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '1' LIMIT 1");
+    if (!$verify || mysqli_num_rows($verify) < 1) {
+        error_log('[BZJ Streams] Automatic follow acceptance verification failed: follower=' . $follower_id . ' following=' . $following_id);
+        return false;
+    }
+
+    if (function_exists('cache')) {
+        cache($following_id, 'users', 'delete');
+        cache($follower_id, 'users', 'delete');
+    }
+
+    return false;
+}
+
+B. In Wo_RegisterFollow(), retain the existing validation but make the integration follow unconditional:
+
+Replace the existing block that sets $active and then applies follow_privacy/confirm_followers/connectivitySystem with:
+
+        $active = 1;
+
+        if (Wo_IsFollowing($following_id, $follower_id) === true) {
+            continue;
+        }
+
+Do NOT allow confirm_followers or connectivitySystem to turn an integration follow into active=0.
+
+After the INSERT query succeeds, add immediately after the successful local verification/cache work:
+
+        $verify_follow = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `following_id` = {$following_id} AND `follower_id` = {$follower_id} AND `active` = '1' LIMIT 1");
+        if (!$verify_follow || mysqli_num_rows($verify_follow) < 1) {
+            error_log('[BZJ Streams] Follow insertion verification failed: follower=' . $follower_id . ' following=' . $following_id);
+            continue;
+        }
+
+        if (!defined('BZJ_CONNECTION_CLIENT_LOADED')) {
+            $bzj_client = dirname(__DIR__, 3) . '/shared/bzj-connection-client.php';
+            if (is_file($bzj_client)) require_once $bzj_client;
+        }
+        if (function_exists('bzj_connection_sync_command')) {
+            if (!bzj_connection_sync_command('streams', 'follow', $follower_id, $following_id)) {
+                error_log('[BZJ Streams] Follow synchronization was queued/failed: follower=' . $follower_id . ' following=' . $following_id);
+            }
+        }
+
+Do not call the sync function before the database insert succeeds.
+
+C. Replace Wo_RegisterBlock() with:
+
+function Wo_RegisterBlock($user_id)
+{
+    global $wo, $sqlConnect;
+    if ($wo['loggedin'] == false) return false;
+    if (empty($user_id) || !is_numeric($user_id) || $user_id < 1) return false;
+    $logged_user_id = (int)Wo_Secure($wo['user']['user_id']);
+    $user_id = (int)Wo_Secure($user_id);
+    if ($logged_user_id === $user_id) return false;
+
+    $exists = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_BLOCKS . " WHERE `blocker` = {$logged_user_id} AND `blocked` = {$user_id} LIMIT 1");
+    if (!$exists) {
+        error_log('[BZJ Streams] Block lookup failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+    if (mysqli_num_rows($exists) > 0) return true;
+
+    $query = mysqli_query($sqlConnect, "INSERT INTO " . T_BLOCKS . " (`blocker`, `blocked`) VALUES ('{$logged_user_id}', '{$user_id}')");
+    if (!$query) {
+        error_log('[BZJ Streams] Block insert failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+
+    $verify = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_BLOCKS . " WHERE `blocker` = {$logged_user_id} AND `blocked` = {$user_id} LIMIT 1");
+    if (!$verify || mysqli_num_rows($verify) < 1) {
+        error_log('[BZJ Streams] Block verification failed: blocker=' . $logged_user_id . ' blocked=' . $user_id);
+        return false;
+    }
+
+    if (!defined('BZJ_CONNECTION_CLIENT_LOADED')) {
+        $bzj_client = dirname(__DIR__, 3) . '/shared/bzj-connection-client.php';
+        if (is_file($bzj_client)) require_once $bzj_client;
+    }
+    if (function_exists('bzj_connection_sync_command') && !bzj_connection_sync_command('streams', 'block', $logged_user_id, $user_id)) {
+        error_log('[BZJ Streams] Block synchronization was queued/failed: blocker=' . $logged_user_id . ' blocked=' . $user_id);
+    }
+    return true;
+}
+
+D. Replace Wo_RemoveBlock() with:
+
+function Wo_RemoveBlock($user_id)
+{
+    global $wo, $sqlConnect;
+    if ($wo['loggedin'] == false) return false;
+    if (empty($user_id) || !is_numeric($user_id) || $user_id < 1) return false;
+    $logged_user_id = (int)Wo_Secure($wo['user']['user_id']);
+    $user_id = (int)Wo_Secure($user_id);
+    if ($logged_user_id === $user_id) return false;
+
+    $query = mysqli_query($sqlConnect, "DELETE FROM " . T_BLOCKS . " WHERE `blocker` = '{$logged_user_id}' AND `blocked` = '{$user_id}'");
+    if (!$query) {
+        error_log('[BZJ Streams] Block delete failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+
+    $verify = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_BLOCKS . " WHERE `blocker` = {$logged_user_id} AND `blocked` = {$user_id} LIMIT 1");
+    if ($verify && mysqli_num_rows($verify) > 0) {
+        error_log('[BZJ Streams] Block delete verification failed: blocker=' . $logged_user_id . ' blocked=' . $user_id);
+        return false;
+    }
+
+    if (!defined('BZJ_CONNECTION_CLIENT_LOADED')) {
+        $bzj_client = dirname(__DIR__, 3) . '/shared/bzj-connection-client.php';
+        if (is_file($bzj_client)) require_once $bzj_client;
+    }
+    if (function_exists('bzj_connection_sync_command') && !bzj_connection_sync_command('streams', 'unblock', $logged_user_id, $user_id)) {
+        error_log('[BZJ Streams] Unblock synchronization was queued/failed: blocker=' . $logged_user_id . ' blocked=' . $user_id);
+    }
+    return true;
+}
+
+STREAMS — content.phtml Wo_DeleteFollow()
+==========================================
+Replace the existing PHP Wo_DeleteFollow() in content.phtml with:
+
+function Wo_DeleteFollow($following_id = 0, $follower_id = 0)
+{
+    global $wo, $sqlConnect;
+    if ($wo['loggedin'] == false) return false;
+    if (!isset($following_id) || empty($following_id) || !is_numeric($following_id) || $following_id < 1) return false;
+    if (!isset($follower_id) || empty($follower_id) || !is_numeric($follower_id) || $follower_id < 1) return false;
+    $following_id = (int)Wo_Secure($following_id);
+    $follower_id = (int)Wo_Secure($follower_id);
+    if ($following_id === $follower_id) return false;
+
+    $query = mysqli_query($sqlConnect, "DELETE FROM " . T_FOLLOWERS . " WHERE `following_id` = {$following_id} AND `follower_id` = {$follower_id}");
+    if (!$query) {
+        error_log('[BZJ Streams] Follow delete failed: ' . mysqli_error($sqlConnect));
+        return false;
+    }
+    $verify = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `following_id` = {$following_id} AND `follower_id` = {$follower_id} LIMIT 1");
+    if ($verify && mysqli_num_rows($verify) > 0) {
+        error_log('[BZJ Streams] Follow delete verification failed: follower=' . $follower_id . ' following=' . $following_id);
+        return false;
+    }
+    if ($wo['config']['connectivitySystem'] == 1) {
+        $query_two = mysqli_query($sqlConnect, "DELETE FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$following_id} AND `following_id` = {$follower_id}");
+        if (!$query_two) error_log('[BZJ Streams] Reciprocal follow delete failed: ' . mysqli_error($sqlConnect));
+    }
+    if (function_exists('Wo_DeleteSelectedActivity')) {
+        Wo_DeleteSelectedActivity($follower_id, 'following', $following_id);
+    }
+    if (function_exists('cache')) {
+        cache($following_id, 'users', 'delete');
+        cache($follower_id, 'users', 'delete');
+    }
+    $bzj_client = dirname(__DIR__, 5) . '/shared/bzj-connection-client.php';
+    if (is_file($bzj_client)) require_once $bzj_client;
+    if (function_exists('bzj_connection_sync_command') && !bzj_connection_sync_command('streams', 'unfollow', $follower_id, $following_id)) {
+        error_log('[BZJ Streams] Unfollow synchronization was queued/failed: follower=' . $follower_id . ' following=' . $following_id);
+    }
+    return true;
+}
+
+SOCIALS — profile.php
+=====================
+At the top, after the existing wwqd_bridge require, add:
+
+require_once __DIR__ . '/../../../shared/bzj-connection-client.php';
+
+A. Add Friend request in add_friend():
+
+The existing Wo_RegisterFollow() call must remain the local QuickDate operation. Immediately after a successful local insertion, add:
+
+if (!bzj_connection_sync_command('socials', 'connection_request', (int)self::ActiveUser()->id, $to)) {
+    // Local QuickDate success is retained; WordPress will reconcile through the durable event queue when the command is retried.
+    error_log('[BZJ Socials] Add Friend synchronization failed/queued: actor=' . (int)self::ActiveUser()->id . ' target=' . $to);
+}
+
+IMPORTANT: Do NOT call operation 'follow' here.
+
+B. Pending Add Friend cancellation/decline:
+
+After the successful DELETE of the pending QuickDate row in disapprove_friend_request(), add:
+
+if (!bzj_connection_sync_command('socials', 'connection_reject', $friend_request_userid, $friend_request_to_userid)) {
+    error_log('[BZJ Socials] Connection rejection synchronization failed/queued: actor=' . $friend_request_userid . ' target=' . $friend_request_to_userid);
+}
+
+For a sender withdrawing their own pending Add Friend request, call:
+
+bzj_connection_sync_command('socials', 'connection_withdraw', $friend_request_userid, $friend_request_to_userid)
+
+using the actual requester as actor and recipient as target.
+
+C. Acceptance:
+
+After the local QuickDate pending row is changed to active=1 and the reciprocal local row has been created/verified, add:
+
+if (!bzj_connection_sync_command('socials', 'connection_accept', $friend_request_to_userid, $friend_request_userid)) {
+    error_log('[BZJ Socials] Connection acceptance synchronization failed/queued: requester=' . $friend_request_to_userid . ' accepter=' . $friend_request_userid);
+}
+
+Use actor=requester and target=accepter in the synchronization command. Do not use a generic Wo_DeleteFollow() call as the semantic decision point.
+
+D. Unfriend:
+
+After deleting only the accepted QuickDate friendship projection, add:
+
+if (!bzj_connection_sync_command('socials', 'connection_remove', $actor_id, $other_user_id)) {
+    error_log('[BZJ Socials] Connection removal synchronization failed/queued: actor=' . $actor_id . ' target=' . $other_user_id);
+}
+
+Use the actual two WordPress-mapped QuickDate IDs for the command. Preserve any independent ordinary follow state.
+
+SOCIALS — useractions.php block/unblock
+========================================
+At the top add:
+
+require_once __DIR__ . '/../../../shared/bzj-connection-client.php';
+
+After the local blocks INSERT succeeds and the row is verified:
+
+if (!bzj_connection_sync_command('socials', 'block', (int)self::ActiveUser()->id, $userid)) {
+    error_log('[BZJ Socials] Block synchronization failed/queued: actor=' . (int)self::ActiveUser()->id . ' target=' . $userid);
+}
+
+After the local block DELETE succeeds and is verified:
+
+if (!bzj_connection_sync_command('socials', 'unblock', (int)$target_id, $userid)) {
+    error_log('[BZJ Socials] Unblock synchronization failed/queued: actor=' . (int)$target_id . ' target=' . $userid);
+}
+
+The target_id handling already present in the QuickDate function must be preserved.
+
+SOCIALS ORDINARY FOLLOW
+=======================
+The current QuickDate architecture must expose Follow as a separate semantic action from Add Friend. The resulting synchronization command is:
+
+bzj_connection_sync_command('socials', 'follow', (int)self::ActiveUser()->id, $userid)
+
+and ordinary unfollow is:
+
+bzj_connection_sync_command('socials', 'unfollow', (int)self::ActiveUser()->id, $userid)
+
+Do NOT route ordinary Follow through add_friend(). Do NOT convert ordinary Follow into a BuddyBoss connection request.
+
+DATABASE / TABLE VERIFICATION LOGGING
+=====================================
+The MU plugin writes to:
+/data/logs/bzj-connections-sync.log
+
+The external client writes:
+/data/logs/bzj-streams-sync.log
+/data/logs/bzj-socials-sync.log
+
+Every successful projection should log enough context to identify:
+platform, database connection, table, actor, target, operation, and verification result.
+The MU diagnostics endpoint also confirms the Streams/Socials database connections and detected followers/blocks tables.
+
+Do not create a separate logging table.
+
+DEPLOYMENT ORDER
+================
+1. Back up the three databases.
+2. Install bzj-connections-sync-v8.3.0.php as wp-content/mu-plugins/bzj-connections-sync.php.
+3. Install bzj-connection-client-v8.3.0.php as shared/bzj-connection-client.php.
+4. Add the surgical Streams replacements.
+5. Add the Socials client require and explicit semantic command calls.
+6. Define BZJ_STREAMS_SYNC_SECRET and BZJ_SOCIALS_SYNC_SECRET in the shared environment if possible. Otherwise the plugin/client falls back to BUZZ_SSO_SECRET.
+7. Confirm /data/logs is writable by PHP.
+8. Load WordPress once to create/upgrade the two synchronization tables.
+9. Use the administrator diagnostics endpoint to confirm both external DB connections and table detection.
+10. Test with two test users before production.
+
+TEST MATRIX
+===========
+A. BuddyBoss -> request -> QuickDate active=0; Streams none.
+B. BuddyBoss -> accept -> QuickDate reciprocal active=1; Streams none.
+C. BuddyBoss -> reject/withdraw -> QuickDate pending row gone.
+D. BuddyBoss -> follow -> Streams active=1; QuickDate unchanged.
+E. BuddyBoss -> unfollow -> Streams row gone; QuickDate unchanged.
+F. BuddyBoss -> block -> both platform blocks created; both directional follows removed; BuddyBoss connection removed.
+G. BuddyBoss -> unblock -> blocks removed; no follow/connection restored.
+H. Streams follow -> BuddyBoss follow -> Streams remains active=1; QuickDate unchanged.
+I. Streams unfollow -> BuddyBoss follow removed -> Streams row remains absent.
+J. Streams block/unblock -> BuddyBoss and Socials follow the moderation state.
+K. Socials Add Friend -> BuddyBoss connection request.
+L. Socials Add Friend accept -> BuddyBoss connection accepted.
+M. Socials Add Friend reject/withdraw -> BuddyBoss request removed.
+N. Socials ordinary Follow -> BuddyBoss follow -> Streams follow; no connection request.
+O. Socials ordinary Unfollow -> BuddyBoss and Streams follow removed; connection unaffected.
+P. Socials block/unblock -> BuddyBoss moderation state and Streams projection.
+
+CRITICAL OPERATIONAL RULE
+=========================
+A successful local external database action must not be rolled back merely because WordPress is temporarily unavailable. The signed command is the synchronization request; the WordPress event queue is the durable retry mechanism. The user-facing local action therefore succeeds while synchronization is retried and logged.
+
+Do not deploy v8.2.0 unchanged. The v8.3.0 control-plane file corrects the major defects identified in the GitHub review: QuickDate Follow semantics, event retry execution, explicit semantic operations, per-platform HMAC secrets, canonical BuddyBoss mutation, directional blocking, and no automatic relationship restoration after unblock.
