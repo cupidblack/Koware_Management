@@ -1,5 +1,867 @@
 <<START GITHUB>>
 
+Below is the revised, refactored, and tightened version of the proposal and implementation plan. It keeps WordPress BuddyBoss as the source of truth, preserves the BuddyBoss moderation and connection rules, and respects the fact that the Streams “Friends System” is disabled while the Follow system remains active.
+
+1. Executive conclusion
+
+The best design is not a “three-way peer sync” where each platform independently mutates state. It is a single-source-of-truth model:
+
+- BuddyBoss is the authoritative source for:
+  - connection requests
+  - accepted/rejected/withdrawn connections
+  - block/unblock
+  - follow/unfollow
+- Streams and QuickDate are subordinate systems.
+- Any action in Streams or QuickDate must resolve to the corresponding WordPress user IDs and then call a shared WordPress bridge or REST action that updates BuddyBoss first.
+- Any action in BuddyBoss must then mirror the resulting state into the Streams and QuickDate DBs directly using the platform-native tables, without using the Streams or QuickDate APIs.
+
+This design maintains:
+- BuddyBoss moderation rules and connection rules
+- the existing WordPress usermeta mapping (`wo_user_id`, `qd_user_id`)
+- direct database updates
+- compatibility with the reality that `wp-load` is not implemented in Streams or Socials
+- proper logging to `/data/logs`
+- reduced drift and race conditions because the authoritative status is always in BuddyBoss
+
+2. Revised integration proposal
+
+2.1 Source-of-truth and synchronization rules
+
+- BuddyBoss remains the source of truth for user relationships and moderation.
+- Streams and Socials do not decide the canonical state of a connection or block. They only mirror BuddyBoss state.
+- The same user should be resolved across all platforms via WordPress usermeta:
+  - WordPress user ID
+  - `wo_user_id` in WordPress usermeta
+  - `qd_user_id` in WordPress usermeta
+- The bridge should prefer direct DB writes over REST API calls because:
+  - Streams and Socials cannot rely on `wp-load`
+  - the project explicitly says the API should not be used
+  - the same domain and DB access are already available through the shared helper layer
+
+2.2 Relationship semantics
+
+A. BuddyBoss “connections” = canonical friendship state
+
+- BuddyBoss connection request:
+  - request created by `friends_add_friend()`
+  - hook: `friends_friendship_requested`
+- BuddyBoss connection request withdrawal / cancel:
+  - `friends_withdraw_friendship()`
+  - hook: `friends_friendship_withdrawn`
+- BuddyBoss friend accepted:
+  - `friends_accept_friendship()`
+  - hook: `friends_friendship_accepted`
+- BuddyBoss unfriend:
+  - `friends_remove_friend()`
+  - hook: `friends_friendship_deleted` and `friends_friendship_post_delete`
+
+B. Streams “follow” system
+
+- Because the Streams “Friends System” is disabled, Streams should be treated as a follow-only network.
+- “follow” is the active relationship system in Streams, not “friend”.
+- If a BuddyBoss connection is accepted, it should not create a Streams “friendship” in the disabled friends tables. It should result in:
+  - a follow relationship if the product semantics require “follow” between both users, or
+  - no social follow unless specifically enabled by product rules
+- The Streams follow system has a direct pending “request” state (`active = 0`), and the project note explicitly requests that `Wo_IsFollowRequested()` auto-accept the pending follow when the request is encountered.
+
+C. QuickDate “friend” system
+
+- QuickDate uses a “friend request / friend state” model that is conceptually close to BuddyBoss friendships.
+- However, QuickDate’s add friend path may ultimately call a follow helper. That is not the correct synchronization model for the Buzzjuice Network because follows are too loose and request-driven.
+- Therefore:
+  - QuickDate friend actions must not map to Streams follow semantics
+  - QuickDate friend actions should map to BuddyBoss friendship semantics
+  - the bridge should explicitly maintain QuickDate social “friend” status as a direct representation of BuddyBoss friendship
+
+2.3 Block semantics
+
+- BuddyBoss blocks are authoritative.
+- Block changes should immediately propagate to Streams and QuickDate.
+- If a user is blocked and they previously had a friendship or follow relationship, the block should proactively remove active relations to prevent stale state.
+- This matches the research advice: if a block is created and the pair is currently friends, remove the friendship immediately.
+
+2.4 Follow semantics
+
+- BuddyBoss follow actions should mirror into Streams.
+- Streams follow actions should also mirror back to BuddyBoss, not vice versa.
+- Because the network is centralized on BuddyBoss, the source-of-truth rule means:
+  - if the user follows someone in Streams, the bridge should trigger or emulate the BuddyBoss follow action
+  - if the user unfollows in Streams, the bridge should un-follow them in BuddyBoss and remove the mirrored Streams relationship
+- This allows both platform updates to remain coherent.
+
+3. Corrected event matrix
+
+3.1 BuddyBoss -> Streams + Socials
+
+1.i. BuddyBoss connection request sent
+- BuddyBoss: creates pending connection request
+- Streams: create a matching “friend request” or pending connection state only if the product intentionally supports that mapping
+- Socials: create matching friend request state in QuickDate
+- Result: both platforms mirror the pending BuddyBoss request
+
+1.ii. BuddyBoss connection request canceled / withdrawn
+- BuddyBoss: request cancelled
+- Streams: remove any pending or active request equivalent
+- Socials: remove the pending request equivalent
+- Result: both systems reflect cancellation
+
+2.i. BuddyBoss connection accepted
+- BuddyBoss: friendship confirmed
+- Streams: if Streams follows are enabled for this user pair, create active follow equivalent OR no-op if follow is not part of the app’s product semantics
+- Socials: create active friend state equivalent
+- Result: both systems mirror accepted friendship
+
+2.ii. BuddyBoss order removed / unfriend
+- BuddyBoss: friendship deleted
+- Streams: remove follow equivalent if it exists
+- Socials: remove friend equivalent if it exists
+- Result: all three states consistent
+
+3.i. BuddyBoss member blocked
+- BuddyBoss: block created
+- Streams: block created
+- Socials: block created
+- Also remove any friendship/follow relation between blocked pair if present
+- Result: no stale connections remain
+
+3.ii. BuddyBoss member unblocked
+- BuddyBoss: unblocked
+- Streams: unblock
+- Socials: unblock
+- Result: mutual block state removed
+
+4.i. BuddyBoss follow started
+- BuddyBoss: follow created
+- Streams: follow created
+- Socials: if network rule requires mirrored follow, create equivalent follow in Socials
+- Result: follow is mirrored
+
+4.ii. BuddyBoss follow stopped
+- BuddyBoss: unfollow
+- Streams: unfollow
+- Socials: unfollow if applicable
+- Result: state removed
+
+3.2 Streams -> BuddyBoss + Socials
+
+5.i. Streams follow created
+- Streams: create follow
+- BuddyBoss: create equivalent follow
+- Socials: create equivalent follow if product rules say so
+- Result: canonical follow state is mirrored
+
+5.ii. Streams follow removed
+- Streams: remove follow
+- BuddyBoss: remove equivalent follow
+- Socials: remove equivalent follow
+- Result: follow removed everywhere
+
+6.i. Streams block created
+- Streams: block created
+- BuddyBoss: block created
+- Socials: block created
+- Also remove any existing relationship between them
+- Result: consistent block state
+
+6.ii. Streams unblock created
+- Streams: unblock
+- BuddyBoss: unblock
+- Socials: unblock
+- Result: block removed across systems
+
+3.3 Socials -> BuddyBoss + Streams
+
+7.i. Socials add friend request
+- Socials: friend request created
+- BuddyBoss: create connection request equivalent
+- Streams: if product needs a Socials request sync, create a pending equivalent in Streams as a follow request only if explicitly desired
+- Result: social request mirrors to BuddyBoss connection request
+
+7.ii. Socials friend request canceled / declined
+- Socials: request removed
+- BuddyBoss: connection request withdrawn
+- Result: connection request is canceled on BuddyBoss
+
+8.i. Socials friend accepted
+- Socials: friend accepted
+- BuddyBoss: connection accepted
+- Result: both systems match
+
+8.ii. Socials unfriend
+- Socials: remove friend
+- BuddyBoss: remove connection
+- Result: state removed
+
+9.i. Socials block created
+- Socials: block created
+- BuddyBoss: block created
+- Streams: block created
+- Result: consistent block state
+
+9.ii. Socials unblock created
+- Socials: unblock
+- BuddyBoss: unblock
+- Streams: unblock
+- Result: block removed
+
+10.i. Socials follow created
+- Socials: follow created
+- Streams: create follow
+- BuddyBoss: create follow
+- Result: follow is mirrored
+
+10.ii. Socials follow stopped
+- Socials: remove follow
+- Streams: remove follow
+- BuddyBoss: remove follow
+- Result: follow removed everywhere
+
+4. Updated implementation plan
+
+4.1 Architecture
+
+The new architecture should be:
+
+- WordPress BuddyBoss plugin:
+  - `wp-content/mu-plugins/bzj-connections-sync.php`
+  - registers WordPress / BuddyBoss hooks, calls the bridge, writes logs, keeps source-of-truth state
+- Shared bridge helpers:
+  - `shared/wwqd_bridge.php`
+  - adds mapping functions and direct DB sync utilities
+- Shared DB helpers:
+  - `shared/db_helpers.php`
+  - provides connection config for WordPress, Streams, QuickDate, and the Palmier database
+- Logging:
+  - `/data/logs/bzj-sync.log`
+  - and per-job logs like `/data/logs/bzj-sync-connection.log`
+- Endpoint pattern:
+  - use WordPress REST API for BuddyBoss-driven actions when available
+  - custom route:
+    - `/wp-json/bzj/v6/connection-management`
+  - not `/wp-json/bzj/v6/relationship`
+  - use authentication with WP API credentials or application password
+
+4.2 Use existing BuddyBoss hooks first
+
+The plugin must attach to BuddyBoss events before anything else, because BuddyBoss is authoritative.
+
+Recommended hooks:
+- `friends_friendship_requested`
+- `friends_friendship_withdrawn`
+- `friends_friendship_deleted`
+- `friends_friendship_accepted`
+- `bp_moderation_block_created`
+- `bp_moderation_unblock_user`
+- `bp_follow_start_following`
+- `bp_follow_stop_following`
+
+If BuddyBoss exposes different moderation hooks in the actual site version, prefer the supported ones and fall back to accessible moderation actions.
+
+4.3 Do not rely on API calls
+
+The design must avoid using the QuickDate or WoWonder APIs because:
+- the project explicitly prohibits it
+- `wp-load` is not implemented in Streams and Socials
+- direct DB writes are the stable implementation under one domain
+
+Instead:
+- WordPress uses the bridge and direct DB with shared server credentials
+- Streams and Socials call shared helper logic from the same domain or a direct bridge function from PHP by including the shared helper file
+- if necessary, the WordPress plugin exposes a local REST endpoint, then Streams or QuickDate can call it over HTTP using the configured WordPress API credentials
+
+4.4 Direct DB synchronization logic
+
+The bridge should centralize all DB logic in one place:
+
+- `bzj_map_wp_user_to_streams($wp_user_id)`
+- `bzj_map_wp_user_to_socials($wp_user_id)`
+- `bzj_get_bp_friends_status($user_id_a, $user_id_b)`
+- `bzj_sync_streams_follow($source_wp_user_id, $target_wp_user_id, $action)`
+- `bzj_sync_social_friend($source_wp_user_id, $target_wp_user_id, $action)`
+- `bzj_sync_streams_block($blocker_wp_user_id, $blocked_wp_user_id, $action)`
+- `bzj_sync_social_block($blocker_wp_user_id, $blocked_wp_user_id, $action)`
+- `bzj_sync_follow_to_buddyboss($follower_wp_id, $leader_wp_id, $action)`
+- `bzj_remove_relationship_if_blocked($user_a_wp_id, $user_b_wp_id)`
+
+This keeps the direct DB logic in one place and prevents “copy-pasted” synchronization in multiple files.
+
+4.5 Logging and verification
+
+Every write must be followed by a verification step:
+- after insert/update/delete, check row count / affected rows
+- if zero rows changed for a required operation, log an error and abort
+- if an insert succeeds but the mirrored read-back check fails, log an error and raise a visible log event
+- all logs should be stored in `/data/logs`
+
+Recommended helper:
+
+- `bzj_log_sync($file_name, $message, array $context = [])`
+
+This should write JSON-formatted lines to a log file.
+
+5. Recommended code additions to `shared/wwqd_bridge.php`
+
+The following is the correct pattern to add to `shared/wwqd_bridge.php`. This intentionally keeps it small and surgical, as requested, without replacing the entire file.
+
+```php
+<?php
+// Add near the end of shared/wwqd_bridge.php or in a helper block.
+// This file is intentionally surgical and does not regenerate the full file.
+
+if (!function_exists('bzj_log_sync')) {
+    function bzj_log_sync($file_name, $message, $context = array()) {
+        $log_dir = dirname(__DIR__, 1) . '/data/logs';
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0775, true);
+        }
+
+        $file = $log_dir . '/' . ltrim($file_name, '/');
+        $entry = array(
+            'time'    => current_time('mysql', true) ?: gmdate('Y-m-d H:i:s'),
+            'message' => $message,
+            'context' => $context,
+        );
+
+        $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL;
+        @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+    }
+}
+
+if (!function_exists('bzj_get_wp_user_meta_value')) {
+    function bzj_get_wp_user_meta_value($wp_user_id, $meta_key) {
+        global $wpdb;
+        if (empty($wp_user_id) || empty($meta_key)) {
+            return null;
+        }
+
+        $meta_value = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = %s LIMIT 1",
+                (int) $wp_user_id,
+                $meta_key
+            )
+        );
+
+        return $meta_value;
+    }
+}
+
+if (!function_exists('bzj_get_platform_user_id')) {
+    function bzj_get_platform_user_id($wp_user_id, $platform) {
+        $platform = strtolower((string) $platform);
+
+        if ($platform === 'wowonder') {
+            return (int) bzj_get_wp_user_meta_value((int) $wp_user_id, 'wo_user_id');
+        }
+
+        if ($platform === 'quickdate' || $platform === 'social') {
+            return (int) bzj_get_wp_user_meta_value((int) $wp_user_id, 'qd_user_id');
+        }
+
+        return 0;
+    }
+}
+
+if (!function_exists('bzj_sync_streams_follow')) {
+    function bzj_sync_streams_follow($source_wp_user_id, $target_wp_user_id, $action = 'add') {
+        if (empty($source_wp_user_id) || empty($target_wp_user_id)) {
+            return false;
+        }
+
+        $followers_table = defined('T_FOLLOWERS') ? T_FOLLOWERS : 'followers';
+        $source_streams_id = bzj_get_platform_user_id((int) $source_wp_user_id, 'wowonder');
+        $target_streams_id = bzj_get_platform_user_id((int) $target_wp_user_id, 'wowonder');
+
+        if (empty($source_streams_id) || empty($target_streams_id)) {
+            bzj_log_sync('bzj-sync.log', 'Streams follow sync skipped: missing mapped user IDs', array(
+                'source_wp_user_id' => $source_wp_user_id,
+                'target_wp_user_id' => $target_wp_user_id,
+            ));
+            return false;
+        }
+
+        $mysqli = get_wowonder_db();
+        if (!$mysqli) {
+            bzj_log_sync('bzj-sync.log', 'Streams follow sync failed: cannot connect to Wowonder DB', array(
+                'source_streams_id' => $source_streams_id,
+                'target_streams_id' => $target_streams_id,
+            ));
+            return false;
+        }
+
+        if ($action === 'add') {
+            $exists = $mysqli->query(
+                "SELECT id FROM `{$followers_table}` WHERE following_id = {$target_streams_id} AND follower_id = {$source_streams_id} LIMIT 1"
+            );
+
+            if ($exists && $exists->num_rows > 0) {
+                return true;
+            }
+
+            $query = $mysqli->query(
+                "INSERT INTO `{$followers_table}` (`following_id`, `follower_id`, `active`) VALUES ({$target_streams_id}, {$source_streams_id}, '1')"
+            );
+
+            if ($query) {
+                bzj_log_sync('bzj-sync.log', 'Streams follow created', array(
+                    'following_id' => $target_streams_id,
+                    'follower_id'  => $source_streams_id,
+                ));
+                return true;
+            }
+
+            bzj_log_sync('bzj-sync.log', 'Streams follow insert failed', array(
+                'following_id' => $target_streams_id,
+                'follower_id'  => $source_streams_id,
+                'errno' => $mysqli->errno,
+                'error' => $mysqli->error,
+            ));
+            return false;
+        }
+
+        $query = $mysqli->query(
+            "DELETE FROM `{$followers_table}` WHERE following_id = {$target_streams_id} AND follower_id = {$source_streams_id}"
+        );
+
+        if ($query) {
+            bzj_log_sync('bzj-sync.log', 'Streams follow removed', array(
+                'following_id' => $target_streams_id,
+                'follower_id'  => $source_streams_id,
+            ));
+            return true;
+        }
+
+        bzj_log_sync('bzj-sync.log', 'Streams follow delete failed', array(
+            'following_id' => $target_streams_id,
+            'follower_id'  => $source_streams_id,
+            'errno' => $mysqli->errno,
+            'error' => $mysqli->error,
+        ));
+        return false;
+    }
+}
+
+if (!function_exists('bzj_sync_quickdate_friend')) {
+    function bzj_sync_quickdate_friend($source_wp_user_id, $target_wp_user_id, $action = 'request') {
+        if (empty($source_wp_user_id) || empty($target_wp_user_id)) {
+            return false;
+        }
+
+        $source_qd_id = bzj_get_platform_user_id((int) $source_wp_user_id, 'quickdate');
+        $target_qd_id = bzj_get_platform_user_id((int) $target_wp_user_id, 'quickdate');
+
+        if (empty($source_qd_id) || empty($target_qd_id)) {
+            bzj_log_sync('bzj-sync.log', 'QuickDate friend sync skipped: missing mapped user IDs', array(
+                'source_wp_user_id' => $source_wp_user_id,
+                'target_wp_user_id' => $target_wp_user_id,
+            ));
+            return false;
+        }
+
+        $mysqli = get_qd_db_conn();
+        if (!$mysqli) {
+            bzj_log_sync('bzj-sync.log', 'QuickDate friend sync failed: cannot connect to QuickDate DB', array(
+                'source_qd_id' => $source_qd_id,
+                'target_qd_id' => $target_qd_id,
+            ));
+            return false;
+        }
+
+        if ($action === 'request') {
+            $exists = $mysqli->query(
+                "SELECT id FROM `followers` WHERE following_id = {$target_qd_id} AND follower_id = {$source_qd_id} LIMIT 1"
+            );
+
+            if ($exists && $exists->num_rows > 0) {
+                return true;
+            }
+
+            $query = $mysqli->query(
+                "INSERT INTO `followers` (`following_id`, `follower_id`, `active`) VALUES ({$target_qd_id}, {$source_qd_id}, '0')"
+            );
+
+            if ($query) {
+                bzj_log_sync('bzj-sync.log', 'QuickDate friend request created', array(
+                    'following_id' => $target_qd_id,
+                    'follower_id'  => $source_qd_id,
+                ));
+                return true;
+            }
+
+            bzj_log_sync('bzj-sync.log', 'QuickDate friend request insert failed', array(
+                'following_id' => $target_qd_id,
+                'follower_id'  => $source_qd_id,
+                'errno' => $mysqli->errno,
+                'error' => $mysqli->error,
+            ));
+            return false;
+        }
+
+        if ($action === 'accept') {
+            $query = $mysqli->query(
+                "UPDATE `followers` SET `active` = '1' WHERE following_id = {$target_qd_id} AND follower_id = {$source_qd_id}"
+            );
+
+            if ($query) {
+                bzj_log_sync('bzj-sync.log', 'QuickDate friend accepted', array(
+                    'following_id' => $target_qd_id,
+                    'follower_id'  => $source_qd_id,
+                ));
+                return true;
+            }
+
+            bzj_log_sync('bzj-sync.log', 'QuickDate friend accept failed', array(
+                'following_id' => $target_qd_id,
+                'follower_id'  => $source_qd_id,
+                'errno' => $mysqli->errno,
+                'error' => $mysqli->error,
+            ));
+            return false;
+        }
+
+        if ($action === 'remove') {
+            $query = $mysqli->query(
+                "DELETE FROM `followers` WHERE following_id = {$target_qd_id} AND follower_id = {$source_qd_id}"
+            );
+
+            if ($query) {
+                bzj_log_sync('bzj-sync.log', 'QuickDate friend removed', array(
+                    'following_id' => $target_qd_id,
+                    'follower_id'  => $source_qd_id,
+                ));
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('bzj_sync_platform_block')) {
+    function bzj_sync_platform_block($blocker_wp_user_id, $blocked_wp_user_id, $action = 'block') {
+        if (empty($blocker_wp_user_id) || empty($blocked_wp_user_id)) {
+            return false;
+        }
+
+        $blocker_wo = bzj_get_platform_user_id((int) $blocker_wp_user_id, 'wowonder');
+        $blocked_wo = bzj_get_platform_user_id((int) $blocked_wp_user_id, 'wowonder');
+        $blocker_qd = bzj_get_platform_user_id((int) $blocker_wp_user_id, 'quickdate');
+        $blocked_qd = bzj_get_platform_user_id((int) $blocked_wp_user_id, 'quickdate');
+
+        $ok = true;
+
+        if (!empty($blocker_wo) && !empty($blocked_wo)) {
+            $conn = get_wowonder_db();
+            if ($action === 'block') {
+                $conn->query(
+                    "INSERT IGNORE INTO `" . (defined('T_BLOCKS') ? T_BLOCKS : 'blocks') . "` (`blocker`, `blocked`) VALUES ({$blocker_wo}, {$blocked_wo})"
+                );
+            } else {
+                $conn->query(
+                    "DELETE FROM `" . (defined('T_BLOCKS') ? T_BLOCKS : 'blocks') . "` WHERE blocker = {$blocker_wo} AND blocked = {$blocked_wo}"
+                );
+            }
+        }
+
+        if (!empty($blocker_qd) && !empty($blocked_qd)) {
+            $conn = get_qd_db_conn();
+            if ($action === 'block') {
+                $conn->query(
+                    "INSERT IGNORE INTO `blocks` (`blocker`, `blocked`) VALUES ({$blocker_qd}, {$blocked_qd})"
+                );
+            } else {
+                $conn->query(
+                    "DELETE FROM `blocks` WHERE blocker = {$blocker_qd} AND blocked = {$blocked_qd}"
+                );
+            }
+        }
+
+        return $ok;
+    }
+}
+
+if (!function_exists('bzj_remove_relationship_if_blocked')) {
+    function bzj_remove_relationship_if_blocked($user_a_wp_id, $user_b_wp_id) {
+        $user_a_wo = bzj_get_platform_user_id((int) $user_a_wp_id, 'wowonder');
+        $user_b_wo = bzj_get_platform_user_id((int) $user_b_wp_id, 'wowonder');
+        $user_a_qd = bzj_get_platform_user_id((int) $user_a_wp_id, 'quickdate');
+        $user_b_qd = bzj_get_platform_user_id((int) $user_b_wp_id, 'quickdate');
+
+        if (!empty($user_a_wo) && !empty($user_b_wo)) {
+            $conn = get_wowonder_db();
+            $conn->query("DELETE FROM `" . (defined('T_FOLLOWERS') ? T_FOLLOWERS : 'followers') . "` WHERE (following_id = {$user_a_wo} AND follower_id = {$user_b_wo}) OR (following_id = {$user_b_wo} AND follower_id = {$user_a_wo})");
+        }
+
+        if (!empty($user_a_qd) && !empty($user_b_qd)) {
+            $conn = get_qd_db_conn();
+            $conn->query("DELETE FROM `followers` WHERE (following_id = {$user_a_qd} AND follower_id = {$user_b_qd}) OR (following_id = {$user_b_qd} AND follower_id = {$user_a_qd})");
+        }
+    }
+}
+```
+
+6. Updated must-use plugin design
+
+The must-use plugin should be the thin orchestrator. It wires BuddyBoss hooks and then calls the shared bridge helper functions. It should not duplicate the business rules elsewhere.
+
+Example full file for `wp-content/mu-plugins/bzj-connections-sync.php`:
+
+```php
+<?php
+/**
+ * Plugin Name: Buzzjuice Connection Sync
+ * Description: Keep BuddyBoss as the source of truth for social, follow, and block state across Buzzjuice network.
+ * Version: 1.0.0
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+require_once dirname(__DIR__, 2) . '/shared/db_helpers.php';
+require_once dirname(__DIR__, 2) . '/shared/wwqd_bridge.php';
+
+add_action('friends_friendship_requested', 'bzj_sync_buddyboss_friend_request', 10, 3);
+add_action('friends_friendship_withdrawn', 'bzj_sync_buddyboss_friend_withdrawn', 10, 2);
+add_action('friends_friendship_deleted', 'bzj_sync_buddyboss_friend_deleted', 10, 3);
+add_action('friends_friendship_accepted', 'bzj_sync_buddyboss_friend_accepted', 10, 3);
+
+add_action('bp_moderation_block_created', 'bzj_sync_buddyboss_block_created', 10, 2);
+add_action('bp_moderation_unblock_user', 'bzj_sync_buddyboss_block_removed', 10, 2);
+
+add_action('bp_follow_start_following', 'bzj_sync_buddyboss_follow_started', 10, 1);
+add_action('bp_follow_stop_following', 'bzj_sync_buddyboss_follow_stopped', 10, 1);
+
+function bzj_sync_buddyboss_friend_request($friendship_id, $initiator_user_id, $friend_user_id, $friendship = null) {
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss friend request created', array(
+        'friendship_id' => $friendship_id,
+        'initiator_user_id' => $initiator_user_id,
+        'friend_user_id' => $friend_user_id,
+    ));
+
+    bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'request');
+
+    // Streams only mirrors if product rules intentionally want it.
+    // This is a policy decision; default is to keep Streams follow-only unless required.
+    // bzj_sync_streams_follow($initiator_user_id, $friend_user_id, 'add');
+}
+
+function bzj_sync_buddyboss_friend_withdrawn($friendship_id, $friendship) {
+    $initiator_user_id = isset($friendship->initiator_user_id) ? (int) $friendship->initiator_user_id : 0;
+    $friend_user_id = isset($friendship->friend_user_id) ? (int) $friendship->friend_user_id : 0;
+
+    if (empty($initiator_user_id) || empty($friend_user_id)) {
+        return;
+    }
+
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss friend request withdrawn', array(
+        'friendship_id' => $friendship_id,
+        'initiator_user_id' => $initiator_user_id,
+        'friend_user_id' => $friend_user_id,
+    ));
+
+    bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'remove');
+}
+
+function bzj_sync_buddyboss_friend_deleted($friendship_id, $initiator_user_id, $friend_user_id) {
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss friendship deleted', array(
+        'friendship_id' => $friendship_id,
+        'initiator_user_id' => $initiator_user_id,
+        'friend_user_id' => $friend_user_id,
+    ));
+
+    bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'remove');
+    bzj_remove_relationship_if_blocked($initiator_user_id, $friend_user_id);
+}
+
+function bzj_sync_buddyboss_friend_accepted($friendship_id, $initiator_user_id, $friend_user_id, $friendship = null) {
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss friendship accepted', array(
+        'friendship_id' => $friendship_id,
+        'initiator_user_id' => $initiator_user_id,
+        'friend_user_id' => $friend_user_id,
+    ));
+
+    bzj_sync_quickdate_friend($initiator_user_id, $friend_user_id, 'accept');
+    // Optional Streams mirror only if product requires it
+    // bzj_sync_streams_follow($initiator_user_id, $friend_user_id, 'add');
+}
+
+function bzj_sync_buddyboss_block_created($block_id, $block_object) {
+    if (empty($block_object->user_id) || empty($block_object->item_id)) {
+        return;
+    }
+
+    $blocker_id = (int) $block_object->user_id;
+    $blocked_id = (int) $block_object->item_id;
+
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss block created', array(
+        'block_id' => $block_id,
+        'blocker_id' => $blocker_id,
+        'blocked_id' => $blocked_id,
+    ));
+
+    bzj_sync_platform_block($blocker_id, $blocked_id, 'block');
+    bzj_remove_relationship_if_blocked($blocker_id, $blocked_id);
+}
+
+function bzj_sync_buddyboss_block_removed($user_id, $item_id) {
+    $blocker_id = (int) $user_id;
+    $blocked_id = (int) $item_id;
+
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss block removed', array(
+        'blocker_id' => $blocker_id,
+        'blocked_id' => $blocked_id,
+    ));
+
+    bzj_sync_platform_block($blocker_id, $blocked_id, 'unblock');
+}
+
+function bzj_sync_buddyboss_follow_started($args) {
+    $leader_id = isset($args['leader_id']) ? (int) $args['leader_id'] : 0;
+    $follower_id = isset($args['follower_id']) ? (int) $args['follower_id'] : 0;
+
+    if (empty($leader_id) || empty($follower_id)) {
+        return;
+    }
+
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss follow started', array(
+        'leader_id' => $leader_id,
+        'follower_id' => $follower_id,
+    ));
+
+    bzj_sync_streams_follow($follower_id, $leader_id, 'add');
+}
+
+function bzj_sync_buddyboss_follow_stopped($args) {
+    $leader_id = isset($args['leader_id']) ? (int) $args['leader_id'] : 0;
+    $follower_id = isset($args['follower_id']) ? (int) $args['follower_id'] : 0;
+
+    if (empty($leader_id) || empty($follower_id)) {
+        return;
+    }
+
+    bzj_log_sync('bzj-sync.log', 'BuddyBoss follow stopped', array(
+        'leader_id' => $leader_id,
+        'follower_id' => $follower_id,
+    ));
+
+    bzj_sync_streams_follow($follower_id, $leader_id, 'remove');
+}
+```
+
+7. Required Streams patch: `Wo_IsFollowRequested()`
+
+This must be adjusted exactly as requested: when a follow request is found pending, it should auto-accept it to keep the follow state from lingering in pending-only status.
+
+Recommended logic:
+
+```php
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $sqlConnect, $wo;
+
+    if ($wo['loggedin'] == false) {
+        return false;
+    }
+    if (!isset($following_id) || empty($following_id) || !is_numeric($following_id) || $following_id < 1) {
+        return false;
+    }
+    if ((!isset($follower_id) || empty($follower_id) || !is_numeric($follower_id) || $follower_id < 1)) {
+        $follower_id = $wo['user']['user_id'];
+    }
+    if (!is_numeric($follower_id) || $follower_id < 1) {
+        return false;
+    }
+
+    $following_id = Wo_Secure($following_id);
+    $follower_id = Wo_Secure($follower_id);
+
+    $query = "SELECT `id` FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$follower_id} AND `following_id` = {$following_id} AND `active` = '0' LIMIT 1";
+    $sql_query = mysqli_query($sqlConnect, $query);
+
+    if (mysqli_num_rows($sql_query) > 0) {
+        // Auto-accept the pending follow request to preserve a consistent state.
+        // This keeps the relationship immediately active instead of remaining pending.
+        Wo_AcceptFollowRequest($following_id, $follower_id);
+
+        // Return true for the current check so the caller still sees it as a pending request
+        // before the bridge or caller resolves the state to active.
+        return true;
+    }
+
+    return false;
+}
+```
+
+This is the safest interpretation of the project note:
+- it prevents stale pending follow rows
+- it keeps the user-facing flow consistent with a “follow request accepted immediately” policy
+- it does not break the calling logic that expects a boolean
+
+8. Integration rules and constraints
+
+8.1 BuddyBoss is source of truth
+
+This must be explicit and enforced:
+- BuddyBoss write operations are canonical
+- Stream/Social writes are mirrored copies
+- If the same user performs the action in Streams or Socials, it must call back into the BuddyBoss bridge or a custom REST route before mutating state
+
+8.2 Minimal required mutation safety
+
+All write operations must:
+- check whether the pairing already exists
+- check if they are blocked
+- avoid duplicate entries
+- log failure details if the DB write does not return expected results
+- remove reverse or stale entries when necessary
+
+8.3 Proactive enforcement at block time
+
+This is a critical correction from the original proposal:
+
+- When a user blocks someone in BuddyBoss, automatically remove any current friendship between them
+- When a user blocks someone in Streams or Socials, also remove any existing follow/friend state
+- This protects the network from stale friend requests or active relationships that are obscured by block rules
+
+9. Final recommended plan, in order
+
+1. Add the mapping and log helpers to `shared/wwqd_bridge.php`
+2. Add the moust-use plugin file `wp-content/mu-plugins/bzj-connections-sync.php`
+3. Register BuddyBoss hooks first, then work outward
+4. Mirror the actions to Streams and QuickDate DBs by direct SQL, not API calls
+5. Add the auto-accept follow fix to `streams/assets/includes/functions_one.php`
+6. Add block cleanup enforcement to all block actions
+7. Validate the network in the following order:
+   - BuddyBoss request
+   - QuickDate request
+   - Streams follow
+   - block/unblock
+   - accepted / rejected / withdraw / remove
+8. Log each operation to `/data/logs/bzj-sync.log` and fail safely if a DB insert/update/delete does not verify
+
+10. Final synthesis
+
+The best integration is:
+
+- BuddyBoss is authoritative
+- all request, accept, reject, withdraw, unfriend, follow, and block actions are mapped through a single bridge
+- direct DB writes are used, not the Streams or Social APIs
+- the bridge is thin and centralized
+- logs are created in `/data/logs`
+- Streams remains follow-only, while QuickDate friend status mirrors BuddyBoss friendship state
+- streams follow requests are auto-accepted as required by the project note
+- block actions proactively remove stale relationships
+
+This gives you the most effective and sustainable synchronization model for the Buzzjuice Network without breaking the existing BuddyBoss rule set or relying on unsupported APIs.
+
+If you want, I can also turn this into:
+- a step-by-step “apply patch to each file” checklist
+- a smaller REST endpoint specification for `/wp-json/bzj/v6/connection-management`
+- a full final plugin + helper code set in one contiguous paste-ready block for direct implementation in the target environment
+
+a full final plugin + helper code set in one contiguous paste-ready block for direct implementation in the target environment
+
 Use this as the full WordPress/BuddyBoss-side implementation. It is intentionally self-contained and can be dropped into:
 
 wp-content/mu-plugins/bzj-connections-sync.php
