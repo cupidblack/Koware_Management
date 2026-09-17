@@ -1,0 +1,1970 @@
+<<START GITHUB>>
+
+## Recommendation
+
+Do **not** deploy `bzj-connections-sync-v8.1.1.php` unchanged. Its overall architecture is sound, but several implementation defects can cause exactly the failures already observed:
+
+- external BuddyBoss accept/reject/withdraw operations may run without the correct WordPress current user;
+- QuickDate’s shared `followers` table can incorrectly convert a pending friend request into an accepted friend when an ordinary follow is created;
+- external `created_at` values may be written with the wrong data type;
+- database write failures are not consistently surfaced;
+- the BuddyBoss moderation hooks must be treated as version-dependent;
+- `Wo_IsFollowRequested()` must not recursively call `Wo_AcceptFollowRequest()`;
+- the existing `wwqd_bridge.php` contains recursive fallback wrappers that must not be used as the synchronization control plane.
+
+The corrected design below keeps:
+
+1. **BuddyBoss as the only relationship authority**.
+2. **Streams Friends disabled**.
+3. **Streams and Socials as projections**.
+4. **Direct database writes only for external projections**.
+5. **Signed REST commands only to mutate BuddyBoss**.
+6. **QuickDate connection and follow state treated as one shared directional row**.
+7. **File logging in `/data/logs`**.
+8. **Durable recovery events in WordPress only for retry/idempotency, not general-purpose logging**.
+
+---
+
+# 1. Final relationship model
+
+## 1.1 Connections
+
+| Action | BuddyBoss | Streams | Socials |
+|---|---|---|---|
+| A requests B | Pending connection | No change | `followers(B,A,active=0)` |
+| B accepts A | Connected | No change | Friend projection becomes `active=1` |
+| A withdraws | Removed | No change | Pending friend row removed unless required by follow |
+| B rejects | Removed | No change | Pending friend row removed unless required by follow |
+| A or B unfriends | Removed | No change | Friend projection removed unless required by follow |
+
+A QuickDate add-friend action **must never create a BuddyBoss follow**.
+
+## 1.2 Follows
+
+| Action | BuddyBoss | Streams | Socials |
+|---|---|---|---|
+| A follows B | Follow A→B | Follow A→B | Follow A→B |
+| A unfollows B | Removed | Removed | Removed unless a QuickDate friend projection still requires the row |
+
+## 1.3 Blocks
+
+Blocking is dominant and destructive:
+
+1. Create the BuddyBoss block.
+2. Remove the BuddyBoss connection.
+3. Remove BuddyBoss follows in both directions.
+4. Create the external block in Streams and Socials.
+5. Remove external follows in both directions.
+6. Remove the QuickDate friend projection.
+7. Unblocking removes only the block.
+8. Unblocking does not restore previous connections or follows.
+
+---
+
+# 2. Corrections to the current v8.1.1 plugin
+
+The current plugin is located at:
+
+```php name=bzj-connections-sync-v8.1.1.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+```
+
+Apply the following changes to the installed MU plugin:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+Do not keep both the old and new versions in `mu-plugins`.
+
+---
+
+## 2.1 Correct the shared-file path resolution
+
+The WordPress installation is under the Buzzjuice directory. The path must prefer:
+
+```text
+/wordpress-root/shared/db_helpers.php
+```
+
+rather than the parent directory.
+
+Replace the existing `load_db_helpers()` method with:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php#L1258-L1286
+private function load_db_helpers() {
+    static $loaded = false;
+
+    if ($loaded) {
+        return true;
+    }
+
+    $paths = array(
+        trailingslashit(ABSPATH) . 'shared/db_helpers.php',
+        trailingslashit(dirname(ABSPATH)) . 'shared/db_helpers.php',
+        trailingslashit(dirname(ABSPATH, 2)) . 'shared/db_helpers.php',
+    );
+
+    foreach ($paths as $candidate) {
+        if (!is_file($candidate)) {
+            continue;
+        }
+
+        require_once $candidate;
+        $loaded = true;
+
+        $this->log('Database helper loaded', array(
+            'path' => $candidate,
+        ));
+
+        return true;
+    }
+
+    $this->log('Database helper not found', array(
+        'paths_checked' => $paths,
+    ));
+
+    return false;
+}
+```
+
+The existing `shared/db_helpers.php` exposes the required functions:
+
+```php name=db_helpers.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/shared/db_helpers.php#L82-L107
+function get_wp_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WP_DB_HOST, WP_DB_USER, WP_DB_PASS, WP_DB_NAME);
+
+    if ($conn->connect_errno) {
+        return false;
+    }
+
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_qd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(QD_DB_HOST, QD_DB_USER, QD_DB_PASS, QD_DB_NAME);
+
+    if ($conn->connect_errno) {
+        return false;
+    }
+
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wowonder_db() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WOWONDER_DB_HOST, WOWONDER_DB_USER, WOWONDER_DB_PASS, WOWONDER_DB_NAME);
+
+    if ($conn->connect_errno) {
+        return false;
+    }
+
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+```
+
+---
+
+## 2.2 Correct the log path
+
+Replace the log directory calculation with:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php#L178-L199
+private function log($message, $context = array()) {
+    $dir = trailingslashit(ABSPATH) . 'data/logs';
+
+    if (!is_dir($dir)) {
+        wp_mkdir_p($dir);
+    }
+
+    if (!is_dir($dir) || !is_writable($dir)) {
+        error_log('[BZJ Sync] Log directory is unavailable: ' . $dir);
+        return false;
+    }
+
+    $entry = array(
+        'time' => gmdate('c'),
+        'message' => (string) $message,
+        'context' => is_array($context) ? $context : array(
+            'value' => $context,
+        ),
+    );
+
+    $line = wp_json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    $written = @file_put_contents(
+        trailingslashit($dir) . self::LOG_FILE,
+        $line . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+
+    if (false === $written) {
+        error_log('[BZJ Sync] Unable to write log file: ' . $dir . '/' . self::LOG_FILE);
+        return false;
+    }
+
+    return true;
+}
+```
+
+The resulting file should be:
+
+```text
+/home/koware/public_html/buzzjuice.net/data/logs/bzj-connections-sync.log
+```
+
+The directory should be writable by the PHP/web-server user.
+
+---
+
+# 3. Correct external BuddyBoss mutations
+
+The BuddyBoss source shows that:
+
+- `friends_accept_friendship()` accepts by friendship ID;
+- `friends_reject_friendship()` requires the logged-in user to be the recipient;
+- `friends_withdraw_friendship()` requires the logged-in user to be the initiator;
+- the friendship lifecycle hooks are fired by BuddyBoss itself.
+
+Therefore, external requests must temporarily establish the correct WordPress current user.
+
+Add this method to the `BZJ_Connections_Sync` class:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function run_as_wp_user($user_id, $callback) {
+    $user_id = absint($user_id);
+
+    if ($user_id < 1 || !is_callable($callback)) {
+        return new WP_Error(
+            'bzj_invalid_wp_user_context',
+            'A valid WordPress user is required.'
+        );
+    }
+
+    $previous_user_id = get_current_user_id();
+    $previous_user = wp_get_current_user();
+
+    wp_set_current_user($user_id);
+
+    try {
+        return call_user_func($callback);
+    } catch (Throwable $e) {
+        $this->log('WordPress user-context operation failed', array(
+            'user_id' => $user_id,
+            'error' => $e->getMessage(),
+        ));
+
+        return new WP_Error(
+            'bzj_wp_user_context_exception',
+            $e->getMessage()
+        );
+    } finally {
+        if ($previous_user instanceof WP_User && !empty($previous_user->ID)) {
+            wp_set_current_user((int) $previous_user->ID);
+        } else {
+            wp_set_current_user((int) $previous_user_id);
+        }
+    }
+}
+```
+
+## 3.1 Replace external connection acceptance
+
+Replace `bb_accept_from_external()` with:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function bb_accept_from_external($actor, $target, $event_uuid) {
+    if (!function_exists('friends_accept_friendship')) {
+        return new WP_Error(
+            'bzj_bb_unavailable',
+            'BuddyBoss acceptance functions are unavailable.'
+        );
+    }
+
+    /*
+     * For an external acceptance:
+     * actor  = the accepting user
+     * target = the original requester
+     */
+    $friendship_id = 0;
+
+    if (function_exists('friends_get_friendship_id')) {
+        $friendship_id = (int) friends_get_friendship_id($target, $actor);
+    }
+
+    if (!$friendship_id) {
+        return new WP_Error(
+            'bzj_bb_request_missing',
+            'No pending BuddyBoss connection request was found.'
+        );
+    }
+
+    $result = $this->run_as_wp_user($actor, function () use ($friendship_id) {
+        return friends_accept_friendship($friendship_id);
+    });
+
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    if (!$result) {
+        $status = friends_check_friendship_status($actor, $target);
+
+        if ('is_friend' !== $status) {
+            return new WP_Error(
+                'bzj_bb_accept_failed',
+                'BuddyBoss could not accept the connection request.'
+            );
+        }
+    }
+
+    return true;
+}
+```
+
+## 3.2 Replace external rejection
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function bb_reject_from_external($actor, $target, $event_uuid) {
+    if (!function_exists('friends_reject_friendship')) {
+        return new WP_Error(
+            'bzj_bb_unavailable',
+            'BuddyBoss rejection functions are unavailable.'
+        );
+    }
+
+    /*
+     * actor  = recipient who rejects
+     * target = original requester
+     */
+    $friendship_id = function_exists('friends_get_friendship_id')
+        ? (int) friends_get_friendship_id($target, $actor)
+        : 0;
+
+    if (!$friendship_id) {
+        return true;
+    }
+
+    $result = $this->run_as_wp_user($actor, function () use ($friendship_id) {
+        return friends_reject_friendship($friendship_id);
+    });
+
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    if (!$result) {
+        $status = friends_check_friendship_status($actor, $target);
+
+        if ('not_friends' !== $status) {
+            return new WP_Error(
+                'bzj_bb_reject_failed',
+                'BuddyBoss could not reject the connection request.'
+            );
+        }
+    }
+
+    return true;
+}
+```
+
+## 3.3 Replace external withdrawal
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function bb_withdraw_from_external($actor, $target, $event_uuid) {
+    if (!function_exists('friends_withdraw_friendship')) {
+        return new WP_Error(
+            'bzj_bb_unavailable',
+            'BuddyBoss withdrawal functions are unavailable.'
+        );
+    }
+
+    /*
+     * actor  = original requester
+     * target = requested user
+     */
+    $result = $this->run_as_wp_user($actor, function () use ($actor, $target) {
+        return friends_withdraw_friendship($actor, $target);
+    });
+
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    if (!$result) {
+        $status = friends_check_friendship_status($actor, $target);
+
+        if ('not_friends' !== $status) {
+            return new WP_Error(
+                'bzj_bb_withdraw_failed',
+                'BuddyBoss could not withdraw the connection request.'
+            );
+        }
+    }
+
+    return true;
+}
+```
+
+## 3.4 Replace external friend removal
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function bb_remove_from_external($actor, $target, $event_uuid) {
+    if (!function_exists('friends_remove_friend')) {
+        return new WP_Error(
+            'bzj_bb_unavailable',
+            'BuddyBoss removal functions are unavailable.'
+        );
+    }
+
+    $status = friends_check_friendship_status($actor, $target);
+
+    if ('is_friend' !== $status) {
+        return true;
+    }
+
+    $result = $this->run_as_wp_user($actor, function () use ($actor, $target) {
+        return friends_remove_friend($actor, $target);
+    });
+
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    if (!$result && 'is_friend' === friends_check_friendship_status($actor, $target)) {
+        $result = $this->run_as_wp_user($target, function () use ($target, $actor) {
+            return friends_remove_friend($target, $actor);
+        });
+    }
+
+    if (!$result && 'is_friend' === friends_check_friendship_status($actor, $target)) {
+        return new WP_Error(
+            'bzj_bb_remove_failed',
+            'BuddyBoss could not remove the connection.'
+        );
+    }
+
+    return true;
+}
+```
+
+---
+
+# 4. Correct BuddyBoss follow handling
+
+The BuddyBoss REST source confirms that follow actions use:
+
+```php
+array(
+    'leader_id'   => $target,
+    'follower_id' => $actor,
+)
+```
+
+The follow hook receives a follow object, not scalar IDs:
+
+```php name=class-bp-rest-members-actions-endpoint.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/plugins/buddyboss-platform/bp-members/classes/class-bp-rest-members-actions-endpoint.php#L110-L117
+$args = array(
+    'leader_id'   => (int) $request['id'],
+    'follower_id' => get_current_user_id(),
+);
+```
+
+Retain both hook aliases, but ensure duplicate invocation remains idempotent:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+add_action('bp_start_following', array($this, 'bb_follow_started'), 20, 1);
+add_action('bp_stop_following', array($this, 'bb_follow_stopped'), 20, 1);
+
+add_action('bp_follow_start_following', array($this, 'bb_follow_started'), 20, 1);
+add_action('bp_follow_stop_following', array($this, 'bb_follow_stopped'), 20, 1);
+```
+
+Use the following extraction logic:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function get_follow_user_ids($follow) {
+    if (is_object($follow)) {
+        $actor = isset($follow->follower_id) ? absint($follow->follower_id) : 0;
+        $target = isset($follow->leader_id) ? absint($follow->leader_id) : 0;
+
+        return array($actor, $target);
+    }
+
+    if (is_array($follow)) {
+        $actor = isset($follow['follower_id']) ? absint($follow['follower_id']) : 0;
+        $target = isset($follow['leader_id']) ? absint($follow['leader_id']) : 0;
+
+        return array($actor, $target);
+    }
+
+    return array(0, 0);
+}
+```
+
+Then replace the beginning of `handle_bb_follow_event()` with:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function handle_bb_follow_event($operation, $follow) {
+    if ($this->in_internal_context()) {
+        return;
+    }
+
+    list($actor, $target) = $this->get_follow_user_ids($follow);
+
+    if ($actor < 1 || $target < 1 || $actor === $target) {
+        $this->log('Invalid BuddyBoss follow object', array(
+            'operation' => $operation,
+            'follow_type' => is_object($follow) ? get_class($follow) : gettype($follow),
+        ));
+
+        return;
+    }
+
+    /*
+     * A block always wins. A follow created after a block must not be
+     * projected to either external platform.
+     */
+    if ($operation === self::OP_FOLLOW && $this->bb_is_blocked($actor, $target)) {
+        $this->log('Blocked follow rejected', array(
+            'actor' => $actor,
+            'target' => $target,
+        ));
+
+        return;
+    }
+
+    // Continue with the existing pair lock, event insertion, ledger update,
+    // and external projection logic.
+```
+
+---
+
+# 5. Correct QuickDate relationship projection
+
+This is the most important external projection correction.
+
+QuickDate uses the same `followers` table for:
+
+- pending friend requests;
+- accepted friends;
+- ordinary follows.
+
+Therefore the row’s desired state must be calculated from the **BuddyBoss state**, not from the event type alone.
+
+The following rules must be used:
+
+```text
+connection = connected
+    => QuickDate friend row active=1
+
+connection = requested
+    => QuickDate pending friend row active=0
+
+connection = none and follow A→B exists
+    => QuickDate follow row active=1
+
+connection = none and follow A→B does not exist
+    => Remove only A→B if no other relationship requires it
+```
+
+Do not let a BuddyBoss ordinary follow blindly update a pending QuickDate friend request to `active=1`.
+
+Add this method:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function qd_desired_direction_state($actor_wp, $target_wp) {
+    $ledger = $this->get_ledger($actor_wp, $target_wp);
+
+    $connection_state = isset($ledger['connection_state'])
+        ? (string) $ledger['connection_state']
+        : 'none';
+
+    if ('connected' === $connection_state) {
+        return 1;
+    }
+
+    if ('requested' === $connection_state) {
+        /*
+         * QuickDate has no independent column for a simultaneous ordinary
+         * follow plus pending friend request. Preserve the friend-request
+         * state until the request is accepted or removed.
+         */
+        return 0;
+    }
+
+    $pair = $this->pair($actor_wp, $target_wp);
+    $actor_wp = absint($actor_wp);
+
+    if ($actor_wp === (int) $pair[0]) {
+        return !empty($ledger['follow_a_to_b']) ? 1 : 0;
+    }
+
+    return !empty($ledger['follow_b_to_a']) ? 1 : 0;
+}
+```
+
+Add this projection method:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function project_quickdate_direction($actor_wp, $target_wp) {
+    $actor_qd = $this->map_wp_to_external($actor_wp, 'socials');
+    $target_qd = $this->map_wp_to_external($target_wp, 'socials');
+
+    if (!$actor_qd || !$target_qd) {
+        throw new RuntimeException(
+            'QuickDate user mapping is missing for directional projection.'
+        );
+    }
+
+    $db = $this->socials_db();
+
+    if (!$db) {
+        throw new RuntimeException(
+            'QuickDate database connection is unavailable.'
+        );
+    }
+
+    $active = $this->qd_desired_direction_state($actor_wp, $target_wp);
+
+    if ($active) {
+        $this->qd_upsert_directional_row(
+            $db,
+            $target_qd,
+            $actor_qd,
+            1
+        );
+
+        return true;
+    }
+
+    /*
+     * Do not delete a row if the reverse direction is still required.
+     * The caller separately projects the reverse direction.
+     */
+    $table = $this->external_follow_table($db, 'socials');
+
+    if (!$table) {
+        throw new RuntimeException(
+            'QuickDate followers table was not found.'
+        );
+    }
+
+    $stmt = $db->prepare(
+        "DELETE FROM `{$table}`
+         WHERE following_id = ? AND follower_id = ?"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException($db->error);
+    }
+
+    $stmt->bind_param('ii', $target_qd, $actor_qd);
+
+    if (!$stmt->execute()) {
+        $error = $stmt->error ?: $db->error;
+        $stmt->close();
+
+        throw new RuntimeException(
+            'QuickDate directional row deletion failed: ' . $error
+        );
+    }
+
+    $stmt->close();
+
+    return true;
+}
+```
+
+Add the upsert method:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function qd_upsert_directional_row($db, $following_id, $follower_id, $active) {
+    $table = $this->external_follow_table($db, 'socials');
+
+    if (!$table) {
+        throw new RuntimeException(
+            'QuickDate followers table was not found.'
+        );
+    }
+
+    $columns = $this->columns($db, $table);
+
+    $stmt = $db->prepare(
+        "SELECT id
+         FROM `{$table}`
+         WHERE following_id = ? AND follower_id = ?
+         LIMIT 1"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException($db->error);
+    }
+
+    $stmt->bind_param('ii', $following_id, $follower_id);
+
+    if (!$stmt->execute()) {
+        $error = $stmt->error ?: $db->error;
+        $stmt->close();
+
+        throw new RuntimeException(
+            'QuickDate relationship lookup failed: ' . $error
+        );
+    }
+
+    $result = $stmt->get_result();
+    $row = $result ? $result->fetch_assoc() : null;
+    $stmt->close();
+
+    $active = $active ? 1 : 0;
+
+    if ($row) {
+        $id = absint($row['id']);
+
+        $stmt = $db->prepare(
+            "UPDATE `{$table}` SET active = ? WHERE id = ?"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException($db->error);
+        }
+
+        $stmt->bind_param('ii', $active, $id);
+
+        if (!$stmt->execute()) {
+            $error = $stmt->error ?: $db->error;
+            $stmt->close();
+
+            throw new RuntimeException(
+                'QuickDate relationship update failed: ' . $error
+            );
+        }
+
+        $stmt->close();
+
+        return true;
+    }
+
+    if (isset($columns['created_at'])) {
+        $created_at = gmdate('Y-m-d H:i:s');
+
+        $stmt = $db->prepare(
+            "INSERT INTO `{$table}`
+                (following_id, follower_id, active, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException($db->error);
+        }
+
+        $stmt->bind_param(
+            'iiis',
+            $following_id,
+            $follower_id,
+            $active,
+            $created_at
+        );
+    } elseif (isset($columns['time'])) {
+        $created_at = time();
+
+        $stmt = $db->prepare(
+            "INSERT INTO `{$table}`
+                (following_id, follower_id, active, time)
+             VALUES (?, ?, ?, ?)"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException($db->error);
+        }
+
+        $stmt->bind_param(
+            'iiii',
+            $following_id,
+            $follower_id,
+            $active,
+            $created_at
+        );
+    } else {
+        $stmt = $db->prepare(
+            "INSERT INTO `{$table】
+                (following_id, follower_id, active)
+             VALUES (?, ?, ?)"
+        );
+
+        if (!$stmt) {
+            throw new RuntimeException($db->error);
+        }
+
+        $stmt->bind_param(
+            'iii',
+            $following_id,
+            $follower_id,
+            $active
+        );
+    }
+
+    if (!$stmt->execute()) {
+        $error = $stmt->error ?: $db->error;
+        $stmt->close();
+
+        throw new RuntimeException(
+            'QuickDate relationship insert failed: ' . $error
+        );
+    }
+
+    $stmt->close();
+
+    return true;
+}
+```
+
+There is one typographical character that must be corrected in the final branch above. The table quote must use a normal backtick:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+$stmt = $db->prepare(
+    "INSERT INTO `{$table}`
+        (following_id, follower_id, active)
+     VALUES (?, ?, ?)"
+);
+```
+
+Then replace `project_social_connection()` with a two-direction projection:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function project_social_connection($a, $b, $state) {
+    try {
+        /*
+         * The ledger has already been updated from BuddyBoss.
+         * Project both directions from the resulting BuddyBoss state.
+         */
+        $this->project_quickdate_direction($a, $b);
+        $this->project_quickdate_direction($b, $a);
+
+        return true;
+    } catch (Throwable $e) {
+        $this->queue_projection(
+            'socials',
+            'connection_' . $state,
+            $a,
+            $b,
+            array(
+                'error' => $e->getMessage(),
+            )
+        );
+
+        $this->log('QuickDate connection projection failed', array(
+            'actor' => $a,
+            'target' => $b,
+            'state' => $state,
+            'error' => $e->getMessage(),
+        ));
+
+        return false;
+    }
+}
+```
+
+This fixes:
+
+- BuddyBoss connection accepted but only one QuickDate row being created;
+- the initiator/remitter direction being reversed;
+- an ordinary follow converting a pending friend request;
+- unfriend deleting an independent QuickDate follow;
+- incorrect `created_at` binding.
+
+---
+
+# 6. BuddyBoss block lifecycle
+
+The supplied BuddyBoss moderation source confirms that member blocking is represented through the BuddyBoss moderation object and that the member moderation type must be distinguished from reports.
+
+Retain these hooks:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+add_action('bp_moderation_after_save', array($this, 'bb_moderation_saved'), 20, 1);
+add_action('bb_moderation_after_delete', array($this, 'bb_moderation_deleted'), 20, 1);
+```
+
+Also register compatibility hooks only if the installed BuddyBoss version exposes them:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+if (has_filter('bp_moderation_block_created') || did_action('bp_moderation_block_created')) {
+    add_action(
+        'bp_moderation_block_created',
+        array($this, 'bb_legacy_block_created'),
+        20,
+        2
+    );
+}
+
+if (has_filter('bp_moderation_unblock_user') || did_action('bp_moderation_unblock_user')) {
+    add_action(
+        'bp_moderation_unblock_user',
+        array($this, 'bb_legacy_unblock_user'),
+        20,
+        2
+    );
+}
+```
+
+However, do not manually invoke assumed hooks such as:
+
+```php
+do_action('bp_moderation_block_created', ...);
+```
+
+The external block operation must use the BuddyBoss moderation class and let the installed BuddyBoss version fire its own lifecycle.
+
+The existing destructive cascade should remain conceptually as follows:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function enforce_block_on_buddyboss($actor, $target, $event_uuid) {
+    if (
+        function_exists('friends_check_friendship_status') &&
+        function_exists('friends_remove_friend') &&
+        'is_friend' === friends_check_friendship_status($actor, $target)
+    ) {
+        $this->push_context(array(
+            'event_uuid' => $event_uuid,
+            'origin' => 'internal_block_cascade',
+            'operation' => self::OP_CONNECTION_REMOVE,
+            'actor' => $actor,
+            'target' => $target,
+        ));
+
+        try {
+            friends_remove_friend($actor, $target);
+        } finally {
+            $this->pop_context();
+        }
+    }
+
+    if (!function_exists('bp_stop_following')) {
+        return;
+    }
+
+    foreach (array(
+        array($actor, $target),
+        array($target, $actor),
+    ) as $direction) {
+        $follower = absint($direction[0]);
+        $leader = absint($direction[1]);
+
+        if (
+            function_exists('bp_is_following') &&
+            bp_is_following(array(
+                'leader_id' => $leader,
+                'follower_id' => $follower,
+            ))
+        ) {
+            $this->push_context(array(
+                'event_uuid' => $event_uuid,
+                'origin' => 'internal_block_cascade',
+                'operation' => self::OP_UNFOLLOW,
+                'actor' => $follower,
+                'target' => $leader,
+            ));
+
+            try {
+                bp_stop_following(array(
+                    'leader_id' => $leader,
+                    'follower_id' => $follower,
+                ));
+            } finally {
+                $this->pop_context();
+            }
+        }
+    }
+}
+```
+
+The context guard is essential here. Without it, the internally generated unfriend/unfollow events can be interpreted as new external user actions.
+
+---
+
+# 7. BuddyBoss database error verification
+
+The current plugin writes to the ledger but does not always check `$wpdb->last_error`.
+
+Add:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+private function assert_wpdb_success($operation, $context = array()) {
+    global $wpdb;
+
+    if (!empty($wpdb->last_error)) {
+        $this->log('WordPress database error', array_merge(
+            array(
+                'operation' => $operation,
+                'error' => $wpdb->last_error,
+            ),
+            $context
+        ));
+
+        throw new RuntimeException(
+            'WordPress database operation failed: ' . $wpdb->last_error
+        );
+    }
+
+    return true;
+}
+```
+
+After every ledger/event write, call it:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+$result = $wpdb->insert($this->events_table, $data);
+
+if (false === $result) {
+    $this->assert_wpdb_success('insert_event', array(
+        'event_uuid' => $uuid,
+    ));
+
+    throw new RuntimeException('Event insertion failed.');
+}
+
+$this->assert_wpdb_success('insert_event', array(
+    'event_uuid' => $uuid,
+));
+```
+
+Do the same after:
+
+- `save_ledger()`;
+- `mark_event_processed()`;
+- `mark_event_retry()`;
+- any `$wpdb->update()`;
+- any `$wpdb->delete()`.
+
+---
+
+# 8. REST endpoint rules
+
+The endpoint remains:
+
+```text
+POST /wp-json/bzj/v6/connection-management
+```
+
+The signed body must use external IDs:
+
+```json
+{
+  "origin": "streams",
+  "event_id": "uuid-v4",
+  "operation": "follow",
+  "actor_id": 123,
+  "target_id": 456,
+  "authenticated_id": 123
+}
+```
+
+The signature must be generated over the exact raw JSON body:
+
+```text
+HMAC-SHA256(timestamp + "." + raw_json_body, BUZZ_SSO_SECRET)
+```
+
+Headers:
+
+```text
+X-BZJ-Timestamp: 1726516800
+X-BZJ-Signature: <hexadecimal-hmac>
+```
+
+The endpoint must reject:
+
+- missing signature;
+- missing timestamp;
+- stale timestamp;
+- malformed JSON;
+- invalid UUID;
+- unknown origin;
+- unknown operation;
+- same actor and target;
+- missing external-to-WordPress mappings;
+- blocked follow or connection attempts;
+- failed native BuddyBoss operations.
+
+External applications must not send WordPress IDs as `actor_id` or `target_id`.
+
+---
+
+# 9. Streams integration
+
+Because Streams has no `wp-load.php`, it must not call WordPress functions directly.
+
+The Streams action boundary should:
+
+1. Complete the native WoWonder action.
+2. If successful, send a signed request to WordPress.
+3. Treat the WordPress response as authoritative.
+4. Leave the existing Streams database operation intact.
+5. Let the BuddyBoss hook re-project the final state to both external platforms.
+
+## 9.1 Shared Streams command helper
+
+Add this to a Streams-loaded shared file, preferably near the end of `functions_one.php` or in a separately included helper:
+
+```php name=streams-bzj-sync.php
+<?php
+
+if (!function_exists('bzj_streams_sync_command')) {
+    function bzj_streams_sync_command($operation, $actor_id, $target_id, $event_id = '') {
+        $operation = preg_replace('/[^a-z_]/', '', strtolower((string) $operation));
+        $actor_id = (int) $actor_id;
+        $target_id = (int) $target_id;
+
+        if (
+            !$operation ||
+            $actor_id < 1 ||
+            $target_id < 1 ||
+            $actor_id === $target_id
+        ) {
+            return array(
+                'success' => false,
+                'error' => 'Invalid synchronization command.',
+            );
+        }
+
+        $secret = getenv('BUZZ_SSO_SECRET');
+
+        if (!$secret && defined('BUZZ_SSO_SECRET')) {
+            $secret = BUZZ_SSO_SECRET;
+        }
+
+        if (!$secret) {
+            error_log('[BZJ Streams Sync] BUZZ_SSO_SECRET is missing.');
+            return array(
+                'success' => false,
+                'error' => 'Synchronization secret is unavailable.',
+            );
+        }
+
+        $event_id = $event_id ?: sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x%04x',
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff)
+        );
+
+        $payload = array(
+            'origin' => 'streams',
+            'event_id' => $event_id,
+            'operation' => $operation,
+            'actor_id' => $actor_id,
+            'target_id' => $target_id,
+            'authenticated_id' => $actor_id,
+        );
+
+        $raw_body = json_encode(
+            $payload,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
+        $timestamp = time();
+
+        $signature = hash_hmac(
+            'sha256',
+            $timestamp . '.' . $raw_body,
+            $secret
+        );
+
+        $ch = curl_init(
+            'https://buzzjuice.net/wp-json/bzj/v6/connection-management'
+        );
+
+        curl_setopt_array($ch, array(
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $raw_body,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_HTTPHEADER => array(
+                'Content-Type: application/json',
+                'Content-Length: ' . strlen($raw_body),
+                'X-BZJ-Timestamp: ' . $timestamp,
+                'X-BZJ-Signature: ' . $signature,
+            ),
+        ));
+
+        $response_body = curl_exec($ch);
+        $curl_error = curl_error($ch);
+        $http_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        curl_close($ch);
+
+        if ($response_body === false || $curl_error) {
+            error_log('[BZJ Streams Sync] HTTP failure: ' . $curl_error);
+
+            return array(
+                'success' => false,
+                'error' => 'WordPress synchronization request failed.',
+                'event_id' => $event_id,
+            );
+        }
+
+        $response = json_decode($response_body, true);
+
+        if ($http_code < 200 || $http_code >= 300 || !is_array($response)) {
+            error_log('[BZJ Streams Sync] Invalid response: ' . $response_body);
+
+            return array(
+                'success' => false,
+                'error' => 'WordPress synchronization returned an invalid response.',
+                'event_id' => $event_id,
+                'http_code' => $http_code,
+            );
+        }
+
+        return $response;
+    }
+}
+```
+
+## 9.2 Streams follow
+
+After a successful `Wo_RegisterFollow()` operation:
+
+```php name=functions_one.php
+$sync_result = bzj_streams_sync_command(
+    'follow',
+    (int) $follower_id,
+    (int) $following_id
+);
+
+if (empty($sync_result['success'])) {
+    error_log(
+        '[BZJ Streams Sync] Follow accepted locally but BuddyBoss synchronization failed: ' .
+        json_encode($sync_result)
+    );
+}
+```
+
+The local Streams action should not be rolled back merely because the projection request fails. WordPress recovery will retry the external projection.
+
+## 9.3 Streams unfollow
+
+After successful deletion:
+
+```php name=functions_one.php
+$sync_result = bzj_streams_sync_command(
+    'unfollow',
+    (int) $follower_id,
+    (int) $following_id
+);
+
+if (empty($sync_result['success'])) {
+    error_log(
+        '[BZJ Streams Sync] Unfollow accepted locally but BuddyBoss synchronization failed: ' .
+        json_encode($sync_result)
+    );
+}
+```
+
+## 9.4 Streams block/unblock
+
+Inside `Wo_RegisterBlock()` after the insert succeeds:
+
+```php name=functions_one.php
+$sync_result = bzj_streams_sync_command(
+    'block',
+    (int) $logged_user_id,
+    (int) $user_id
+);
+
+if (empty($sync_result['success'])) {
+    error_log(
+        '[BZJ Streams Sync] Block accepted locally but BuddyBoss synchronization failed: ' .
+        json_encode($sync_result)
+    );
+}
+```
+
+Inside `Wo_RemoveBlock()` after the delete succeeds:
+
+```php name=functions_one.php
+$sync_result = bzj_streams_sync_command(
+    'unblock',
+    (int) $logged_user_id,
+    (int) $user_id
+);
+
+if (empty($sync_result['success'])) {
+    error_log(
+        '[BZJ Streams Sync] Unblock accepted locally but BuddyBoss synchronization failed: ' .
+        json_encode($sync_result)
+    );
+}
+```
+
+---
+
+# 10. Automatically accept WoWonder follow requests
+
+The requested behavior is valid because the Streams Friends System is disabled. However, `Wo_IsFollowRequested()` must not call `Wo_AcceptFollowRequest()`, because that can recurse.
+
+Add this helper immediately before `Wo_IsFollowRequested()`:
+
+```php name=functions_one.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_one.php
+function Wo_AutoAcceptFollowRequest($following_id, $follower_id)
+{
+    global $sqlConnect;
+
+    $following_id = (int) $following_id;
+    $follower_id = (int) $follower_id;
+
+    if (
+        $following_id < 1 ||
+        $follower_id < 1 ||
+        $following_id === $follower_id
+    ) {
+        return false;
+    }
+
+    $query = mysqli_query(
+        $sqlConnect,
+        "UPDATE " . T_FOLLOWERS . "
+         SET `active` = '1'
+         WHERE `following_id` = {$following_id}
+           AND `follower_id` = {$follower_id}
+           AND `active` = '0'
+         LIMIT 1"
+    );
+
+    if (!$query) {
+        error_log(
+            '[BZJ Streams] Automatic follow acceptance failed: ' .
+            mysqli_error($sqlConnect)
+        );
+
+        return false;
+    }
+
+    return mysqli_affected_rows($sqlConnect) > 0;
+}
+```
+
+Replace `Wo_IsFollowRequested()` with:
+
+```php name=functions_one.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_one.php
+function Wo_IsFollowRequested($following_id = 0, $follower_id = 0)
+{
+    global $sqlConnect, $wo;
+
+    if (empty($following_id) || !is_numeric($following_id)) {
+        return false;
+    }
+
+    $following_id = (int) $following_id;
+
+    if (
+        !isset($follower_id) ||
+        empty($follower_id) ||
+        !is_numeric($follower_id)
+    ) {
+        $follower_id = !empty($wo['user']['user_id'])
+            ? (int) $wo['user']['user_id']
+            : 0;
+    }
+
+    $follower_id = (int) $follower_id;
+
+    if (
+        $following_id < 1 ||
+        $follower_id < 1 ||
+        $following_id === $follower_id
+    ) {
+        return false;
+    }
+
+    $following_id = Wo_Secure($following_id);
+    $follower_id = Wo_Secure($follower_id);
+
+    $query = mysqli_query(
+        $sqlConnect,
+        "SELECT `id`
+         FROM " . T_FOLLOWERS . "
+         WHERE `follower_id` = {$follower_id}
+           AND `following_id` = {$following_id}
+           AND `active` = '0'
+         LIMIT 1"
+    );
+
+    if (!$query) {
+        error_log(
+            '[BZJ Streams] Follow-request lookup failed: ' .
+            mysqli_error($sqlConnect)
+        );
+
+        return false;
+    }
+
+    if (mysqli_num_rows($query) < 1) {
+        return false;
+    }
+
+    /*
+     * Do not call Wo_AcceptFollowRequest() here. That function calls this
+     * function and would recurse. Promote the row directly.
+     */
+    Wo_AutoAcceptFollowRequest($following_id, $follower_id);
+
+    return true;
+}
+```
+
+Also modify `Wo_RegisterFollow()` so new ordinary follows are inserted with `active = 1`:
+
+```php name=functions_one.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_one.php
+$active = 1;
+```
+
+Do not use the WoWonder `confirm_followers` or `connectivitySystem` settings to create a user-facing follow approval workflow for Buzzjuice Streams. Streams is a follow-only projection platform.
+
+`Wo_AcceptFollowRequest()` may remain available for legacy callers, but it should use a direct update and must not depend on a query function that mutates state.
+
+---
+
+# 11. Socials integration
+
+QuickDate cannot load WordPress functions because `wp-load.php` is not available there.
+
+Add the same signed command helper to a Socials-loaded shared file, but use:
+
+```php
+'origin' => 'socials'
+```
+
+and obtain the actor from:
+
+```php
+self::ActiveUser()->id
+```
+
+## 11.1 QuickDate friend request
+
+At the successful boundary of `add_friend()`:
+
+```php
+$result = bzj_socials_sync_command(
+    'connection_request',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+
+if (empty($result['success'])) {
+    error_log(
+        '[BZJ Socials Sync] Friend request saved locally but BuddyBoss synchronization failed: ' .
+        json_encode($result)
+    );
+}
+```
+
+The QuickDate local row should remain:
+
+```text
+following_id = recipient
+follower_id  = requester
+active       = 0
+```
+
+## 11.2 QuickDate friend rejection/cancellation
+
+Use:
+
+```php
+bzj_socials_sync_command(
+    'connection_reject',
+    (int) self::ActiveUser()->id,
+    (int) $requester_user_id
+);
+```
+
+For cancellation by the original requester, use:
+
+```php
+bzj_socials_sync_command(
+    'connection_withdraw',
+    (int) self::ActiveUser()->id,
+    (int) $recipient_user_id
+);
+```
+
+The distinction matters because BuddyBoss enforces different permissions for rejection and withdrawal.
+
+## 11.3 QuickDate acceptance
+
+When the recipient accepts:
+
+```php
+bzj_socials_sync_command(
+    'connection_accept',
+    (int) self::ActiveUser()->id,
+    (int) $requester_user_id
+);
+```
+
+The BuddyBoss endpoint will temporarily run the acceptance as the recipient.
+
+## 11.4 QuickDate unfriend
+
+Use:
+
+```php
+bzj_socials_sync_command(
+    'connection_remove',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+Do not directly delete the BuddyBoss friendship row.
+
+## 11.5 QuickDate block/unblock
+
+After the local QuickDate block succeeds:
+
+```php
+bzj_socials_sync_command(
+    'block',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+After the local QuickDate unblock succeeds:
+
+```php
+bzj_socials_sync_command(
+    'unblock',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+The BuddyBoss block cascade will remove the connection and both follow directions across the network.
+
+## 11.6 QuickDate ordinary follow/unfollow
+
+QuickDate ordinary follows must be distinguished from `add_friend()`.
+
+Use:
+
+```php
+bzj_socials_sync_command(
+    'follow',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+For unfollow:
+
+```php
+bzj_socials_sync_command(
+    'unfollow',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+Do not use the same command for QuickDate add-friend and ordinary follow.
+
+---
+
+# 12. Important correction to `wwqd_bridge.php`
+
+The current bridge contains wrappers like:
+
+```php
+if (!function_exists('get_wp_db_conn')) {
+    function get_wp_db_conn() {
+        if (function_exists('get_wp_db_conn')) {
+            return \get_wp_db_conn();
+        }
+    }
+}
+```
+
+The inner `function_exists()` check is unreachable once the function is being declared. It does not recurse at runtime because of the outer guard, but it is misleading and should be removed.
+
+Do not place relationship synchronization logic in the generic profile bridge. Keep:
+
+- profile synchronization in `wwqd_bridge.php`;
+- relationship synchronization in `bzj-connections-sync.php`;
+- platform-to-WordPress command transport in the small platform-specific command helpers.
+
+The existing bridge should only be changed if it is used to add the following non-relationship helpers:
+
+```text
+bzj_wp_to_streams_id()
+bzj_wp_to_socials_id()
+bzj_streams_to_wp_id()
+bzj_socials_to_wp_id()
+```
+
+Those helpers must use:
+
+```text
+wo_user_id
+qd_user_id
+```
+
+from WordPress usermeta, exactly as specified.
+
+---
+
+# 13. Recovery and reconciliation
+
+The recovery queue should not roll back BuddyBoss.
+
+When a projection fails:
+
+```text
+BuddyBoss succeeds
+Streams or Socials fails
+        ↓
+Record pending event
+        ↓
+Retry projection
+        ↓
+BuddyBoss remains unchanged
+```
+
+Recovery must always:
+
+1. read the current BuddyBoss state;
+2. refresh the synchronization ledger from BuddyBoss;
+3. project the current canonical state;
+4. mark the event processed only after projections succeed.
+
+Do not use the ledger to downgrade BuddyBoss.
+
+Add a five-minute cron interval:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+add_filter('cron_schedules', function ($schedules) {
+    if (!isset($schedules['bzj_five_minutes'])) {
+        $schedules['bzj_five_minutes'] = array(
+            'interval' => 300,
+            'display' => 'BZJ every five minutes',
+        );
+    }
+
+    return $schedules;
+});
+```
+
+Schedule recovery using:
+
+```php name=bzj-connections-sync.php url=https://github.com/cupidblack/Koware_Management/blob/dd0d58d47db8ca4d177bf6243905999420206260/BlueCrown/attachment_files/bzj-connections-sync-v8.1.1.php
+if (!wp_next_scheduled(self::CRON_HOOK)) {
+    wp_schedule_event(
+        time() + 60,
+        'bzj_five_minutes',
+        self::CRON_HOOK
+    );
+}
+
+if (!wp_next_scheduled(self::CRON_HOOK . '_reconcile')) {
+    wp_schedule_event(
+        time() + 300,
+        'hourly',
+        self::CRON_HOOK . '_reconcile'
+    );
+}
+```
+
+For production reliability, use a real server cron to execute WordPress cron rather than relying solely on traffic:
+
+```text
+*/5 * * * * php /home/koware/public_html/buzzjuice.net/wp-cron.php >/dev/null 2>&1
+```
+
+If `DISABLE_WP_CRON` is enabled, this real cron is required.
+
+---
+
+# 14. Diagnostics
+
+The diagnostics route should be:
+
+```text
+https://buzzjuice.net/wp-json/bzj/v6/connection-management/diagnostics
+```
+
+It should report:
+
+```json
+{
+  "plugin_version": "8.1.2",
+  "route_registered": true,
+  "cron": {
+    "recovery_next": "2026-09-16T18:00:00+00:00",
+    "reconcile_next": "2026-09-16T18:00:00+00:00"
+  },
+  "log": {
+    "path": "/home/koware/public_html/buzzjuice.net/data/logs/bzj-connections-sync.log",
+    "directory_exists": true,
+    "directory_writable": true
+  },
+  "databases": {
+    "streams_connected": true,
+    "socials_connected": true
+  }
+}
+```
+
+The endpoint is admin-only and must not expose:
+
+- database passwords;
+- connection strings;
+- HMAC secrets;
+- raw SQL;
+- user passwords;
+- authentication tokens.
+
+---
+
+# 15. The MyCRED cache error
+
+The supplied stack trace shows:
+
+```text
+WP_Object_Cache::get()
+Cache key must be an integer or a non-empty string, NULL given
+...
+myCRED_buddyboss_Activity_Stream_Events_Hook
+...
+friends_remove_friend()
+```
+
+This is separate from the synchronization architecture. The failing path is:
+
+```text
+BuddyBoss friendship deletion
+    ↓
+BuddyBoss activity deletion
+    ↓
+myCRED activity hook
+    ↓
+bp_get_member_type(NULL)
+    ↓
+invalid object-cache key
+```
+
+Do not suppress the BZJ synchronization hooks to hide this. First deploy and validate the synchronization corrections above.
+
+Then update the MyCRED callback so it validates the user ID before calling `bp_get_member_type()`:
+
+```php name=mycred-buddyboss-activity-stream-hook.php
+$user_id = absint($user_id);
+
+if ($user_id < 1) {
+    return;
+}
+
+$member_type = bp_get_member_type($user_id);
+```
+
+The exact variable name must match the installed MyCRED method. This is a separate patch and should be tested independently.
+
+---
+
+# 16. Deployment sequence
+
+## Phase 1 — Install only the corrected MU plugin
+
+1. Back up all three databases.
+2. Back up the current MU plugin.
+3. Replace the installed file:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+4. Do not retain `bzj-connections-sync-v8.1.0.php` or `bzj-connections-sync-v8.1.1.php` in `mu-plugins`.
+5. Confirm WordPress loads without a fatal error.
+6. Confirm:
+
+```text
+wp_bzj_relationships
+wp_bzj_relationship_events
+```
+
+exist.
+
+## Phase 2 — Verify infrastructure
+
+Check:
+
+```text
+https://buzzjuice.net/wp-json/bzj/v6/connection-management/diagnostics
+```
+
+Then check:
+
+```text
+/home/koware/public_html/buzzjuice.net/data/logs/bzj-connections-sync.log
+```
+
+## Phase 3 — BuddyBoss-originated tests
+
+Test in this order:
+
+1. BuddyBoss connection request.
+2. BuddyBoss request withdrawal.
+3. BuddyBoss request rejection.
+4. BuddyBoss connection acceptance.
+5. Removal by the requester.
+6. Removal by the other user.
+7. BuddyBoss follow.
+8. BuddyBoss unfollow.
+9. BuddyBoss block.
+10. BuddyBoss unblock.
+
+For every test, verify:
+
+- BuddyBoss state;
+- `wp_bzj_relationships`;
+- Streams database;
+- Socials database;
+- log file;
+- pending recovery events.
+
+## Phase 4 — Streams-originated tests
+
+Only after Phase 3 passes, add the signed calls to:
+
+```text
+Wo_RegisterFollow()
+Wo_DeleteFollow()
+Wo_RegisterBlock()
+Wo_RemoveBlock()
+```
+
+## Phase 5 — Socials-originated tests
+
+Then add signed calls to:
+
+```text
+add_friend()
+approve_friend_request()
+disapprove_friend_request()
+unfriend branch
+block()
+unblock()
+ordinary follow
+ordinary unfollow
+```
+
+## Phase 6 — Enable recovery
+
+Finally enable:
+
+- five-minute projection recovery;
+- hourly reconciliation;
+- server cron execution;
+- log monitoring.
+
+---
+
+# 17. Final expected event paths
+
+## BuddyBoss request
+
+```text
+BuddyBoss friends_add_friend()
+    ↓
+friends_friendship_requested
+    ↓
+ledger = requested
+    ↓
+QuickDate followers(B,A,active=0)
+```
+
+## Socials add-friend
+
+```text
+QuickDate add_friend()
+    ↓
+signed connection_request
+    ↓
+friends_add_friend(A,B)
+    ↓
+friends_friendship_requested
+    ↓
+QuickDate pending projection
+```
+
+## Streams follow
+
+```text
+Wo_RegisterFollow()
+    ↓
+local Streams follow
+    ↓
+signed follow command
+    ↓
+bp_start_following()
+    ↓
+bp_start_following hook
+    ↓
+Streams + Socials ordinary follow projections
+```
+
+## Block
+
+```text
+Any platform block
+    ↓
+signed block command, if external
+    ↓
+BuddyBoss block
+    ↓
+remove BB connection
+    ↓
+remove BB follows in both directions
+    ↓
+project Streams block
+    ↓
+project Socials block
+    ↓
+remove external follows/friend projections
+```
+
+## Unblock
+
+```text
+Any platform unblock
+    ↓
+BuddyBoss unblock
+    ↓
+remove Streams block
+    ↓
+remove Socials block
+    ↓
+do not restore prior relationships
+```
+
+This is the appropriate final architecture for Buzzjuice because it preserves BuddyBoss restrictions and moderation behavior, avoids the disabled WoWonder Friends system, prevents QuickDate friend/follow corruption, avoids direct platform-to-platform authority loops, and provides durable recovery when either external database is temporarily unavailable.
+
+<<STOP GITHUB>>
