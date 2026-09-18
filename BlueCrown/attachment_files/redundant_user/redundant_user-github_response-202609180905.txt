@@ -1,0 +1,1816 @@
+<<START GITHUB>>
+
+Below is the updated, self-contained version. It is read-only during dry runs, requires both a WordPress nonce and `BZJ_ORPHAN_CLEANER_KEY`, never deletes authoritative users or media files, rescans immediately before destructive operations, supports both platforms, and allows individually selected platform-ID repairs.
+
+Save it as:
+
+`shared/bzj-wwqd-orphan-user-cleaner.php`
+
+````php name=shared/bzj-wwqd-orphan-user-cleaner.php
+<?php
+/**
+ * Buzzjuice WoWonder + QuickDate orphan-reference cleaner.
+ *
+ * Security:
+ * - WordPress administrator access is required.
+ * - POST requests require a WordPress nonce.
+ * - POST requests also require BZJ_ORPHAN_CLEANER_KEY.
+ * - GET requests are read-only.
+ *
+ * Safety:
+ * - Wo_Users and QuickDate users are never deleted.
+ * - WordPress users are never deleted.
+ * - Media and S3 objects are never deleted.
+ * - Only explicitly allow-listed reference tables are cleaned.
+ * - Schema-discovered references are advisory only.
+ * - Destructive operations perform a fresh scan immediately beforehand.
+ */
+
+declare(strict_types=1);
+
+if (PHP_SAPI === 'cli') {
+    http_response_code(403);
+    exit('This utility is web-admin only.');
+}
+
+error_reporting(E_ALL);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+
+const BZJ_OUC_VERSION = '2026-09-18.7';
+const BZJ_OUC_NONCE_ACTION = 'bzj_ouc_action';
+const BZJ_OUC_CLEAN_CONFIRMATION = 'DELETE CONFIRMED ORPHANS';
+const BZJ_OUC_REPAIR_CONFIRMATION = 'REPAIR SELECTED ID MISMATCHES';
+const BZJ_OUC_SAMPLE_LIMIT = 25;
+
+/*
+ * This file is /shared/file.php.
+ * WordPress is installed in the site root.
+ */
+$wp_load = dirname(__DIR__) . '/wp-load.php';
+
+if (!is_file($wp_load)) {
+    http_response_code(500);
+    exit('WordPress bootstrap could not be located.');
+}
+
+require_once $wp_load;
+require_once __DIR__ . '/db_helpers.php';
+
+if (
+    !function_exists('is_user_logged_in') ||
+    !function_exists('current_user_can') ||
+    !function_exists('wp_create_nonce') ||
+    !function_exists('wp_verify_nonce')
+) {
+    http_response_code(500);
+    exit('Required WordPress functions are unavailable.');
+}
+
+if (!is_user_logged_in() || !current_user_can('manage_options')) {
+    http_response_code(403);
+    exit('Administrator access is required.');
+}
+
+if (function_exists('nocache_headers')) {
+    nocache_headers();
+}
+
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+
+/* -------------------------------------------------------------------------
+ * General helpers
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_h(mixed $value): string
+{
+    return htmlspecialchars(
+        (string) $value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
+}
+
+function bzj_ouc_json(mixed $value): string
+{
+    $json = json_encode(
+        $value,
+        JSON_UNESCAPED_SLASHES |
+        JSON_UNESCAPED_UNICODE |
+        JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    return $json === false ? '{}' : $json;
+}
+
+function bzj_ouc_fail(string $message): never
+{
+    throw new RuntimeException($message);
+}
+
+function bzj_ouc_log(string $event, array $data = []): void
+{
+    /*
+     * bzj_log() is already supplied by the MU plugin. It must not be
+     * redeclared here.
+     */
+    if (function_exists('bzj_log')) {
+        try {
+            bzj_log($event, $data);
+            return;
+        } catch (Throwable $e) {
+            error_log('BZJ cleaner logging failure: ' . $e->getMessage());
+        }
+    }
+
+    error_log('BZJ cleaner [' . $event . '] ' . bzj_ouc_json($data));
+}
+
+function bzj_ouc_normalize(mixed $value): string
+{
+    $value = trim((string) $value);
+
+    return function_exists('mb_strtolower')
+        ? mb_strtolower($value, 'UTF-8')
+        : strtolower($value);
+}
+
+function bzj_ouc_identifier(string $identifier): string
+{
+    /*
+     * The trailing-space option supports the historical WoWonder column
+     * named "from_id ".
+     */
+    if (!preg_match('/^[A-Za-z0-9_]+ ?$/', $identifier)) {
+        bzj_ouc_fail('Unsafe SQL identifier: ' . $identifier);
+    }
+
+    return '`' . $identifier . '`';
+}
+
+function bzj_ouc_query(mysqli $db, string $sql): mysqli_result|bool
+{
+    $result = $db->query($sql);
+
+    if ($result === false) {
+        throw new RuntimeException($db->error);
+    }
+
+    return $result;
+}
+
+function bzj_ouc_table_exists(mysqli $db, string $table): bool
+{
+    $table = $db->real_escape_string($table);
+    $result = bzj_ouc_query($db, "SHOW TABLES LIKE '{$table}'");
+
+    return $result instanceof mysqli_result && $result->num_rows > 0;
+}
+
+function bzj_ouc_columns(mysqli $db, string $table): array
+{
+    $result = bzj_ouc_query(
+        $db,
+        'SHOW COLUMNS FROM ' . bzj_ouc_identifier($table)
+    );
+
+    $columns = [];
+
+    while ($row = $result->fetch_assoc()) {
+        if (isset($row['Field'])) {
+            $columns[strtolower((string) $row['Field'])] =
+                (string) $row['Field'];
+        }
+    }
+
+    return $columns;
+}
+
+function bzj_ouc_engine(mysqli $db, string $table): array
+{
+    $table = $db->real_escape_string($table);
+    $result = bzj_ouc_query(
+        $db,
+        "SHOW TABLE STATUS LIKE '{$table}'"
+    );
+
+    $row = $result instanceof mysqli_result
+        ? $result->fetch_assoc()
+        : [];
+
+    $engine = (string) ($row['Engine'] ?? '');
+
+    return [
+        'engine' => $engine,
+        'transactional' => strcasecmp($engine, 'InnoDB') === 0,
+    ];
+}
+
+function bzj_ouc_wp_table(string $name): string
+{
+    global $table_prefix;
+
+    $prefix = 'wp_';
+
+    if (isset($table_prefix) && is_string($table_prefix)) {
+        $prefix = $table_prefix;
+    }
+
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $prefix)) {
+        bzj_ouc_fail('Unsafe WordPress table prefix.');
+    }
+
+    return $prefix . $name;
+}
+
+function bzj_ouc_connections(): array
+{
+    $connections = [
+        'wp' => get_wp_db_conn(),
+        'wo' => get_wowonder_db(),
+        'qd' => get_qd_db_conn(),
+    ];
+
+    foreach ($connections as $name => $connection) {
+        if (!$connection instanceof mysqli || $connection->connect_errno) {
+            bzj_ouc_fail(ucfirst($name) . ' database connection failed.');
+        }
+
+        if (!$connection->set_charset('utf8mb4')) {
+            bzj_ouc_fail(ucfirst($name) . ' database charset could not be set.');
+        }
+    }
+
+    return $connections;
+}
+
+/* -------------------------------------------------------------------------
+ * Security
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_configured_key(): string
+{
+    $key = getenv('BZJ_ORPHAN_CLEANER_KEY');
+
+    if (!is_string($key) || trim($key) === '') {
+        bzj_ouc_fail(
+            'BZJ_ORPHAN_CLEANER_KEY is missing from the environment.'
+        );
+    }
+
+    return trim($key);
+}
+
+function bzj_ouc_validate_post(): void
+{
+    $nonce = (string) ($_POST['bzj_nonce'] ?? '');
+
+    if (
+        $nonce === '' ||
+        !wp_verify_nonce($nonce, BZJ_OUC_NONCE_ACTION)
+    ) {
+        bzj_ouc_fail('Invalid security token. Please reload the page.');
+    }
+
+    $submitted = trim((string) ($_POST['bzj_access_key'] ?? ''));
+
+    if (
+        $submitted === '' ||
+        !hash_equals(bzj_ouc_configured_key(), $submitted)
+    ) {
+        bzj_ouc_fail('Invalid cleaner access key.');
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Platform configuration
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_platforms(): array
+{
+    return [
+        'wowonder' => [
+            'label' => 'WoWonder Streams',
+            'db' => 'wo',
+            'users' => 'Wo_Users',
+            'id' => 'user_id',
+            'username' => 'username',
+            'email' => 'email',
+            'meta_key' => 'wo_user_id',
+
+            /*
+             * These tables and columns are derived from Wo_DeleteUser().
+             * Optional tables and columns are skipped if unavailable.
+             */
+            'references' => [
+                'Wo_Users_Fields' => ['user_id'],
+                'Wo_RecentSearches' => ['user_id', 'search_id'],
+                'Wo_GamesPlayers' => ['user_id'],
+                'Wo_UserProjects' => ['user_id'],
+                'Wo_UserOpenTo' => ['user_id'],
+                'Wo_Followers' => ['follower_id', 'following_id'],
+                'Wo_Messages' => ['from_id', 'to_id'],
+                'Wo_VideoCalls' => ['from_id', 'to_id'],
+                'Wo_AudioCalls' => ['from_id', 'to_id'],
+                'Wo_Agora' => ['from_id', 'from_id ', 'to_id'],
+                'Wo_Notification' => ['notifier_id', 'recipient_id'],
+                'Wo_Reports' => ['user_id'],
+                'Wo_AppSessions' => ['user_id'],
+                'Wo_AppsSessions' => ['user_id'],
+                'Wo_Comments' => ['user_id'],
+                'Wo_AnnouncementViews' => ['user_id'],
+                'Wo_Likes' => ['user_id'],
+                'Wo_Wonders' => ['user_id'],
+                'Wo_CommentRepliesLikes' => ['user_id'],
+                'Wo_CommentRepliesWonders' => ['user_id'],
+                'Wo_SavedPosts' => ['user_id'],
+                'Wo_CommentLikes' => ['user_id'],
+                'Wo_CommentWonders' => ['user_id'],
+                'Wo_CommentsReplies' => ['user_id'],
+                'Wo_EventsGoing' => ['user_id'],
+                'Wo_EventsInt' => ['user_id'],
+                'Wo_EventsInterested' => ['user_id'],
+                'Wo_BmLikes' => ['user_id'],
+                'Wo_BmDislikes' => ['user_id'],
+                'Wo_UserAdsData' => ['user_id'],
+                'Wo_PaymentTransactions' => ['userid'],
+                'Wo_Activities' => ['user_id', 'follow_id'],
+                'Wo_EventsInv' => ['inviter_id', 'invited_id'],
+                'Wo_GroupMembers' => ['user_id'],
+                'Wo_PagesInvites' => ['inviter_id', 'invited_id'],
+                'Wo_PagesInvaites' => ['inviter_id', 'invited_id'],
+                'Wo_PinnedPosts' => ['user_id'],
+                'Wo_Apps' => ['app_user_id'],
+                'Wo_AppsPermission' => ['user_id'],
+                'Wo_Codes' => ['user_id'],
+                'Wo_Tokens' => ['user_id'],
+                'Wo_BlogReaction' => ['user_id'],
+                'Wo_PagesLikes' => ['user_id'],
+                'Wo_VerificationRequests' => ['user_id'],
+                'Wo_ARequests' => ['user_id'],
+                'Wo_Blocks' => ['blocker', 'blocked'],
+                'Wo_UChats' => ['conversation_user_id', 'user_id'],
+                'Wo_Blog' => ['user'],
+                'Wo_BlogCommentsReplies' => ['user_id'],
+                'Wo_BlogComments' => ['user_id'],
+                'Wo_MovieCommentsReplies' => ['user_id'],
+                'Wo_MovieComments' => ['user_id'],
+                'Wo_AppsHash' => ['user_id'],
+                'Wo_ForumThreads' => ['user'],
+                'Wo_ForumThreadReplies' => ['poster_id'],
+                'Wo_Events' => ['poster_id'],
+                'Wo_UserAds' => ['user_id'],
+                'Wo_UserStory' => ['user_id'],
+                'Wo_HiddenPosts' => ['user_id'],
+                'Wo_GroupChat' => ['user_id'],
+                'Wo_GroupChatUsers' => ['user_id'],
+                'Wo_PageRating' => ['user_id'],
+                'Wo_Family' => ['user_id', 'member_id'],
+                'Wo_Relationship' => ['from_id', 'to_id'],
+                'Wo_PageAdmins' => ['user_id'],
+                'Wo_GroupAdmins' => ['user_id'],
+                'Wo_Reactions' => ['user_id'],
+                'Wo_Job' => ['user_id'],
+                'Wo_JobApply' => ['user_id'],
+                'Wo_Pokes' => ['received_user_id', 'send_user_id'],
+                'Wo_UserGifts' => ['from', 'to'],
+                'Wo_StorySeen' => ['user_id'],
+                'Wo_Refund' => ['user_id'],
+                'Wo_InvitationLinks' => ['user_id', 'invited_id'],
+                'Wo_Mute' => ['user_id'],
+                'Wo_MuteStory' => ['user_id', 'story_user_id'],
+                'Wo_Cast' => ['user_id'],
+                'Wo_CastUsers' => ['user_id'],
+                'Wo_LiveSub' => ['user_id'],
+                'Wo_LiveSubscriptions' => ['user_id'],
+                'Wo_Votes' => ['user_id'],
+                'Wo_BankTransfer' => ['user_id'],
+                'Wo_UserCard' => ['user_id'],
+                'Wo_UserAddress' => ['user_id'],
+                'Wo_UserOrders' => ['user_id', 'product_owner_id'],
+                'Wo_Purchases' => ['user_id', 'owner_id'],
+                'Wo_Email' => ['user_id'],
+                'Wo_Emails' => ['user_id'],
+                'Wo_Posts' => ['user_id', 'recipient_id'],
+                'Wo_Pages' => ['user_id'],
+                'Wo_Groups' => ['user_id'],
+                'Wo_Funding' => ['user_id'],
+                'Wo_Offer' => ['user_id'],
+                'Wo_UserExperience' => ['user_id'],
+                'Wo_UserCertification' => ['user_id'],
+                'Wo_UserMonetization' => ['user_id'],
+                'Wo_UserMonetizations' => ['user_id'],
+                'Wo_MonetizationSubscription' => ['user_id'],
+                'Wo_MonetizationSubscribtion' => ['user_id'],
+                'Wo_MonetizationSubscriptions' => ['user_id'],
+            ],
+        ],
+
+        'quickdate' => [
+            'label' => 'QuickDate Socials',
+            'db' => 'qd',
+            'users' => defined('QD_USERS_TABLE')
+                ? (string) QD_USERS_TABLE
+                : 'users',
+            'id' => 'id',
+            'username' => 'username',
+            'email' => 'email',
+            'meta_key' => 'qd_user_id',
+
+            'references' => [
+                'blocks' => ['user_id', 'block_userid'],
+                'conversations' => ['sender_id', 'receiver_id'],
+                'likes' => ['user_id', 'like_userid'],
+                'mediafiles' => ['user_id'],
+                'messages' => ['from', 'to'],
+                'notifications' => ['notifier_id', 'recipient_id'],
+                'reports' => ['user_id', 'report_userid'],
+                'user_gifts' => ['from', 'to'],
+                'views' => ['user_id', 'view_userid'],
+                'sessions' => ['user_id'],
+                'payments' => ['user_id'],
+                'verification_requests' => ['user_id'],
+            ],
+        ],
+    ];
+}
+
+function bzj_ouc_table_aliases(): array
+{
+    return [
+        'Wo_AppSessions' => ['Wo_AppSessions', 'Wo_AppsSessions'],
+        'Wo_AppsSessions' => ['Wo_AppsSessions', 'Wo_AppSessions'],
+        'Wo_EventsInt' => ['Wo_EventsInt', 'Wo_EventsInterested'],
+        'Wo_EventsInterested' => ['Wo_EventsInterested', 'Wo_EventsInt'],
+        'Wo_PagesInvites' => ['Wo_PagesInvites', 'Wo_PagesInvaites'],
+        'Wo_PagesInvaites' => ['Wo_PagesInvaites', 'Wo_PagesInvites'],
+        'Wo_LiveSub' => ['Wo_LiveSub', 'Wo_LiveSubscriptions'],
+        'Wo_LiveSubscriptions' => ['Wo_LiveSubscriptions', 'Wo_LiveSub'],
+        'Wo_Email' => ['Wo_Email', 'Wo_Emails'],
+        'Wo_Emails' => ['Wo_Emails', 'Wo_Email'],
+        'Wo_UserMonetization' => [
+            'Wo_UserMonetization',
+            'Wo_UserMonetizations',
+        ],
+        'Wo_UserMonetizations' => [
+            'Wo_UserMonetizations',
+            'Wo_UserMonetization',
+        ],
+        'Wo_MonetizationSubscription' => [
+            'Wo_MonetizationSubscription',
+            'Wo_MonetizationSubscribtion',
+            'Wo_MonetizationSubscriptions',
+        ],
+        'Wo_MonetizationSubscribtion' => [
+            'Wo_MonetizationSubscribtion',
+            'Wo_MonetizationSubscription',
+            'Wo_MonetizationSubscriptions',
+        ],
+        'Wo_MonetizationSubscriptions' => [
+            'Wo_MonetizationSubscriptions',
+            'Wo_MonetizationSubscription',
+            'Wo_MonetizationSubscribtion',
+        ],
+    ];
+}
+
+function bzj_ouc_resolve_tables(mysqli $db, string $configured): array
+{
+    $candidates = bzj_ouc_table_aliases()[$configured] ?? [$configured];
+    $resolved = [];
+
+    foreach ($candidates as $candidate) {
+        if (bzj_ouc_table_exists($db, $candidate)) {
+            $resolved[$candidate] = true;
+        }
+    }
+
+    return array_keys($resolved);
+}
+
+function bzj_ouc_authoritative(mysqli $db, array $platform): array
+{
+    $table = (string) $platform['users'];
+
+    if (!bzj_ouc_table_exists($db, $table)) {
+        bzj_ouc_fail('Authoritative table does not exist: ' . $table);
+    }
+
+    $columns = bzj_ouc_columns($db, $table);
+
+    foreach ([
+        $platform['id'],
+        $platform['username'],
+        $platform['email'],
+    ] as $required) {
+        if (!isset($columns[strtolower((string) $required)])) {
+            bzj_ouc_fail(
+                'Required column missing from ' . $table . ': ' . $required
+            );
+        }
+    }
+
+    return [
+        'table' => $table,
+        'id' => $columns[strtolower((string) $platform['id'])],
+        'username' => $columns[strtolower((string) $platform['username'])],
+        'email' => $columns[strtolower((string) $platform['email'])],
+    ];
+}
+
+/* -------------------------------------------------------------------------
+ * Orphan scanning
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_orphan_condition(
+    string $referenceColumn,
+    string $usersTable,
+    string $userIdColumn
+): string {
+    $reference = bzj_ouc_identifier($referenceColumn);
+    $users = bzj_ouc_identifier($usersTable);
+    $userId = bzj_ouc_identifier($userIdColumn);
+
+    /*
+     * Only positive numeric references are considered confirmed orphan IDs.
+     * Blank, NULL, zero, and nonnumeric values are not removed automatically.
+     */
+    return "
+        {$reference} IS NOT NULL
+        AND TRIM(CAST({$reference} AS CHAR)) REGEXP '^[0-9]+$'
+        AND CAST({$reference} AS UNSIGNED) > 0
+        AND NOT EXISTS (
+            SELECT 1
+            FROM {$users} valid_users
+            WHERE CAST(valid_users.{$userId} AS UNSIGNED)
+                = CAST({$reference} AS UNSIGNED)
+        )
+    ";
+}
+
+function bzj_ouc_scan_platform(mysqli $db, string $platformKey): array
+{
+    $platform = bzj_ouc_platforms()[$platformKey];
+    $auth = bzj_ouc_authoritative($db, $platform);
+
+    $countResult = bzj_ouc_query(
+        $db,
+        'SELECT COUNT(*) AS total FROM ' .
+        bzj_ouc_identifier($auth['table'])
+    );
+
+    $countRow = $countResult->fetch_assoc();
+    $findings = [];
+
+    foreach ($platform['references'] as $configuredTable => $columns) {
+        foreach (bzj_ouc_resolve_tables($db, $configuredTable) as $table) {
+            if (strcasecmp($table, $auth['table']) === 0) {
+                continue;
+            }
+
+            $actualColumns = bzj_ouc_columns($db, $table);
+            $conditions = [];
+            $columnFindings = [];
+
+            foreach ($columns as $configuredColumn) {
+                $key = strtolower($configuredColumn);
+
+                if (!isset($actualColumns[$key])) {
+                    continue;
+                }
+
+                $column = $actualColumns[$key];
+                $condition = bzj_ouc_orphan_condition(
+                    $column,
+                    $auth['table'],
+                    $auth['id']
+                );
+
+                $result = bzj_ouc_query(
+                    $db,
+                    'SELECT COUNT(*) AS total FROM ' .
+                    bzj_ouc_identifier($table) .
+                    ' WHERE ' . $condition
+                );
+
+                $row = $result->fetch_assoc();
+                $count = (int) ($row['total'] ?? 0);
+
+                if ($count < 1) {
+                    continue;
+                }
+
+                $sampleResult = bzj_ouc_query(
+                    $db,
+                    'SELECT DISTINCT ' .
+                    bzj_ouc_identifier($column) .
+                    ' AS orphan_id FROM ' .
+                    bzj_ouc_identifier($table) .
+                    ' WHERE ' . $condition .
+                    ' ORDER BY CAST(' .
+                    bzj_ouc_identifier($column) .
+                    ' AS UNSIGNED) LIMIT ' . BZJ_OUC_SAMPLE_LIMIT
+                );
+
+                $samples = [];
+
+                while ($sample = $sampleResult->fetch_assoc()) {
+                    $samples[] = (string) ($sample['orphan_id'] ?? '');
+                }
+
+                $conditions[] = '(' . $condition . ')';
+
+                $columnFindings[] = [
+                    'column' => $column,
+                    'orphan_references' => $count,
+                    'sample_ids' => $samples,
+                ];
+            }
+
+            if (!$conditions) {
+                continue;
+            }
+
+            $rowCountResult = bzj_ouc_query(
+                $db,
+                'SELECT COUNT(*) AS total FROM ' .
+                bzj_ouc_identifier($table) .
+                ' WHERE ' . implode(' OR ', $conditions)
+            );
+
+            $rowCount = $rowCountResult->fetch_assoc();
+
+            $findings[] = [
+                'table' => $table,
+                'columns' => $columnFindings,
+                'orphan_rows' => (int) ($rowCount['total'] ?? 0),
+                'engine' => bzj_ouc_engine($db, $table),
+            ];
+        }
+    }
+
+    return [
+        'platform' => $platformKey,
+        'label' => $platform['label'],
+        'authoritative_table' => $auth['table'],
+        'authoritative_id_column' => $auth['id'],
+        'existing_user_count' => (int) ($countRow['total'] ?? 0),
+        'findings' => $findings,
+    ];
+}
+
+/* -------------------------------------------------------------------------
+ * WordPress/platform ID alignment
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_platform_users(mysqli $db, string $platformKey): array
+{
+    $platform = bzj_ouc_platforms()[$platformKey];
+    $auth = bzj_ouc_authoritative($db, $platform);
+
+    $result = bzj_ouc_query(
+        $db,
+        'SELECT ' . bzj_ouc_identifier($auth['id']) .
+        ' AS platform_id, ' .
+        bzj_ouc_identifier($auth['username']) .
+        ' AS username, ' .
+        bzj_ouc_identifier($auth['email']) .
+        ' AS email FROM ' .
+        bzj_ouc_identifier($auth['table'])
+    );
+
+    $users = [];
+
+    while ($row = $result->fetch_assoc()) {
+        $id = trim((string) ($row['platform_id'] ?? ''));
+
+        if (!ctype_digit($id) || (int) $id < 1) {
+            continue;
+        }
+
+        $users[(string) ((int) $id)] = [
+            'id' => (int) $id,
+            'username' => (string) ($row['username'] ?? ''),
+            'email' => (string) ($row['email'] ?? ''),
+        ];
+    }
+
+    return $users;
+}
+
+function bzj_ouc_platform_indexes(array $users): array
+{
+    $indexes = [
+        'username' => [],
+        'email' => [],
+    ];
+
+    foreach ($users as $user) {
+        $username = bzj_ouc_normalize($user['username']);
+        $email = bzj_ouc_normalize($user['email']);
+
+        if ($username !== '') {
+            $indexes['username'][$username][] = $user;
+        }
+
+        if ($email !== '') {
+            $indexes['email'][$email][] = $user;
+        }
+    }
+
+    return $indexes;
+}
+
+function bzj_ouc_mapping_scan(
+    mysqli $wp,
+    mysqli $wo,
+    mysqli $qd
+): array {
+    $usersTable = bzj_ouc_wp_table('users');
+    $metaTable = bzj_ouc_wp_table('usermeta');
+
+    if (
+        !bzj_ouc_table_exists($wp, $usersTable) ||
+        !bzj_ouc_table_exists($wp, $metaTable)
+    ) {
+        bzj_ouc_fail('WordPress users/usermeta tables were not found.');
+    }
+
+    $platformUsers = [
+        'wowonder' => bzj_ouc_platform_users($wo, 'wowonder'),
+        'quickdate' => bzj_ouc_platform_users($qd, 'quickdate'),
+    ];
+
+    $indexes = [
+        'wowonder' => bzj_ouc_platform_indexes($platformUsers['wowonder']),
+        'quickdate' => bzj_ouc_platform_indexes($platformUsers['quickdate']),
+    ];
+
+    $result = bzj_ouc_query(
+        $wp,
+        'SELECT u.ID, u.user_login, u.user_email,
+            MAX(CASE WHEN m.meta_key = \'wo_user_id\'
+                THEN m.meta_value END) AS wo_user_id,
+            MAX(CASE WHEN m.meta_key = \'qd_user_id\'
+                THEN m.meta_value END) AS qd_user_id
+         FROM ' . bzj_ouc_identifier($usersTable) . ' u
+         LEFT JOIN ' . bzj_ouc_identifier($metaTable) . ' m
+            ON m.user_id = u.ID
+           AND m.meta_key IN (\'wo_user_id\', \'qd_user_id\')
+         GROUP BY u.ID, u.user_login, u.user_email
+         ORDER BY u.ID ASC'
+    );
+
+    $findings = [];
+
+    $summary = [
+        'wordpress_users' => 0,
+        'wowonder_users' => count($platformUsers['wowonder']),
+        'quickdate_users' => count($platformUsers['quickdate']),
+        'aligned' => 0,
+        'blank' => 0,
+        'repairable' => 0,
+        'ambiguous' => 0,
+        'unmatched' => 0,
+    ];
+
+    while ($wpUser = $result->fetch_assoc()) {
+        $summary['wordpress_users']++;
+
+        $wpId = (int) $wpUser['ID'];
+        $wpUsername = bzj_ouc_normalize($wpUser['user_login'] ?? '');
+        $wpEmail = bzj_ouc_normalize($wpUser['user_email'] ?? '');
+
+        foreach ([
+            'wowonder' => 'wo_user_id',
+            'quickdate' => 'qd_user_id',
+        ] as $platformKey => $metaKey) {
+            $storedId = trim((string) ($wpUser[$metaKey] ?? ''));
+
+            /*
+             * Blank metadata is allowed. It commonly means that the user has
+             * not yet logged into that platform.
+             */
+            if ($storedId === '') {
+                $summary['blank']++;
+                continue;
+            }
+
+            $users = $platformUsers[$platformKey];
+            $index = $indexes[$platformKey];
+
+            $emailMatches = $wpEmail !== ''
+                ? ($index['email'][$wpEmail] ?? [])
+                : [];
+
+            $usernameMatches = $wpUsername !== ''
+                ? ($index['username'][$wpUsername] ?? [])
+                : [];
+
+            $candidateIds = [];
+
+            foreach (
+                array_merge($emailMatches, $usernameMatches)
+                as $match
+            ) {
+                $candidateIds[(string) $match['id']] = true;
+            }
+
+            $candidateIds = array_keys($candidateIds);
+
+            $storedValid =
+                ctype_digit($storedId) &&
+                (int) $storedId > 0;
+
+            $storedExists = $storedValid &&
+                isset($users[(string) ((int) $storedId)]);
+
+            $candidateId = null;
+            $repairable = false;
+            $status = 'unmatched';
+
+            /*
+             * A repair is allowed only when username and email independently
+             * identify one and only one platform user, or when one identity
+             * field is blank and the other uniquely identifies the user.
+             */
+            if (
+                count($candidateIds) === 1 &&
+                count($emailMatches) <= 1 &&
+                count($usernameMatches) <= 1
+            ) {
+                $candidateId = (int) $candidateIds[0];
+
+                $emailAgrees =
+                    $wpEmail === '' ||
+                    (
+                        count($emailMatches) === 1 &&
+                        (int) $emailMatches[0]['id'] === $candidateId
+                    );
+
+                $usernameAgrees =
+                    $wpUsername === '' ||
+                    (
+                        count($usernameMatches) === 1 &&
+                        (int) $usernameMatches[0]['id'] === $candidateId
+                    );
+
+                if ($emailAgrees && $usernameAgrees) {
+                    if ($storedId === (string) $candidateId) {
+                        $summary['aligned']++;
+                        continue;
+                    }
+
+                    $status = 'repairable_mismatch';
+                    $repairable = true;
+                    $summary['repairable']++;
+                } else {
+                    $status = 'conflicting_identity';
+                    $summary['ambiguous']++;
+                }
+            } elseif (
+                count($candidateIds) > 1 ||
+                count($emailMatches) > 1 ||
+                count($usernameMatches) > 1
+            ) {
+                $status = 'ambiguous_identity';
+                $summary['ambiguous']++;
+            } elseif (!$storedExists) {
+                $status = 'stored_id_missing_from_platform';
+                $summary['unmatched']++;
+            } else {
+                $status = 'stored_id_has_no_identity_match';
+                $summary['unmatched']++;
+            }
+
+            $findings[] = [
+                'key' => $platformKey . ':' . $wpId,
+                'wp_user_id' => $wpId,
+                'username' => (string) ($wpUser['user_login'] ?? ''),
+                'email' => (string) ($wpUser['user_email'] ?? ''),
+                'platform' => $platformKey,
+                'meta_key' => $metaKey,
+                'stored_id' => $storedId,
+                'candidate_id' => $candidateId,
+                'stored_exists' => $storedExists,
+                'repairable' => $repairable,
+                'status' => $status,
+            ];
+        }
+    }
+
+    return [
+        'summary' => $summary,
+        'findings' => $findings,
+    ];
+}
+
+function bzj_ouc_full_scan(array $connections): array
+{
+    return [
+        'version' => BZJ_OUC_VERSION,
+        'timestamp_utc' => gmdate('c'),
+        'wowonder' => bzj_ouc_scan_platform(
+            $connections['wo'],
+            'wowonder'
+        ),
+        'quickdate' => bzj_ouc_scan_platform(
+            $connections['qd'],
+            'quickdate'
+        ),
+        'mapping' => bzj_ouc_mapping_scan(
+            $connections['wp'],
+            $connections['wo'],
+            $connections['qd']
+        ),
+    ];
+}
+
+/* -------------------------------------------------------------------------
+ * Destructive operations
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_clean_platform(
+    mysqli $db,
+    string $platformKey
+): array {
+    $platform = bzj_ouc_platforms()[$platformKey];
+    $auth = bzj_ouc_authoritative($db, $platform);
+    $results = [];
+
+    /*
+     * Rebuild all conditions against the live schema. The displayed dry-run
+     * result is never trusted as a deletion instruction.
+     */
+    foreach ($platform['references'] as $configuredTable => $columns) {
+        foreach (bzj_ouc_resolve_tables($db, $configuredTable) as $table) {
+            if (strcasecmp($table, $auth['table']) === 0) {
+                continue;
+            }
+
+            $actualColumns = bzj_ouc_columns($db, $table);
+            $conditions = [];
+
+            foreach ($columns as $configuredColumn) {
+                $key = strtolower($configuredColumn);
+
+                if (!isset($actualColumns[$key])) {
+                    continue;
+                }
+
+                $conditions[] = '(' .
+                    bzj_ouc_orphan_condition(
+                        $actualColumns[$key],
+                        $auth['table'],
+                        $auth['id']
+                    ) .
+                    ')';
+            }
+
+            if (!$conditions) {
+                continue;
+            }
+
+            $sql = 'DELETE FROM ' .
+                bzj_ouc_identifier($table) .
+                ' WHERE ' .
+                implode(' OR ', $conditions);
+
+            $engine = bzj_ouc_engine($db, $table);
+            $transactionStarted = false;
+
+            try {
+                if ($engine['transactional']) {
+                    if (!$db->begin_transaction()) {
+                        throw new RuntimeException(
+                            'Could not start transaction for ' . $table
+                        );
+                    }
+
+                    $transactionStarted = true;
+                }
+
+                bzj_ouc_query($db, $sql);
+                $deleted = (int) $db->affected_rows;
+
+                if (
+                    $transactionStarted &&
+                    !$db->commit()
+                ) {
+                    throw new RuntimeException(
+                        'Could not commit transaction for ' . $table
+                    );
+                }
+
+                $results[] = [
+                    'platform' => $platformKey,
+                    'table' => $table,
+                    'deleted_rows' => $deleted,
+                    'status' => 'committed',
+                    'engine' => $engine['engine'],
+                    'transactional' => $engine['transactional'],
+                ];
+            } catch (Throwable $e) {
+                if ($transactionStarted) {
+                    $db->rollback();
+                }
+
+                $results[] = [
+                    'platform' => $platformKey,
+                    'table' => $table,
+                    'deleted_rows' => 0,
+                    'status' => 'failed',
+                    'error' => $e->getMessage(),
+                ];
+
+                throw $e;
+            }
+        }
+    }
+
+    return $results;
+}
+
+function bzj_ouc_repair_mappings(
+    mysqli $wp,
+    array $freshMapping,
+    array $selected
+): array {
+    $metaTable = bzj_ouc_wp_table('usermeta');
+
+    if (!bzj_ouc_table_exists($wp, $metaTable)) {
+        bzj_ouc_fail('WordPress usermeta table was not found.');
+    }
+
+    $results = [];
+
+    foreach ($freshMapping['findings'] as $finding) {
+        $key = (string) $finding['key'];
+
+        if (
+            !isset($selected[$key]) ||
+            empty($finding['repairable']) ||
+            $finding['candidate_id'] === null
+        ) {
+            continue;
+        }
+
+        $wpUserId = (int) $finding['wp_user_id'];
+        $metaKey = (string) $finding['meta_key'];
+        $oldValue = (string) $finding['stored_id'];
+        $newValue = (string) $finding['candidate_id'];
+
+        $metaKeySql = $wp->real_escape_string($metaKey);
+        $newValueSql = $wp->real_escape_string($newValue);
+
+        $transactionStarted = false;
+
+        try {
+            if (!$wp->begin_transaction()) {
+                throw new RuntimeException(
+                    'Could not start WordPress metadata transaction.'
+                );
+            }
+
+            $transactionStarted = true;
+
+            /*
+             * Update all duplicate rows for this user/meta key.
+             */
+            bzj_ouc_query(
+                $wp,
+                'UPDATE ' . bzj_ouc_identifier($metaTable) .
+                " SET meta_value = '{$newValueSql}'
+                 WHERE user_id = {$wpUserId}
+                   AND meta_key = '{$metaKeySql}'"
+            );
+
+            $affected = (int) $wp->affected_rows;
+
+            /*
+             * If the selected metadata row disappeared between scans,
+             * insert it instead.
+             */
+            if ($affected === 0) {
+                $existing = bzj_ouc_query(
+                    $wp,
+                    'SELECT umeta_id FROM ' .
+                    bzj_ouc_identifier($metaTable) .
+                    " WHERE user_id = {$wpUserId}
+                       AND meta_key = '{$metaKeySql}'
+                       LIMIT 1"
+                );
+
+                if (!$existing->fetch_assoc()) {
+                    bzj_ouc_query(
+                        $wp,
+                        'INSERT INTO ' .
+                        bzj_ouc_identifier($metaTable) .
+                        ' (user_id, meta_key, meta_value) VALUES (' .
+                        $wpUserId . ", '{$metaKeySql}', '{$newValueSql}')"
+                    );
+
+                    $affected = 1;
+                }
+            }
+
+            if (!$wp->commit()) {
+                throw new RuntimeException(
+                    'Could not commit WordPress metadata transaction.'
+                );
+            }
+
+            $results[] = [
+                'platform' => $finding['platform'],
+                'wp_user_id' => $wpUserId,
+                'meta_key' => $metaKey,
+                'old_value' => $oldValue,
+                'new_value' => $newValue,
+                'affected' => $affected,
+                'status' => 'committed',
+            ];
+        } catch (Throwable $e) {
+            if ($transactionStarted) {
+                $wp->rollback();
+            }
+
+            $results[] = [
+                'platform' => $finding['platform'],
+                'wp_user_id' => $wpUserId,
+                'meta_key' => $metaKey,
+                'old_value' => $oldValue,
+                'new_value' => $newValue,
+                'status' => 'failed',
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    return $results;
+}
+
+/* -------------------------------------------------------------------------
+ * Rendering
+ * ---------------------------------------------------------------------- */
+
+function bzj_ouc_render_orphans(array $scan): string
+{
+    $html = '';
+
+    foreach (['wowonder', 'quickdate'] as $platformKey) {
+        $platform = $scan[$platformKey];
+
+        $html .= '<h3>' . bzj_ouc_h($platform['label']) . '</h3>';
+        $html .= '<p><strong>Authoritative table:</strong> <code>' .
+            bzj_ouc_h($platform['authoritative_table']) .
+            '</code><br><strong>Existing users:</strong> ' .
+            (int) $platform['existing_user_count'] .
+            '</p>';
+
+        if (empty($platform['findings'])) {
+            $html .= '<p class="success">No confirmed orphan rows found.</p>';
+            continue;
+        }
+
+        $html .= '<table><thead><tr>
+            <th>Table</th>
+            <th>Reference columns</th>
+            <th>Rows to remove</th>
+            <th>Sample orphan IDs</th>
+            <th>Storage</th>
+        </tr></thead><tbody>';
+
+        foreach ($platform['findings'] as $finding) {
+            $engine = $finding['engine']['engine'] ?: 'unknown';
+            $transactional = $finding['engine']['transactional']
+                ? 'transactional'
+                : 'non-transactional';
+
+            $html .= '<tr><td><code>' .
+                bzj_ouc_h($finding['table']) .
+                '</code></td><td>';
+
+            foreach ($finding['columns'] as $column) {
+                $html .= '<div><code>' .
+                    bzj_ouc_h($column['column']) .
+                    '</code>: ' .
+                    (int) $column['orphan_references'] .
+                    '</div>';
+            }
+
+            $html .= '</td><td><strong>' .
+                (int) $finding['orphan_rows'] .
+                '</strong></td><td>';
+
+            foreach ($finding['columns'] as $column) {
+                $html .= '<div><code>' .
+                    bzj_ouc_h($column['column']) .
+                    '</code>: ' .
+                    bzj_ouc_h(implode(', ', $column['sample_ids'])) .
+                    '</div>';
+            }
+
+            $html .= '</td><td>' .
+                bzj_ouc_h($engine . ' / ' . $transactional) .
+                '</td></tr>';
+        }
+
+        $html .= '</tbody></table>';
+    }
+
+    return $html;
+}
+
+function bzj_ouc_render_mapping(array $mapping): string
+{
+    $summary = $mapping['summary'];
+
+    $html = '<div class="stats">';
+
+    foreach ([
+        'wordpress_users' => 'WordPress users',
+        'wowonder_users' => 'WoWonder users',
+        'quickdate_users' => 'QuickDate users',
+        'aligned' => 'Aligned',
+        'blank' => 'Blank / not logged in',
+        'repairable' => 'Repairable',
+        'ambiguous' => 'Ambiguous',
+        'unmatched' => 'Unmatched',
+    ] as $key => $label) {
+        $html .= '<div class="stat"><span>' .
+            bzj_ouc_h($label) .
+            '</span><strong>' .
+            (int) ($summary[$key] ?? 0) .
+            '</strong></div>';
+    }
+
+    $html .= '</div>';
+
+    if (empty($mapping['findings'])) {
+        return $html .
+            '<p class="success">No ID mismatches were found.</p>';
+    }
+
+    $html .= '<table><thead><tr>
+        <th>Repair</th>
+        <th>WP User ID</th>
+        <th>Username</th>
+        <th>Email</th>
+        <th>Platform</th>
+        <th>Platform User ID</th>
+        <th>WP Meta Value</th>
+        <th>Status</th>
+    </tr></thead><tbody>';
+
+    foreach ($mapping['findings'] as $finding) {
+        $checkbox = !empty($finding['repairable'])
+            ? '<input class="repair-checkbox"
+                type="checkbox"
+                name="repair[]"
+                value="' . bzj_ouc_h($finding['key']) . '">'
+            : '<span class="muted">—</span>';
+
+        $html .= '<tr><td>' . $checkbox . '</td>
+            <td>' . (int) $finding['wp_user_id'] . '</td>
+            <td>' . bzj_ouc_h($finding['username']) . '</td>
+            <td>' . bzj_ouc_h($finding['email']) . '</td>
+            <td>' . bzj_ouc_h($finding['platform']) . '</td>
+            <td>' . bzj_ouc_h($finding['candidate_id'] ?? '') . '</td>
+            <td>' . bzj_ouc_h($finding['stored_id']) . '</td>
+            <td><code>' . bzj_ouc_h($finding['status']) . '</code></td>
+        </tr>';
+    }
+
+    return $html . '</tbody></table>';
+}
+
+function bzj_ouc_render_results(array $results): string
+{
+    if (!$results) {
+        return '<p class="muted">No rows required processing.</p>';
+    }
+
+    $html = '<table><thead><tr>
+        <th>Platform</th>
+        <th>Target</th>
+        <th>Action</th>
+        <th>Status</th>
+        <th>Details</th>
+    </tr></thead><tbody>';
+
+    foreach ($results as $result) {
+        $target = $result['table'] ??
+            ('WordPress user ' . ($result['wp_user_id'] ?? ''));
+
+        if (array_key_exists('deleted_rows', $result)) {
+            $action = 'Deleted ' . (int) $result['deleted_rows'] . ' row(s)';
+        } else {
+            $action = 'Updated ' .
+                bzj_ouc_h($result['meta_key'] ?? '');
+        }
+
+        $details = (string) ($result['error'] ?? '');
+
+        if (
+            $details === '' &&
+            isset($result['old_value'], $result['new_value'])
+        ) {
+            $details = 'Old: ' .
+                $result['old_value'] .
+                ' → New: ' .
+                $result['new_value'];
+        }
+
+        $html .= '<tr>
+            <td>' . bzj_ouc_h($result['platform'] ?? 'WordPress') . '</td>
+            <td><code>' . bzj_ouc_h($target) . '</code></td>
+            <td>' . $action . '</td>
+            <td><code>' .
+            bzj_ouc_h($result['status'] ?? '') .
+            '</code></td>
+            <td>' . bzj_ouc_h($details) . '</td>
+        </tr>';
+    }
+
+    return $html . '</tbody></table>';
+}
+
+/* -------------------------------------------------------------------------
+ * Request handling
+ * ---------------------------------------------------------------------- */
+
+$action = (string) ($_POST['bzj_action'] ?? '');
+$scan = null;
+$results = [];
+$message = '';
+$error = '';
+
+try {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        bzj_ouc_validate_post();
+        $connections = bzj_ouc_connections();
+
+        if ($action === 'scan') {
+            $scan = bzj_ouc_full_scan($connections);
+
+            bzj_ouc_log('orphan_cleaner_dry_run', [
+                'version' => BZJ_OUC_VERSION,
+                'scan' => $scan,
+            ]);
+
+            $message = 'Dry run completed. No database rows were changed.';
+        } elseif ($action === 'clean') {
+            $confirmation = trim(
+                (string) ($_POST['confirmation_phrase'] ?? '')
+            );
+
+            if (
+                !hash_equals(
+                    BZJ_OUC_CLEAN_CONFIRMATION,
+                    $confirmation
+                )
+            ) {
+                bzj_ouc_fail(
+                    'The orphan cleanup confirmation phrase is incorrect.'
+                );
+            }
+
+            /*
+             * Fresh scan immediately before deletion.
+             */
+            $before = bzj_ouc_full_scan($connections);
+
+            $results = array_merge(
+                bzj_ouc_clean_platform(
+                    $connections['wo'],
+                    'wowonder'
+                ),
+                bzj_ouc_clean_platform(
+                    $connections['qd'],
+                    'quickdate'
+                )
+            );
+
+            $scan = bzj_ouc_full_scan($connections);
+
+            bzj_ouc_log('orphan_cleaner_cleanup', [
+                'version' => BZJ_OUC_VERSION,
+                'before' => $before,
+                'results' => $results,
+                'after' => $scan,
+            ]);
+
+            $message = 'Cleanup completed and the databases were rescanned.';
+        } elseif ($action === 'repair') {
+            $confirmation = trim(
+                (string) ($_POST['confirmation_phrase'] ?? '')
+            );
+
+            if (
+                !hash_equals(
+                    BZJ_OUC_REPAIR_CONFIRMATION,
+                    $confirmation
+                )
+            ) {
+                bzj_ouc_fail(
+                    'The ID repair confirmation phrase is incorrect.'
+                );
+            }
+
+            $selected = [];
+
+            foreach ((array) ($_POST['repair'] ?? []) as $key) {
+                $key = (string) $key;
+
+                if (preg_match('/^(wowonder|quickdate):[0-9]+$/', $key)) {
+                    $selected[$key] = true;
+                }
+            }
+
+            if (!$selected) {
+                bzj_ouc_fail(
+                    'Select at least one repairable mismatch.'
+                );
+            }
+
+            /*
+             * Fresh mapping scan prevents stale checkbox data from changing
+             * a mapping that is no longer valid.
+             */
+            $before = bzj_ouc_mapping_scan(
+                $connections['wp'],
+                $connections['wo'],
+                $connections['qd']
+            );
+
+            $results = bzj_ouc_repair_mappings(
+                $connections['wp'],
+                $before,
+                $selected
+            );
+
+            $scan = bzj_ouc_full_scan($connections);
+
+            bzj_ouc_log('orphan_cleaner_mapping_repair', [
+                'version' => BZJ_OUC_VERSION,
+                'selected' => array_keys($selected),
+                'before' => $before,
+                'results' => $results,
+                'after' => $scan['mapping'],
+            ]);
+
+            $message = 'Selected ID repairs completed and mappings were rescanned.';
+        } else {
+            bzj_ouc_fail('Unknown operation.');
+        }
+    }
+} catch (Throwable $e) {
+    $error = $e->getMessage();
+
+    bzj_ouc_log('orphan_cleaner_error', [
+        'version' => BZJ_OUC_VERSION,
+        'action' => $action,
+        'error' => $error,
+    ]);
+}
+
+$nonce = wp_create_nonce(BZJ_OUC_NONCE_ACTION);
+?>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Buzzjuice User Data Cleaner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+    margin: 0;
+    padding: 24px;
+    background: #f3f5f7;
+    color: #202124;
+    font: 14px/1.5 Arial, sans-serif;
+}
+main {
+    max-width: 1600px;
+    margin: auto;
+    padding: 28px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 16px rgba(0,0,0,.08);
+}
+h1,h2,h3 {
+    color: #172b4d;
+}
+.panel {
+    margin: 18px 0;
+    padding: 18px;
+    border: 1px solid #d9e0e7;
+    border-radius: 8px;
+}
+.notice,.warning,.success,.danger {
+    margin: 12px 0;
+    padding: 12px 14px;
+    border-radius: 6px;
+}
+.notice {
+    background: #eaf2ff;
+    border-left: 4px solid #2463eb;
+}
+.warning {
+    background: #fff7df;
+    border-left: 4px solid #d99a00;
+}
+.success {
+    background: #eaf8ee;
+    border-left: 4px solid #2e8b57;
+}
+.danger {
+    background: #ffeded;
+    border-left: 4px solid #c62828;
+}
+.muted {
+    color: #687078;
+}
+.small {
+    font-size: 12px;
+}
+table {
+    width: 100%;
+    margin: 12px 0 22px;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+th,td {
+    padding: 8px;
+    border: 1px solid #d9e0e7;
+    text-align: left;
+    vertical-align: top;
+}
+th {
+    background: #f5f7fa;
+}
+button {
+    margin: 4px 8px 4px 0;
+    padding: 10px 15px;
+    color: #fff;
+    background: #2463eb;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+}
+button.danger-button {
+    background: #c62828;
+}
+button.repair-button {
+    background: #6a35a8;
+}
+input[type=text],
+input[type=password] {
+    min-width: 320px;
+    padding: 9px;
+    border: 1px solid #b9c1c9;
+    border-radius: 5px;
+}
+.stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 10px;
+    margin: 12px 0;
+}
+.stat {
+    padding: 12px;
+    background: #f5f7fa;
+    border: 1px solid #d9e0e7;
+    border-radius: 6px;
+}
+.stat span,.stat strong {
+    display: block;
+}
+.stat strong {
+    margin-top: 4px;
+    font-size: 20px;
+}
+code {
+    overflow-wrap: anywhere;
+}
+</style>
+<script>
+function toggleRepairCheckboxes(source) {
+    document.querySelectorAll('.repair-checkbox').forEach(function (box) {
+        box.checked = source.checked;
+    });
+}
+
+function confirmDestructive(message) {
+    return window.confirm(message);
+}
+</script>
+</head>
+<body>
+<main>
+<h1>Buzzjuice WoWonder + QuickDate User Data Cleaner</h1>
+
+<div class="notice">
+    <strong>Version:</strong>
+    <?= bzj_ouc_h(BZJ_OUC_VERSION) ?><br>
+    <code>Wo_Users</code> and QuickDate <code>users</code> are authoritative
+    and are never deleted.<br>
+    Media and S3 objects are not touched.
+</div>
+
+<?php if ($message !== ''): ?>
+    <div class="success"><?= bzj_ouc_h($message) ?></div>
+<?php endif; ?>
+
+<?php if ($error !== ''): ?>
+    <div class="danger">
+        <strong>Operation failed:</strong>
+        <?= bzj_ouc_h($error) ?>
+    </div>
+<?php endif; ?>
+
+<div class="panel">
+<h2>1. Dry Run</h2>
+
+<p>
+The dry run searches approved WoWonder and QuickDate reference tables for
+positive numeric user IDs that no longer exist in the corresponding
+authoritative user table. It also checks WordPress platform-ID mappings.
+No database rows are changed.
+</p>
+
+<form method="post">
+    <input type="hidden" name="bzj_action" value="scan">
+    <input type="hidden" name="bzj_nonce"
+           value="<?= bzj_ouc_h($nonce) ?>">
+
+    <label>
+        Cleaner access key:
+        <input type="password"
+               name="bzj_access_key"
+               autocomplete="off"
+               required>
+    </label>
+
+    <button type="submit">Start Dry Run</button>
+</form>
+</div>
+
+<?php if ($scan !== null): ?>
+
+<div class="panel">
+<h2>2. Dry-Run Orphan Results</h2>
+
+<p class="small muted">
+    Scan timestamp:
+    <?= bzj_ouc_h($scan['timestamp_utc']) ?>
+</p>
+
+<?= bzj_ouc_render_orphans($scan) ?>
+</div>
+
+<div class="panel">
+<h2>3. WordPress Platform-ID Alignment</h2>
+
+<p>
+A blank <code>wo_user_id</code> or <code>qd_user_id</code> is allowed and is
+normally treated as a user who has not yet logged into that platform.
+Only unambiguous username/email matches can be repaired automatically.
+</p>
+
+<form method="post">
+    <input type="hidden" name="bzj_action" value="repair">
+    <input type="hidden" name="bzj_nonce"
+           value="<?= bzj_ouc_h($nonce) ?>">
+
+    <?= bzj_ouc_render_mapping($scan['mapping']) ?>
+
+    <label>
+        <input type="checkbox"
+               onclick="toggleRepairCheckboxes(this)">
+        Select all repairable mismatches
+    </label>
+
+    <p>
+        Cleaner access key:
+        <input type="password"
+               name="bzj_access_key"
+               autocomplete="off"
+               required>
+    </p>
+
+    <p>
+        Type
+        <code><?= bzj_ouc_h(BZJ_OUC_REPAIR_CONFIRMATION) ?></code>:
+        <input type="text"
+               name="confirmation_phrase"
+               autocomplete="off"
+               required>
+    </p>
+
+    <button class="repair-button" type="submit">
+        Repair Selected ID Mismatches
+    </button>
+</form>
+</div>
+
+<div class="panel">
+<h2>4. Clean Confirmed Orphans</h2>
+
+<div class="warning">
+    <strong>Destructive operation.</strong>
+    The cleaner performs a fresh scan immediately before deletion. The
+    displayed dry-run results are not used as stale deletion instructions.
+    Make a backup of all three databases before continuing.
+</div>
+
+<form method="post"
+      onsubmit="return confirmDestructive(
+        'This will permanently delete confirmed orphan reference rows from WoWonder and QuickDate. Continue?'
+      );">
+    <input type="hidden" name="bzj_action" value="clean">
+    <input type="hidden" name="bzj_nonce"
+           value="<?= bzj_ouc_h($nonce) ?>">
+
+    <p>
+        Cleaner access key:
+        <input type="password"
+               name="bzj_access_key"
+               autocomplete="off"
+               required>
+    </p>
+
+    <p>
+        Type
+        <code><?= bzj_ouc_h(BZJ_OUC_CLEAN_CONFIRMATION) ?></code>:
+        <input type="text"
+               name="confirmation_phrase"
+               autocomplete="off"
+               required>
+    </p>
+
+    <button class="danger-button" type="submit">
+        Clean Confirmed Orphans
+    </button>
+</form>
+</div>
+
+<?php endif; ?>
+
+<?php if (!empty($results)): ?>
+<div class="panel">
+<h2>Operation Results</h2>
+
+<?= bzj_ouc_render_results($results) ?>
+
+<?php if ($scan !== null): ?>
+    <h3>Post-Operation Orphan Verification</h3>
+    <?= bzj_ouc_render_orphans($scan) ?>
+
+    <h3>Post-Operation Platform-ID Verification</h3>
+    <?= bzj_ouc_render_mapping($scan['mapping']) ?>
+<?php endif; ?>
+</div>
+<?php endif; ?>
+
+<div class="panel">
+<h2>Safety Notes</h2>
+<ul>
+    <li>Only WordPress administrators can use this utility.</li>
+    <li>POST requests require a WordPress nonce.</li>
+    <li>POST requests require <code>BZJ_ORPHAN_CLEANER_KEY</code>.</li>
+    <li>The page sends no-cache headers to reduce stale nonce errors.</li>
+    <li>Dry runs are read-only.</li>
+    <li>Authoritative user records are never deleted.</li>
+    <li>WordPress users and usermeta unrelated to selected repairs are not changed.</li>
+    <li>Media and object-storage files are not deleted.</li>
+    <li>Only allow-listed reference tables are automatically cleaned.</li>
+    <li>Missing optional tables and columns are skipped.</li>
+    <li>Ambiguous identity matches cannot be repaired.</li>
+    <li>Blank platform IDs are allowed.</li>
+    <li>The existing <code>bzj_log()</code> function is reused and never redeclared.</li>
+</ul>
+</div>
+
+<p class="small muted">
+    Remove this maintenance file or restrict it at the web-server level after
+    the cleanup has been completed.
+</p>
+
+</main>
+</body>
+</html>
+````
+
+Important deployment notes:
+
+1. Back up the WordPress, WoWonder, and QuickDate databases first.
+2. Confirm PHP can read `BZJ_ORPHAN_CLEANER_KEY` through the existing `.env` loading mechanism.
+3. Run the dry run first.
+4. Review unmatched and ambiguous platform mappings manually. They are intentionally not repaired automatically.
+5. Only use the cleanup action after reviewing the dry-run output.
+6. Remove or server-restrict the file after maintenance is complete.
+
+<<STOP GITHUB>>
