@@ -468,9 +468,17 @@ Based on the Wo_DeleteUser() and delete_user() functions, develop a script that 
 
 This could be done by checking the 'Wo_Users' (WoWonder) and 'users' (QuickDate) tables for all existing user ids then checking the referenced tables for any existing user data that does not match with any existing user. The identified data could be shown after a dry run then optimally processed to clear the redundant user data.
 
-The wo_user_id and qd_user_id may have also become misaligned where a user's actual WoWonder Streams users 'user_id' in the 'Wo_Users' table does not match with the 'wo_user_id' in the WordPress user meta and QuickDate Socials users 'id' in the 'users' table also does not match with the 'qd_user_id' in the WordPress user meta. Ideally, the wo_use_id and qd_user_id in the WordPress user meta should get their values from WoWonder and QuickDate. Add a feature to scan the fields against the username or email that should match across the platforms. After scanning and displaying any annomalies, the option to repair the mismatch.
+The wo_user_id and qd_user_id may have also become misaligned where:
 
-The db_helpers file contains WoWonder and QuickDate database connection details.
+1. a user's actual WoWonder Streams users 'user_id' in the 'Wo_Users' table does not match with the 'wo_user_id' in the WordPress user meta
+
+2. a user's actual QuickDate Socials users 'id' in the 'users' table does not match with the 'qd_user_id' in the WordPress user meta.
+
+Using the username or email that matches across all platforms, scan the WoWonder Streams users 'user_id' in the 'Wo_Users' table and the QuickDate Socials users 'id' in the 'users' table to get the values. There should be three key columns to display Platform (WoWonder or QuickDate), User ID and WP Meta Value (displays either wo_user_id or qd_user_id values). There is a mismatch where ID and WP Meta Value do not match. 
+
+After scanning and displaying any mismatches in a dry run, a checkbox should appear by each row to allow selection of the mismatches to be repaired. Include a 'select all' to select all fields with mismatches for bulk repair. Add a dropdown to show all or show only rows where 'Platform User ID' and 'WP Meta Value' do not match. Also show changes that would be made if a repair is applied. 
+
+If WoWonder user_id, username, email and wo_user_id are blank/empty or QuickDate id, username, email and qd_user_id are blank/empty, it might just mean that the user has not logged on to the referenced platform yet so should not be seen as a mismatch.
 
 Note the following:
 <<START NOTES>>
@@ -483,6 +491,17 @@ Note the following:
 4. The dry run should show results of items the would be removed. The admin can then choose to proceed with the clean.
 
 5. Results of the clean should be shown after the clean.
+
+6. bzj_log() function already exists in 'buzzjuice.net/wp-content/mu-plugins/bzj-registration-kernel.php:58'.
+
+7. Got the following message in a previous development:
+<<START>>
+Operation failed: Invalid security token. Please reload the page.
+<<STOP>>
+
+BZJ_ORPHAN_CLEANER_KEY has been placed in the .env file to use as a security key to be matched with.
+
+8. The db_helpers file contains WoWonder and QuickDate database connection details.
 
 <<STOP NOTES>>
 
