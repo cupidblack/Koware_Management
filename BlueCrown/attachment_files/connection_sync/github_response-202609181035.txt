@@ -1,0 +1,572 @@
+<<START GITHUB>>
+
+I can’t responsibly provide a complete replacement plugin from the supplied material because the source is not complete code. The attached file contains literal truncations such as:
+
+```php
+self::[...]
+```
+
+and:
+
+```php
+private function map_external_to_wp(...) {
+    ...
+}
+```
+
+with multiple method bodies replaced by `[...]`. The previous ChatGPT response is also truncated. Reconstructing the missing methods would require inventing behavior and could silently break the already-working BuddyBoss → Socials and BuddyBoss → Streams paths.
+
+## Important findings
+
+The current v8.4.1 design should be retained as the functional baseline, but several corrections are required before generating a production replacement.
+
+### 1. The current REST payload contract is inconsistent
+
+The README and previous design describe external IDs as:
+
+```json
+{
+  "origin": "streams",
+  "actor_external_id": 123,
+  "target_external_id": 456
+}
+```
+
+However, the supplied plugin reads:
+
+```php
+$actor_external = absint(isset($payload['actor_id']) ? $payload['actor_id'] : 0);
+$target_external = absint(isset($payload['target_id']) ? $payload['target_id'] : 0);
+```
+
+The implementation must use one contract consistently. The recommended contract is:
+
+```json
+{
+  "origin": "streams",
+  "operation": "follow",
+  "event_id": "UUID",
+  "actor_external_id": 123,
+  "target_external_id": 456
+}
+```
+
+The endpoint should reject `actor_id` and `target_id` unless backward compatibility is deliberately required.
+
+### 2. `X-BZJ-Platform` is documented but not enforced
+
+The README says the endpoint requires:
+
+```text
+X-BZJ-Timestamp
+X-BZJ-Signature
+X-BZJ-Platform
+```
+
+The supplied authentication method only verifies timestamp and signature. It should also verify that:
+
+```php
+X-BZJ-Platform === payload['origin']
+```
+
+and that the header is exactly either:
+
+```text
+streams
+```
+
+or:
+
+```text
+socials
+```
+
+This prevents a correctly signed request from one platform being mislabeled as another.
+
+### 3. BuddyBoss connection removal should be handled once
+
+The current plugin registers both:
+
+```php
+friends_friendship_deleted
+friends_friendship_post_delete
+```
+
+Both hooks can represent the same removal lifecycle. Processing both creates duplicate events and can cause the second callback to lose the original friendship state.
+
+The safer design is:
+
+- Use `friends_friendship_deleted` as the primary removal hook.
+- Use `friends_friendship_post_delete` only as a compatibility fallback.
+- Deduplicate by a short-lived key containing the pair and friendship ID.
+- Do not process the fallback if the primary hook already processed the same friendship.
+
+The event ledger makes the external projection idempotent, but it does not prevent unnecessary duplicate event creation.
+
+### 4. Withdrawal and rejection must preserve the original participants
+
+The current code attempts to reconstruct the friendship object using:
+
+```php
+new BP_Friends_Friendship($friendship_id, true, false)
+```
+
+That is unsafe unless the installed BuddyBoss constructor has exactly that signature.
+
+The handler should first use the object supplied by the hook. If the object is unavailable, retrieve the friendship record directly from the BuddyBoss friendship table before deletion. The participant fields must be:
+
+```php
+initiator_user_id
+friend_user_id
+```
+
+Do not infer either participant from the current logged-in user.
+
+This is especially important for the reported failure where cancellation of a BuddyBoss request does not remove the QuickDate pending row.
+
+### 5. QuickDate connection projection must be semantically separate from follows
+
+This rule is correct and must remain:
+
+```text
+QuickDate Add Friend ≠ QuickDate ordinary Follow
+```
+
+The following operations must remain distinct:
+
+```text
+connection_request
+connection_accept
+connection_reject
+connection_withdraw
+connection_remove
+follow
+unfollow
+block
+unblock
+```
+
+Do not use `Wo_DeleteFollow()` to infer whether a QuickDate action was an unfriend or ordinary unfollow. QuickDate stores both relationship types in `followers`.
+
+### 6. The Streams “auto-accept” requirement should not modify the predicate
+
+The proposed change to `Wo_IsFollowRequested()` should not be implemented. That function is a predicate and must remain read-only.
+
+The correct Streams behavior is:
+
+```php
+$active = 1;
+```
+
+inside `Wo_RegisterFollow()` immediately before insertion, provided the Friends System is disabled.
+
+The following function should remain read-only:
+
+```php
+Wo_IsFollowRequested()
+```
+
+No database mutation should be added to it.
+
+### 7. External actions must use native BuddyBoss operations
+
+For external commands, the plugin should continue to use:
+
+```php
+friends_add_friend()
+friends_accept_friendship()
+friends_reject_friendship()
+friends_withdraw_friendship()
+friends_remove_friend()
+bp_start_following()
+bp_stop_following()
+```
+
+This preserves BuddyBoss connection restrictions.
+
+However, direct construction and saving of `BP_Moderation` objects can bypass restrictions enforced by the BuddyBoss UI. The final implementation must either:
+
+1. call the installed BuddyBoss moderation function that performs the normal authorization checks, or
+2. explicitly validate the actor against the same permission and moderation rules before calling `BP_Moderation::save()`.
+
+### 8. Blocking should be destructive and unblock should not restore state
+
+The agreed policy should be:
+
+#### Block
+
+- Create the BuddyBoss block.
+- Remove the BuddyBoss connection.
+- Remove both BuddyBoss follow directions.
+- Create the Streams block.
+- Remove Streams follows.
+- Create the Socials block.
+- Remove Socials relationship rows.
+
+#### Unblock
+
+- Remove the BuddyBoss block.
+- Remove the Streams block.
+- Remove the Socials block.
+- Restore nothing automatically.
+
+This is consistent with the working v8.1 behavior and the previous ChatGPT recommendation.
+
+### 9. Logging must distinguish database connection from table availability
+
+The diagnostics and startup logs should record, for each external platform:
+
+```json
+{
+  "connected": true,
+  "database": "database_name",
+  "tables": {
+    "followers": true,
+    "blocks": true
+  }
+}
+```
+
+The log must distinguish:
+
+- connection failure,
+- database-name lookup failure,
+- missing table,
+- missing required column,
+- SQL execution failure,
+- read-back verification failure.
+
+The current verification should also inspect required columns.
+
+#### Streams
+
+```text
+followers/followers table:
+following_id
+follower_id
+active
+
+blocks table:
+blocker
+blocked
+```
+
+#### Socials
+
+```text
+followers table:
+following_id
+follower_id
+active
+
+blocks table:
+user_id
+block_userid
+```
+
+### 10. The current schedule is too slow for recovery
+
+The current plugin schedules recovery hourly:
+
+```php
+wp_schedule_event(time() + 300, 'hourly', self::CRON_HOOK);
+```
+
+For connection synchronization, recovery should run every five minutes if a custom interval is registered. The reconciliation job can remain hourly.
+
+The recovery queue must preserve the original event UUID and never create a new UUID during retry.
+
+## Updated integration proposal
+
+### Canonical state
+
+BuddyBoss remains authoritative for:
+
+- connections,
+- follows,
+- blocks.
+
+Streams and Socials are projections and command clients.
+
+### BuddyBoss → Streams
+
+| BuddyBoss event | Streams result |
+|---|---|
+| Connection request | No change |
+| Connection accepted | No change |
+| Connection rejected/withdrawn | No change |
+| Connection removed | No change |
+| Follow | Immediate directional follow |
+| Unfollow | Directional follow removed |
+| Block | Directional block created; both follow directions removed |
+| Unblock | Directional block removed; nothing restored |
+
+### BuddyBoss → Socials
+
+| BuddyBoss event | Socials result |
+|---|---|
+| Connection request | `followers` row with `active=0` |
+| Connection accepted | Reciprocal rows with `active=1` |
+| Connection rejected | Pending request row removed |
+| Connection withdrawn | Pending request row removed |
+| Connection removed | Connection-owned rows removed; independent follows preserved |
+| Follow | No automatic Socials follow |
+| Unfollow | No automatic Socials change |
+| Block | Socials block created and relationship projections removed |
+| Unblock | Socials block removed; nothing restored |
+
+### Streams → BuddyBoss
+
+| Streams event | BuddyBoss result |
+|---|---|
+| Follow | Native BuddyBoss follow created |
+| Unfollow | Native BuddyBoss follow removed |
+| Block | Native BuddyBoss block created and destructive enforcement applied |
+| Unblock | Native BuddyBoss block removed |
+
+Streams must not create BuddyBoss connection requests.
+
+### Socials → BuddyBoss
+
+| Socials event | BuddyBoss result |
+|---|---|
+| Add Friend | Native BuddyBoss connection request |
+| Approve Friend | Native BuddyBoss connection accepted |
+| Reject Friend | Native BuddyBoss connection rejected |
+| Withdraw Friend | Native BuddyBoss connection withdrawn |
+| Unfriend | Native BuddyBoss connection removed |
+| Ordinary Follow | Native BuddyBoss follow |
+| Ordinary Unfollow | Native BuddyBoss unfollow |
+| Block | Native BuddyBoss block |
+| Unblock | Native BuddyBoss unblock |
+
+Socials ordinary follows must not become BuddyBoss connection requests.
+
+## Required external client contract
+
+The shared client should send:
+
+```json
+{
+  "origin": "streams",
+  "operation": "follow",
+  "event_id": "UUID",
+  "actor_external_id": 123,
+  "target_external_id": 456
+}
+```
+
+or:
+
+```json
+{
+  "origin": "socials",
+  "operation": "connection_request",
+  "event_id": "UUID",
+  "actor_external_id": 123,
+  "target_external_id": 456
+}
+```
+
+The client must:
+
+1. perform the local platform database mutation first;
+2. verify the local mutation by reading the row back;
+3. send the signed command to WordPress;
+4. write failed commands to the platform outbox;
+5. retry using the same UUID;
+6. log the database, table, operation, affected rows, and verification result;
+7. never load `wp-load.php`.
+
+## Required surgical Streams changes
+
+Do not regenerate `functions_one.php`.
+
+### `Wo_RegisterFollow()`
+
+Immediately before inserting the follow row:
+
+```php
+$active = 1;
+```
+
+After a successful insert and read-back verification, send:
+
+```php
+bzj_rel_sync_send(
+    'streams',
+    'follow',
+    (int) $wo['user']['user_id'],
+    (int) $following_id
+);
+```
+
+Use the actual authenticated user variable from the installed file.
+
+### Streams `Wo_DeleteFollow()`
+
+After the local delete succeeds and the row is verified absent:
+
+```php
+bzj_rel_sync_send(
+    'streams',
+    'unfollow',
+    (int) $wo['user']['user_id'],
+    (int) $following_id
+);
+```
+
+### `Wo_RegisterBlock()`
+
+After the block insert succeeds and is verified:
+
+```php
+bzj_rel_sync_send(
+    'streams',
+    'block',
+    (int) $wo['user']['user_id'],
+    (int) $user_id
+);
+```
+
+### `Wo_RemoveBlock()`
+
+After the block deletion succeeds and is verified:
+
+```php
+bzj_rel_sync_send(
+    'streams',
+    'unblock',
+    (int) $wo['user']['user_id'],
+    (int) $user_id
+);
+```
+
+Do not modify `Wo_IsFollowRequested()` to write to the database.
+
+## Required Socials changes
+
+The existing action semantics should be used directly.
+
+### Add Friend
+
+After the pending QuickDate row is successfully created:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'connection_request',
+    (int) self::ActiveUser()->id,
+    (int) $to
+);
+```
+
+### Approve Friend
+
+After the local row becomes active:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'connection_accept',
+    (int) self::ActiveUser()->id,
+    (int) $friend_request_userid
+);
+```
+
+### Reject Friend
+
+After the pending row is deleted:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'connection_reject',
+    (int) self::ActiveUser()->id,
+    (int) $friend_request_to_userid
+);
+```
+
+The exact actor and requester variables must be confirmed against the installed action semantics.
+
+### Unfriend
+
+After the accepted relationship is removed:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'connection_remove',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+Do not substitute `unfollow`.
+
+### Ordinary Follow and Unfollow
+
+Only ordinary QuickDate follow actions should send:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'follow',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+and:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'unfollow',
+    (int) self::ActiveUser()->id,
+    (int) $target_user_id
+);
+```
+
+### Socials block and unblock
+
+After the local mutation succeeds:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'block',
+    (int) self::ActiveUser()->id,
+    (int) $userid
+);
+```
+
+and:
+
+```php
+bzj_rel_sync_send(
+    'socials',
+    'unblock',
+    (int) self::ActiveUser()->id,
+    (int) $userid
+);
+```
+
+## Why I am not outputting a fabricated full plugin
+
+A production-ready full file cannot be generated from a source containing missing method bodies and literal truncation markers. In particular, the missing sections include the code responsible for:
+
+- external table discovery,
+- QuickDate projection preservation,
+- block insertion and deletion,
+- event retry processing,
+- recovery dispatch,
+- ledger persistence,
+- lock handling,
+- and REST operation validation.
+
+Replacing those sections with guessed implementations would violate the requirement that the code be complete, functional, and safe to integrate.
+
+The correct next step is to provide the complete untruncated v8.4.1 PHP file, together with the complete shared synchronization client and outbox files. Once those complete files are available, they can be refactored conservatively while preserving the already-working v8.1 projection behavior.
+
+<<STOP GITHUB>>

@@ -17,7 +17,7 @@ define('BZJ_CONNECTIONS_SYNC_LOADED', true);
 
 final class BZJ_Connections_Sync {
 
-    const VERSION = '8.1.0';
+    const VERSION = '8.1.1';
     const REST_NAMESPACE = 'bzj/v6';
     const REST_ROUTE = '/connection-management';
 
@@ -72,7 +72,9 @@ final class BZJ_Connections_Sync {
         add_action('friends_friendship_accepted', array($this, 'bb_connection_accepted'), 20, 4);
         add_action('friends_friendship_rejected', array($this, 'bb_connection_rejected'), 20, 2);
         add_action('friends_friendship_withdrawn', array($this, 'bb_connection_withdrawn'), 20, 2);
+        add_action('friends_friendship_whithdrawn', array($this, 'bb_connection_withdrawn'), 20, 2);
         add_action('friends_friendship_deleted', array($this, 'bb_connection_deleted'), 1, 3);
+        add_action('friends_friendship_post_delete', array($this, 'bb_connection_post_deleted'), 20, 2);
 
         // BuddyBoss follows. These hooks pass a BP_Activity_Follow object.
         add_action('bp_start_following', array($this, 'bb_follow_started'), 20, 1);
@@ -174,8 +176,7 @@ final class BZJ_Connections_Sync {
     }
 
     private function log($message, $context = array()) {
-        $root = dirname(ABSPATH);
-        $dir = $root . self::LOG_DIR;
+        $dir = trailingslashit(ABSPATH) . ltrim(self::LOG_DIR, '/');
 
         if (!is_dir($dir)) {
             wp_mkdir_p($dir);
@@ -215,6 +216,14 @@ final class BZJ_Connections_Sync {
                 return current_user_can('manage_options');
             },
         ));
+
+        register_rest_route(self::REST_NAMESPACE, '/connection-management/diagnostics', array(
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => array($this, 'rest_diagnostics'),
+            'permission_callback' => function () {
+                return current_user_can('manage_options');
+            },
+        ));
     }
 
     public function rest_status(WP_REST_Request $request) {
@@ -229,6 +238,89 @@ final class BZJ_Connections_Sync {
             'success' => true,
             'version' => self::VERSION,
             'relationship' => $this->get_ledger($a, $b),
+        ));
+    }
+
+    public function rest_diagnostics(WP_REST_Request $request) {
+        global $wp_filter;
+
+        $log_dir = trailingslashit(ABSPATH) . ltrim(self::LOG_DIR, '/');
+        $cron_recovery = wp_next_scheduled(self::CRON_HOOK);
+        $cron_reconcile = wp_next_scheduled(self::CRON_HOOK . '_reconcile');
+
+        $stream_db = false;
+        $social_db = false;
+        $stream_tables = array();
+        $social_tables = array();
+
+        if ($this->load_db_helpers()) {
+            $stream = $this->streams_db();
+            $social = $this->socials_db();
+
+            if ($stream) {
+                $stream_db = true;
+                foreach (array('Wo_Followers', 'Wo_Blocks') as $table) {
+                    $stream_tables[$table] = $this->table_exists($stream, $table);
+                }
+            }
+
+            if ($social) {
+                $social_db = true;
+                foreach (array('followers', 'blocks') as $table) {
+                    $social_tables[$table] = $this->table_exists($social, $table);
+                }
+            }
+        }
+
+        $route_registered = false;
+        if (function_exists('rest_get_server')) {
+            $server = rest_get_server();
+            $route_registered = !empty($server->get_routes()[ '/' . self::REST_NAMESPACE . self::REST_ROUTE ]);
+        }
+
+        $this->log('Diagnostics requested', array(
+            'route_registered' => $route_registered,
+            'cron_recovery' => $cron_recovery,
+            'cron_reconcile' => $cron_reconcile,
+            'log_dir' => $log_dir,
+            'log_dir_exists' => is_dir($log_dir),
+            'log_dir_writable' => is_writable($log_dir),
+            'streams_db' => $stream_db,
+            'socials_db' => $social_db,
+            'streams_tables' => $stream_tables,
+            'socials_tables' => $social_tables,
+        ));
+
+        return rest_ensure_response(array(
+            'plugin_version' => self::VERSION,
+            'route' => home_url('/wp-json/' . self::REST_NAMESPACE . self::REST_ROUTE),
+            'route_registered' => $route_registered,
+            'cron' => array(
+                'recovery_next' => $cron_recovery ? gmdate('c', $cron_recovery) : null,
+                'reconcile_next' => $cron_reconcile ? gmdate('c', $cron_reconcile) : null,
+            ),
+            'log' => array(
+                'path' => trailingslashit($log_dir) . self::LOG_FILE,
+                'exists' => file_exists(trailingslashit($log_dir) . self::LOG_FILE),
+                'directory_exists' => is_dir($log_dir),
+                'directory_writable' => is_dir($log_dir) ? is_writable($log_dir) : false,
+            ),
+            'databases' => array(
+                'streams_connected' => $stream_db,
+                'socials_connected' => $social_db,
+                'streams_tables' => $stream_tables,
+                'socials_tables' => $social_tables,
+            ),
+            'hooks' => array(
+                'friendship_requested' => has_action('friends_friendship_requested', array($this, 'bb_connection_requested')) !== false,
+                'friendship_accepted' => has_action('friends_friendship_accepted', array($this, 'bb_connection_accepted')) !== false,
+                'friendship_rejected' => has_action('friends_friendship_rejected', array($this, 'bb_connection_rejected')) !== false,
+                'friendship_withdrawn' => has_action('friends_friendship_withdrawn', array($this, 'bb_connection_withdrawn')) !== false,
+                'friendship_deleted' => has_action('friends_friendship_deleted', array($this, 'bb_connection_deleted')) !== false,
+                'friendship_post_deleted' => has_action('friends_friendship_post_delete', array($this, 'bb_connection_post_deleted')) !== false,
+                'follow_started' => has_action('bp_start_following', array($this, 'bb_follow_started')) !== false,
+                'follow_stopped' => has_action('bp_stop_following', array($this, 'bb_follow_stopped')) !== false,
+            ),
         ));
     }
 
@@ -751,6 +843,29 @@ final class BZJ_Connections_Sync {
         $this->handle_bb_connection_event('deleted', absint($initiator), absint($friend), absint($friendship_id));
     }
 
+    public function bb_connection_post_deleted($initiator, $friend) {
+        if ($this->in_internal_context()) {
+            return;
+        }
+
+        $initiator = absint($initiator);
+        $friend = absint($friend);
+
+        if ($initiator < 1 || $friend < 1 || $initiator === $friend) {
+            return;
+        }
+
+        // Safety projection after the actual BuddyBoss row has been deleted.
+        // This is deliberately idempotent and catches removals where the
+        // pre-delete hook was interrupted later in the request.
+        $this->handle_bb_connection_event(
+            'post_deleted',
+            $initiator,
+            $friend,
+            0
+        );
+    }
+
     private function handle_bb_connection_event($event, $initiator, $friend, $friendship_id = 0) {
         if ($initiator < 1 || $friend < 1 || $initiator === $friend) {
             return;
@@ -801,7 +916,7 @@ final class BZJ_Connections_Sync {
              * friends_friendship_deleted fires before deletion. The hook is
              * intentionally treated as a definitive removal event.
              */
-            if ($event === 'deleted') {
+            if (in_array($event, array('deleted', 'post_deleted'), true)) {
                 $changes['connection_state'] = 'none';
                 $changes['requested_by'] = 0;
             }
@@ -1146,16 +1261,21 @@ final class BZJ_Connections_Sync {
             return true;
         }
 
-        $file = dirname(ABSPATH) . '/shared/db_helpers.php';
-        if (!is_file($file)) {
-            $file = ABSPATH . '../shared/db_helpers.php';
+        $paths = array(
+            trailingslashit(ABSPATH) . 'shared/db_helpers.php',
+            dirname(ABSPATH) . '/shared/db_helpers.php',
+        );
+
+        $file = '';
+        foreach ($paths as $candidate) {
+            if (is_file($candidate)) {
+                $file = $candidate;
+                break;
+            }
         }
         if (!is_file($file)) {
             $this->log('db_helpers.php not found', array(
-                'paths_checked' => array(
-                    dirname(ABSPATH) . '/shared/db_helpers.php',
-                    ABSPATH . '../shared/db_helpers.php',
-                ),
+                'paths_checked' => $paths,
             ));
             return false;
         }

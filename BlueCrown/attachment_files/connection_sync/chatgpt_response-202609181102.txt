@@ -1,0 +1,358 @@
+<<START CHATGPT>>
+
+## Updated architecture
+
+I’ve consolidated the working **v8.4.1 baseline** with the feasible GitHub corrections and the current Buzzjuice source code into a **v8.5.0 control-plane design**.
+
+The most important correction is that **BuddyBoss remains the canonical authority**, while Streams and Socials submit *intent commands* to BuddyBoss rather than writing BuddyBoss relationship tables directly. The external IDs are resolved through `wo_user_id` / `qd_user_id` before any BuddyBoss function is called. This directly addresses the most serious issue identified in the GitHub review. 
+
+The current Streams code confirms that `Wo_RegisterFollow()` can create pending follows because of `confirm_followers` and `connectivitySystem`, despite your Friends System being disabled. The v8.5 design therefore forces synchronized Streams follows to `active = 1` at the write point. 
+
+Likewise, QuickDate's `add_friend()` currently goes through the overloaded `followers` mechanism, confirming that **Add Friend and ordinary Follow must be separated at the semantic handler level**, rather than trying to infer the meaning from `Wo_DeleteFollow()`. 
+
+### The resulting model
+
+```text
+                         BUDDYBOSS
+                    CANONICAL AUTHORITY
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+         STREAMS                     SOCIALS
+     follows + blocks        connections + follows + blocks
+```
+
+With:
+
+```text
+BuddyBoss Connection
+    ↕
+QuickDate Add Friend
+
+BuddyBoss Follow
+    ↕
+Streams Follow
+
+QuickDate Follow
+    → BuddyBoss Follow
+    → Streams Follow
+```
+
+and **QuickDate Follow never becomes a BuddyBoss connection**.
+
+---
+
+# Important correction regarding `Wo_IsFollowRequested()`
+
+I **did not implement the requested database mutation inside `Wo_IsFollowRequested()`**.
+
+That recommendation is technically weaker than changing `Wo_RegisterFollow()` itself.
+
+The current function is a predicate:
+
+```php
+Wo_IsFollowRequested()
+```
+
+but the proposed modification would make it mutate the database and then return a misleading result. The GitHub review correctly identified this problem. 
+
+Instead, v8.5 changes:
+
+```text
+Wo_RegisterFollow()
+        ↓
+active = 1
+        ↓
+read-back verification
+        ↓
+BuddyBoss synchronization
+```
+
+while leaving:
+
+```text
+Wo_IsFollowRequested()
+```
+
+read-only.
+
+That is the safer implementation for the disabled Friends System.
+
+---
+
+# Files generated
+
+### 1. Full MU control plane
+
+[Download `bzj-connections-sync-v8.5.0.php`](sandbox:/mnt/data/bzj-connections-sync-v8.5.0.php)
+
+This is the complete replacement for:
+
+```text
+/wp-content/mu-plugins/bzj-connections-sync.php
+```
+
+It contains:
+
+* BuddyBoss canonical lifecycle handling
+* connection ledger
+* synchronization event ledger
+* deterministic pair locks
+* external ID resolution
+* HMAC authentication
+* `/wp-json/bzj/v6/connection-management`
+* Streams projections
+* QuickDate projections
+* destructive blocking
+* non-restorative unblocking
+* read-back verification
+* startup DB/table diagnostics
+* retry/reconciliation
+* loop/re-entrancy protection
+* external database schema discovery
+* `/data/logs` logging
+
+The ledger has also been extended to distinguish:
+
+```text
+BuddyBoss connection
+BuddyBoss follows
+BuddyBoss blocks
+QuickDate connection projection
+QuickDate ordinary follows
+Streams follows
+```
+
+rather than treating every `followers` row as the same relationship.
+
+---
+
+### 2. New shared external client
+
+[Download `bzj-connection-client.php`](sandbox:/mnt/data/bzj-connection-client.php)
+
+Install:
+
+```text
+/shared/bzj-connection-client.php
+```
+
+This handles:
+
+```text
+Streams/Socials
+      ↓
+signed command
+      ↓
+WordPress
+```
+
+It also creates a durable outbox when WordPress is temporarily unavailable.
+
+The event UUID remains unchanged across retries, as recommended by the GitHub architecture. 
+
+---
+
+### 3. Outbox retry runner
+
+[Download `bzj-sync-outbox-cron.php`](sandbox:/mnt/data/bzj-sync-outbox-cron.php)
+
+Install:
+
+```text
+/shared/bzj-sync-outbox-cron.php
+```
+
+Recommended server cron:
+
+```text
+*/5 * * * * /usr/bin/php /home/koware/public_html/buzzjuice.net/shared/bzj-sync-outbox-cron.php >/dev/null 2>&1
+```
+
+This means:
+
+```text
+local action succeeds
+       ↓
+WordPress unavailable
+       ↓
+event saved locally
+       ↓
+same UUID retained
+       ↓
+retry
+       ↓
+event eventually processed
+```
+
+This follows the retry principle in the GitHub review rather than merely logging a failure and abandoning reconciliation. 
+
+---
+
+### 4. Surgical patches for the long files
+
+[Download `bzj-connection-sync-surgical-patches.md`](sandbox:/mnt/data/bzj-connection-sync-surgical-patches.md)
+
+This contains the exact modifications for:
+
+```text
+streams/assets/includes/functions_one.php
+streams/themes/sunshine/layout/extra_js/content.phtml
+
+social/requests/ajax/profile.php
+social/requests/ajax/useractions.php
+```
+
+I deliberately did **not** regenerate those long files.
+
+The current Streams implementation confirms the actual `Wo_RegisterFollow()`, `Wo_DeleteFollow()`, `Wo_RegisterBlock()` and `Wo_RemoveBlock()` structures used by the installation. 
+
+The current Socials implementation likewise confirms the actual Add Friend, approve/reject and block/unblock handlers. 
+
+---
+
+### 5. Complete architecture/deployment guide
+
+[Download `README-bzj-connections-sync-v8.5.0.md`](sandbox:/mnt/data/README-bzj-connections-sync-v8.5.0.md)
+
+It includes:
+
+* final relationship matrix
+* architecture
+* installation order
+* logging
+* authentication
+* identity mapping
+* retry architecture
+* block semantics
+* QuickDate semantic separation
+* Streams changes
+* Socials changes
+* complete staged test plan
+
+---
+
+### 6. Complete deployment package
+
+[Download the complete v8.5.0 package](sandbox:/mnt/data/bzj-connections-sync-v8.5.0-package.zip)
+
+Contains all five files above.
+
+---
+
+# One particularly important semantic change
+
+The original proposal had some ambiguity around QuickDate Follow.
+
+I recommend the final architecture be:
+
+```text
+QUICKDATE ADD FRIEND
+        ↓
+connection_request
+        ↓
+BUDDYBOSS CONNECTION
+```
+
+but:
+
+```text
+QUICKDATE ORDINARY FOLLOW
+        ↓
+follow
+        ↓
+BUDDYBOSS FOLLOW
+        ↓
+STREAMS FOLLOW
+```
+
+This is important because QuickDate's installed `followers` table is overloaded: `active = 0` represents a pending request while `active = 1` can represent either an accepted friendship or an ordinary follow. The GitHub review explicitly identified this ambiguity. 
+
+Therefore this should **not** be driven from generic `Wo_DeleteFollow()`.
+
+---
+
+# Blocking is now explicitly destructive
+
+The final behavior is:
+
+```text
+A blocks B
+│
+├── BuddyBoss block A → B
+├── remove BuddyBoss connection
+├── remove pending BuddyBoss request
+├── remove BuddyBoss A → B follow
+├── remove BuddyBoss B → A follow
+├── Streams block A → B
+├── remove Streams A → B follow
+├── remove Streams B → A follow
+├── Socials block A → B
+└── remove Socials relationship projections
+```
+
+Then:
+
+```text
+A unblocks B
+│
+├── remove Streams block
+├── remove Socials block
+└── do NOT restore previous connection/follows
+```
+
+This matches the recommended proactive enforcement model. 
+
+---
+
+# Logging and database verification
+
+The v8.5 control plane now explicitly verifies:
+
+```text
+WordPress database
+QuickDate database
+WoWonder database
+
+wp_usermeta
+
+QuickDate followers
+QuickDate blocks
+
+WoWonder followers
+WoWonder blocks
+```
+
+and logs database/table information under:
+
+```text
+/data/logs/
+```
+
+The GitHub review specifically recommended verification using `SELECT 1` plus table metadata rather than considering a `mysqli` object alone sufficient. 
+
+---
+
+# Validation performed
+
+I ran PHP syntax validation against all three executable PHP files:
+
+```text
+bzj-connections-sync-v8.5.0.php
+bzj-connection-client.php
+bzj-sync-outbox-cron.php
+```
+
+All three passed:
+
+```text
+No syntax errors detected
+```
+
+This is **code-level validation**, not live production verification. The next phase should therefore be the controlled two-test-user integration test sequence in the README before replacing the currently working v8.4.1 installation.
+
+One limitation: the exact `github_response-202609181035.txt` URL was not retrievable from the available GitHub/web cache in this session, so I have **not invented or assumed its contents**. I incorporated the accessible GitHub review, the current Buzzjuice repository code, and the observed v8.4.1 behavior instead. The accessible GitHub review's core corrections—external-ID mapping, semantic separation, canonical hooks, verification, retries, HMAC, and destructive blocking—are reflected in v8.5. 
+
+**Recommended deployment order:** install the new MU plugin and shared client → run diagnostics → apply the four surgical external-platform patches → configure the 5-minute outbox cron → perform the staged BuddyBoss tests first → then Streams → then Socials.
+
+<<STOP CHATGPT>>
