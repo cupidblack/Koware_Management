@@ -1,0 +1,494 @@
+Some users on the Buzzjuice Streams (WoWonder) and Socials (QuickDate) platforms were directly removed from the database. This action may have left redundant user data in other tables on the platforms, affecting the platform's optimal functionality.
+
+The following WoWonder and QuickDate functions appropriately deletes all user data when the user is deleted:
+
+<<START WOWONDER USER DELETE FUNCTION>>
+
+function Wo_DeleteUser($user_id)
+{
+    global $wo, $sqlConnect, $cache, $db;
+    if ($wo['loggedin'] == false) {
+        return false;
+    }
+    if (empty($user_id) || !is_numeric($user_id) || $user_id < 1) {
+        return false;
+    }
+    $user_id = Wo_Secure($user_id);
+    if (Wo_IsAdmin() === false && Wo_IsModerator() === false) {
+        if ($wo['user']['user_id'] != $user_id) {
+            return false;
+        }
+    }
+    if (Wo_IsModerator() === true) {
+        if (Wo_IsAdmin($user_id)) {
+            return false;
+        }
+    }
+    $funding = $db->where('user_id', $user_id)->get(T_FUNDING);
+    if (!empty($funding)) {
+        foreach ($funding as $key => $fund) {
+            @Wo_DeleteFromToS3($fund->image);
+            if (file_exists($fund->image)) {
+                try {
+                    unlink($fund->image);
+                } catch (Exception $e) {
+                }
+            }
+            $posts = $db->where('fund_id', $fund->id)->get(T_POSTS);
+            if (!empty($posts)) {
+                foreach ($posts as $key => $post) {
+                    $db->where('parent_id', $post->id)->delete(T_POSTS);
+                }
+            }
+            $raise = $db->where('funding_id', $fund->id)->get(T_FUNDING_RAISE);
+            foreach ($raise as $key => $value) {
+                $raise_posts = $db->where('fund_raise_id', $value->id)->get(T_POSTS);
+                if (!empty($raise_posts)) {
+                    foreach ($posts as $key => $value1) {
+                        $db->where('parent_id', $value1->id)->delete(T_POSTS);
+                    }
+                }
+                $db->where('fund_raise_id', $value->id)->delete(T_POSTS);
+            }
+        }
+        $db->where('user_id', $user_id)->delete(T_FUNDING);
+    }
+
+    $monetizations = $db->where('user_id', $user_id)->get(T_USER_MONETIZATION);
+    if (!empty($monetizations)) {
+        foreach ($monetizations as $key => $monetization) {
+            $monetization = $db->where('monetization_id', $monetization->id)->getOne(T_MONETIZATION_SUBSCRIBTION);
+        }
+        $db->where('user_id', $user_id)->delete(T_USER_MONETIZATION);
+    }
+
+    $db->where('user_id', $user_id)->delete(T_MONETIZATION_SUBSCRIBTION);
+
+    $user_data = Wo_UserData($user_id);
+    $query_one_delete_photos = mysqli_query($sqlConnect, " SELECT `avatar`,`cover` FROM " . T_USERS . " WHERE `user_id` = {$user_id}");
+    if (mysqli_num_rows($query_one_delete_photos)) {
+        $fetched_data = mysqli_fetch_assoc($query_one_delete_photos);
+        if (isset($fetched_data['avatar']) && !empty($fetched_data['avatar']) && $fetched_data['avatar'] != $wo['userDefaultAvatar'] && $fetched_data['avatar'] != $wo['userDefaultFAvatar']) {
+            $explode2 = @end(explode('.', $fetched_data['avatar']));
+            $explode3 = @explode('.', $fetched_data['avatar']);
+            $media_2 = $explode3[0] . '_avatar_full.' . $explode2;
+            @unlink(trim($media_2));
+            @unlink($fetched_data['avatar']);
+            $delete_from_s3 = Wo_DeleteFromToS3($fetched_data['avatar']);
+            $delete_from_s3 = Wo_DeleteFromToS3($media_2);
+        }
+        if (isset($fetched_data['cover']) && !empty($fetched_data['cover']) && $fetched_data['cover'] != $wo['userDefaultCover']) {
+            $explode2 = @end(explode('.', $fetched_data['cover']));
+            $explode3 = @explode('.', $fetched_data['cover']);
+            $media_2 = $explode3[0] . '_cover_full.' . $explode2;
+            @unlink(trim($media_2));
+            @unlink($fetched_data['cover']);
+            $delete_from_s3 = Wo_DeleteFromToS3($fetched_data['cover']);
+            $delete_from_s3 = Wo_DeleteFromToS3($media_2);
+        }
+    }
+    $query_one_delete_media = mysqli_query($sqlConnect, " SELECT `media` FROM " . T_MESSAGES . " WHERE `from_id` = {$user_id} OR `to_id` = {$user_id}");
+    if ($query_one_delete_media) {
+        if (mysqli_num_rows($query_one_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_one_delete_media)) {
+                if (isset($fetched_data['media']) && !empty($fetched_data['media'])) {
+                    @unlink($fetched_data['media']);
+                }
+            }
+        }
+    }
+    $query_two_delete_media = mysqli_query($sqlConnect, " SELECT `postFile`,`id`,`post_id` FROM " . T_POSTS . " WHERE `user_id` = {$user_id}");
+    if ($query_two_delete_media) {
+        if (mysqli_num_rows($query_two_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_two_delete_media)) {
+                $query_one_reports = mysqli_query($sqlConnect, "DELETE FROM " . T_REPORTS . " WHERE `post_id` = " . $fetched_data['id']);
+                $query_one_reports .= mysqli_query($sqlConnect, "DELETE FROM " . T_REPORTS . " WHERE `post_id` = " . $fetched_data['post_id']);
+                if (isset($fetched_data['postFile']) && !empty($fetched_data['postFile'])) {
+                    @unlink($fetched_data['postFile']);
+                }
+            }
+        }
+    }
+    if ($wo['config']['cacheSystem'] == 1) {
+        $query_two = mysqli_query($sqlConnect, "SELECT `id`,`post_id` FROM " . T_POSTS . " WHERE `user_id` = {$user_id} OR `recipient_id` = {$user_id}");
+    }
+    $query_four_delete_media = mysqli_query($sqlConnect, "SELECT `page_id` FROM " . T_PAGES . " WHERE `user_id` = {$user_id}");
+    if ($query_four_delete_media) {
+        if (mysqli_num_rows($query_four_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_four_delete_media)) {
+                $delete_posts = Wo_DeletePage($fetched_data['page_id']);
+            }
+        }
+    }
+    $query_five_delete_media = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_GROUPS . " WHERE `user_id` = {$user_id}");
+    if ($query_five_delete_media) {
+        if (mysqli_num_rows($query_five_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_five_delete_media)) {
+                $delete_groups = Wo_DeleteGroup($fetched_data['id']);
+            }
+        }
+    }
+    $query_6_delete_media = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_POSTS . " WHERE `user_id` = {$user_id} OR `recipient_id` = {$user_id}");
+    if ($query_6_delete_media) {
+        if (mysqli_num_rows($query_6_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_6_delete_media)) {
+                $delete_posts = Wo_DeletePost($fetched_data['id']);
+            }
+        }
+    }
+    $query_7_delete_media = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FORUM_THREADS . " WHERE `user` = {$user_id}");
+    if ($query_7_delete_media) {
+        if (mysqli_num_rows($query_7_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_7_delete_media)) {
+                $delete_posts = Wo_DeleteForumThread($fetched_data['id']);
+            }
+        }
+    }
+    $query_8_delete_media = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_FORUM_THREAD_REPLIES . " WHERE `poster_id` = {$user_id}");
+    if ($query_8_delete_media) {
+        if (mysqli_num_rows($query_8_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_8_delete_media)) {
+                $delete_posts = Wo_DeleteThreadReply($fetched_data['id']);
+            }
+        }
+    }
+    $query_9_delete_media = mysqli_query($sqlConnect, "SELECT `id` FROM " . T_EVENTS . " WHERE `poster_id` = {$user_id}");
+    if ($query_9_delete_media) {
+        if (mysqli_num_rows($query_9_delete_media) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_9_delete_media)) {
+                $delete_posts = Wo_DeleteEvent($fetched_data['id']);
+            }
+        }
+    }
+    $querydelete = mysqli_query($sqlConnect, "SELECT * FROM " . T_FUNDING . " WHERE `user_id` = {$user_id}");
+    if ($querydelete) {
+        if (mysqli_num_rows($querydelete) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($querydelete)) {
+                @Wo_DeleteFromToS3($fetched_data['image']);
+                if (file_exists($fetched_data['image'])) {
+                    try {
+                        unlink($fetched_data['image']);
+                    } catch (Exception $e) {
+                    }
+                }
+                mysqli_query($sqlConnect, "DELETE FROM " . T_FUNDING . " WHERE `user_id` = {$user_id}");
+                mysqli_query($sqlConnect, "DELETE FROM " . T_FUNDING_RAISE . " WHERE `funding_id` = '" . $fetched_data['id'] . "'");
+            }
+        }
+    }
+    $querydelete = mysqli_query($sqlConnect, "SELECT * FROM " . T_OFFER . " WHERE `user_id` = {$user_id}");
+    if ($querydelete) {
+        if (mysqli_num_rows($querydelete) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($querydelete)) {
+                @Wo_DeleteFromToS3($fetched_data['image']);
+                if (file_exists($fetched_data['image'])) {
+                    try {
+                        unlink($fetched_data['image']);
+                    } catch (Exception $e) {
+                    }
+                }
+                mysqli_query($sqlConnect, "DELETE FROM " . T_OFFER . " WHERE `user_id` = {$user_id}");
+            }
+        }
+    }
+    $querydelete = mysqli_query($sqlConnect, "SELECT * FROM " . T_USER_EXPERIENCE . " WHERE `user_id` = {$user_id}");
+    if ($querydelete) {
+        if (mysqli_num_rows($querydelete) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($querydelete)) {
+                @Wo_DeleteFromToS3($fetched_data['image']);
+                if (file_exists($fetched_data['image'])) {
+                    try {
+                        unlink($fetched_data['image']);
+                    } catch (Exception $e) {
+                    }
+                }
+                mysqli_query($sqlConnect, "DELETE FROM " . T_USER_EXPERIENCE . " WHERE `user_id` = {$user_id}");
+            }
+        }
+    }
+    $querydelete = mysqli_query($sqlConnect, "SELECT * FROM " . T_USER_CERTIFICATION . " WHERE `user_id` = {$user_id}");
+    if ($querydelete) {
+        if (mysqli_num_rows($querydelete) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($querydelete)) {
+                @Wo_DeleteFromToS3($fetched_data['pdf']);
+                if (file_exists($fetched_data['pdf'])) {
+                    try {
+                        unlink($fetched_data['pdf']);
+                    } catch (Exception $e) {
+                    }
+                }
+                mysqli_query($sqlConnect, "DELETE FROM " . T_USER_CERTIFICATION . " WHERE `user_id` = {$user_id}");
+            }
+        }
+    }
+    $query_group_chat = mysqli_query($sqlConnect, "SELECT `group_id` FROM " . T_GROUP_CHAT . " WHERE `user_id` = {$user_id}");
+    if ($query_group_chat) {
+        if (mysqli_num_rows($query_group_chat) > 0) {
+            while ($fetched_data = mysqli_fetch_assoc($query_group_chat)) {
+                mysqli_query($sqlConnect, "DELETE FROM " . T_GROUP_CHAT_USERS . " WHERE `group_id` = '" . $fetched_data['group_id'] . "'");
+            }
+        }
+    }
+    $query_one = mysqli_query($sqlConnect, "DELETE FROM " . T_USERS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_RECENT_SEARCHES . " WHERE `user_id` = {$user_id} OR `search_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_GAMES_PLAYERS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USER_PROJECTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USER_OPEN_TO . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_FOLLOWERS . " WHERE `follower_id` = {$user_id} OR `following_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_MESSAGES . " WHERE `from_id` = {$user_id} OR `to_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_VIDEOS_CALLES . " WHERE `from_id` = {$user_id} OR `to_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_AUDIO_CALLES . " WHERE `from_id` = {$user_id} OR `to_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_AGORA . " WHERE `from_id` = {$user_id} OR `to_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_NOTIFICATION . " WHERE `notifier_id` = {$user_id} OR `recipient_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_REPORTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USERS_FIELDS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_APP_SESSIONS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_ANNOUNCEMENT_VIEWS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_LIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_WONDERS . " WHERE `user_id` = {$user_id}");
+    // $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAYMENTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENT_REPLIES_LIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENT_REPLIES_WONDERS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_SAVED_POSTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENT_LIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENT_WONDERS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_COMMENTS_REPLIES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_EVENTS_GOING . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_EVENTS_INT . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BM_LIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BM_DISLIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USERADS_DATA . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAYMENT_TRANSACTIONS . " WHERE `userid` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_ACTIVITIES . " WHERE `user_id` = {$user_id} OR `follow_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_EVENTS_INV . " WHERE `inviter_id` = {$user_id} OR `invited_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_GROUP_MEMBERS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAGES_INVAITES . " WHERE `inviter_id` = {$user_id} OR `invited_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PINNED_POSTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_APPS . " WHERE `app_user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_APPS_PERMISSION . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_CODES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_TOKENS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BLOG_REACTION . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAGES_LIKES . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_VERIFICATION_REQUESTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_A_REQUESTS . " WHERE `user_id` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BLOCKS . " WHERE `blocker` = {$user_id} OR `blocked` = {$user_id}");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_U_CHATS . " WHERE `conversation_user_id` = '{$user_id}' OR `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BLOG . " WHERE `user` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BLOG_COMM_REPLIES . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_BLOG_COMM . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_MOVIE_COMM_REPLIES . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_MOVIE_COMMS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_APPS_HASH . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_FORUM_THREADS . " WHERE `user` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_FORUM_THREAD_REPLIES . " WHERE `poster_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_EVENTS . " WHERE `poster_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USER_ADS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_USER_STORY . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_HIDDEN_POSTS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_GROUP_CHAT . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_GROUP_CHAT_USERS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAGE_RATING . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_FAMILY . " WHERE `user_id` = '{$user_id}' OR `member_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_REL_SHIP . " WHERE `from_id` = '{$user_id}' OR `to_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_PAGE_ADMINS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_GROUP_ADMINS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_REACTIONS . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_JOB . " WHERE `user_id` = '{$user_id}'");
+    $query_one .= mysqli_query($sqlConnect, "DELETE FROM " . T_JOB_APPLY . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_POKES . " WHERE `received_user_id` = '{$user_id}' OR `send_user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_USERGIFTS . " WHERE `from` = '{$user_id}' OR `to` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_STORY_SEEN . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_REFUND . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_INVITAION_LINKS . " WHERE `user_id` = '{$user_id}' OR `invited_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_AGORA . " WHERE `from_id ` = '{$user_id}' OR `to_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_MUTE . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_MUTE_STORY . " WHERE `user_id` = '{$user_id}' OR `story_user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_CAST . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_CAST_USERS . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_LIVE_SUB . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_VOTES . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_BANK_TRANSFER . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_USERCARD . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_USER_ADDRESS . " WHERE `user_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_USER_ORDERS . " WHERE `user_id` = '{$user_id}' OR `product_owner_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_PURCHAES . " WHERE `user_id` = '{$user_id}' OR `owner_id` = '{$user_id}'");
+    $query_ones = mysqli_query($sqlConnect, "DELETE FROM " . T_EMAILS . " WHERE `email_to` = '" . $user_data['email'] . "' OR `user_id` = '{$user_id}'");
+    if ($query_one) {
+        cache($user_id, 'users', 'delete');
+        $wo['deletedUserData'] = $user_data;
+        $send_message_data = array(
+            'from_email' => $wo['config']['siteEmail'],
+            'from_name' => $wo['config']['siteName'],
+            'to_email' => $user_data['email'],
+            'to_name' => $user_data['name'],
+            'subject' => 'Your account was deleted',
+            'charSet' => 'utf-8',
+            'message_body' => Wo_LoadPage('emails/account-deleted'),
+            'is_html' => true
+        );
+        $send = Wo_SendMessage($send_message_data);
+        return true;
+    }
+}
+
+<<STOP WOWONDER USER DELETE FUNCTION>>
+
+<<START QUICKDATE USER DELETE FUNCTION>>
+
+public function delete_user($user_id){
+        global $db;
+        $result = array();
+        $img_deleted = false;
+        $deleted = false;
+        $error     = '';
+
+        if (!empty($user_id) && !is_numeric($user_id) && $user_id <= 0) {
+            $error .= '<p>• '.__('ID cannot be empty, or character. only numbers allowed.').'</p>';
+        }
+        $media_uploaded_files = array();
+        $_media_files = $db->objectBuilder()->where('user_id', $user_id)->get('mediafiles',null,array('file'));
+        $_chat_media_files = $db->objectBuilder()->where('`from`', $user_id)->where('media', NULL, 'IS NOT')->get('messages',null,array('media'));
+        foreach ($_media_files as $key => $value){
+            $media_uploaded_files[] = $value->file;
+            $media_uploaded_files[] = str_replace('_full.','_avatar.',$value->file);
+        }
+        foreach ($_chat_media_files as $key => $value){
+            $media_uploaded_files[] = $value->media;
+        }
+        foreach ($media_uploaded_files as $key => $value){
+            $img_deleted = @unlink( $value );
+            $img_deleted = DeleteFromToS3( $value );
+        }
+        $snapshot = $db->where('id',$user_id)->getOne('users',array('snapshot'));
+        if($snapshot['snapshot']) {
+            $media_uploaded_files[] = $snapshot['snapshot'];
+            @unlink($snapshot['snapshot']);
+            $img_deleted = DeleteFromToS3( $snapshot['snapshot'] );
+        }
+        $blocks_deleted = $db->where('user_id', $user_id)->orWhere('block_userid', $user_id)->delete('blocks');
+        if ($blocks_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Blocks" data.').'</p>';
+        }
+        $conversations_deleted = $db->where('sender_id', $user_id)->orWhere('receiver_id', $user_id)->delete('conversations');
+        if ($conversations_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Conversations" data.').'</p>';
+        }
+        $likes_deleted = $db->where('user_id', $user_id)->orWhere('like_userid', $user_id)->delete('likes');
+        if ($likes_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Likes" data.').'</p>';
+        }
+        $mediafiles_deleted = $db->where('user_id', $user_id)->delete('mediafiles');
+        if ($mediafiles_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Media files" data.').'</p>';
+        }
+        $messages_deleted = $db->where('`from`', $user_id)->orWhere('`to`', $user_id)->delete('messages');
+        if ($messages_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Messages" data.').'</p>';
+        }
+        $notifications_deleted = $db->where('notifier_id', $user_id)->orWhere('recipient_id', $user_id)->delete('notifications');
+        if ($notifications_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Notifications" data.').'</p>';
+        }
+        $reports_deleted = $db->where('user_id', $user_id)->orWhere('report_userid', $user_id)->delete('reports');
+        if ($reports_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Reports" data.').'</p>';
+        }
+        $user_gifts_deleted = $db->where('`from`', $user_id)->orWhere('`to`', $user_id)->delete('user_gifts');
+        if ($user_gifts_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Gifts" data.').'</p>';
+        }
+        $views_deleted = $db->where('user_id', $user_id)->orWhere('view_userid', $user_id)->delete('views');
+        if ($views_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Visits" data.').'</p>';
+        }
+        $users_deleted = $db->where('id', $user_id)->delete('users');
+        if ($users_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "User" data.').'</p>';
+        }
+        $sessions_deleted = $db->where('user_id', $user_id)->delete('sessions');
+        if ($sessions_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Sessions" data.').'</p>';
+        }
+        $payments_deleted = $db->where('user_id', $user_id)->delete('payments');
+        if ($payments_deleted) {
+            $deleted = true;
+        } else {
+            $error .= '<p>• '.__('Error while deleting "Payments" data.').'</p>';
+        }
+        $_deleted = $db->where('user_id', $user_id)->delete('verification_requests');
+
+        if( $deleted ){
+            $result = array(
+                'message' => __('Your account deleted successfully.'),
+                'is_delete' => $deleted,
+                'img_deleted' => $img_deleted,
+                'media_uploaded_files' => $media_uploaded_files,
+                'code' => 200
+            );
+        }else {
+            $result = array(
+                'message' => $error,
+                'is_delete' => $deleted,
+                'img_deleted' => $img_deleted,
+                'media_uploaded_files' => $media_uploaded_files,
+                'code' => 400
+            );
+        }
+
+        return $result;
+    }
+
+<<STOP QUICKDATE USER DELETE FUNCTION>>
+
+Based on the Wo_DeleteUser() and delete_user() functions, develop a script that checks for redundant user data for non-existing users then deletes the redundant user's data from the databases.
+
+This could be done by checking the 'Wo_Users' (WoWonder) and 'users' (QuickDate) tables for all existing user ids then checking the referenced tables for any existing user data that does not match with any existing user. The identified data could be shown after a dry run then optimally processed to clear the redundant user data.
+
+The wo_user_id and qd_user_id may have also become misaligned where a user's actual WoWonder Streams users 'user_id' in the 'Wo_Users' table does not match with the 'wo_user_id' in the WordPress user meta and QuickDate Socials users 'id' in the 'users' table also does not match with the 'qd_user_id' in the WordPress user meta. Ideally, the wo_use_id and qd_user_id in the WordPress user meta should get their values from WoWonder and QuickDate. Add a feature to scan the fields against the username or email that should match across the platforms. After scanning and displaying any annomalies, the option to repair the mismatch.
+
+The db_helpers file contains WoWonder and QuickDate database connection details.
+
+Note the following:
+<<START NOTES>>
+1. Generate a version that works for both WoWonder and QuickDate.
+
+2. The file should be placed in the root directory at 'buzzjuice.net/shared/bzj-wwqd-orphan-user-cleaner.php'.
+
+3. When the file is accessed, a ui should display with options to start the dry run, and any other option.
+
+4. The dry run should show results of items the would be removed. The admin can then choose to proceed with the clean.
+
+5. Results of the clean should be shown after the clean.
+
+<<STOP NOTES>>
+
+<<RESOURCES>>
+https://github.com/cupidblack/buzzjuice.net/blob/main/shared/db_helpers.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_one.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/core.php
