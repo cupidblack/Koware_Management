@@ -1,0 +1,2036 @@
+<<START CHATGPT>>
+
+Yes. I reviewed the **current live repository versions**, the previous ChatGPT response, and the GitHub response, and there is a more fundamental issue than simply “some accounts are corrupt.”
+
+The current implementation has **three interacting state problems**:
+
+1. `Wo_RegisterFollow()` forces `active=1`, but the AJAX endpoint still treats an inactive/requested row as an instruction to **unfollow** before `Wo_RegisterFollow()` is even called. 
+2. The browser currently changes the button **before the server response arrives**, including creating `Requested` state from `is_confirm`. 
+3. `Wo_IsFollowing()` uses `COUNT(id) == 1`, so duplicate active rows can make a valid relationship appear not to exist. 
+
+There is also an important **account-level issue**: the current `Wo_RegisterFollow()` still checks the target's `follow_privacy` and can return `false`. Therefore two otherwise valid accounts can behave differently depending on that user's database attributes. 
+
+For Buzzjuice's intended model, I would make the architecture authoritative:
+
+> **Follow click → server writes `active=1` → server verifies DB → server returns authoritative state → browser renders `Following`.**
+
+No client-side `Requested` decision. No `confirm_followers` decision. No `connectivitySystem` conversion. No reliance on account-specific follow settings.
+
+The GitHub recommendation to preserve the existing privacy restriction is therefore the one recommendation I would **not** carry over unchanged, because it conflicts with your stated Buzzjuice requirement that follows are immediately accepted. 
+
+---
+
+# 1. `functions_one.php`
+
+File:
+
+[streams/assets/includes/functions_one.php](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_one.php?utm_source=chatgpt.com)
+
+Do **not** replace the 13,000-line file. Replace/add only the following components.
+
+## A. Add the diagnostic logger
+
+Place this immediately before the follow-related functions, around the area before `Wo_IsFollowing()`.
+
+```php
+/*
+ * ========================================================================
+ * Buzzjuice Streams Follow Diagnostics
+ * ========================================================================
+ *
+ * Log:
+ *   /buzzjuice.net/data.logs/bzj-streams-follow.log
+ *
+ * IMPORTANT:
+ * Never log passwords, JWTs, cookies, sessions, authorization headers,
+ * access tokens or refresh tokens.
+ *
+ * ========================================================================
+ */
+
+if (!function_exists('bzj_streams_follow_log')) {
+    function bzj_streams_follow_log($event, $context = array())
+    {
+        $application_root = dirname(__DIR__, 3);
+
+        if (
+            defined('DOCUMENT_ROOT') &&
+            DOCUMENT_ROOT !== '' &&
+            is_dir(rtrim(DOCUMENT_ROOT, '/') . '/data.logs')
+        ) {
+            $application_root = rtrim(DOCUMENT_ROOT, '/');
+        }
+
+        $log_dir  = rtrim($application_root, '/') . '/data.logs';
+        $log_file = $log_dir . '/bzj-streams-follow.log';
+
+        if (!is_dir($log_dir)) {
+            @mkdir($log_dir, 0750, true);
+        }
+
+        $sensitive_keys = array(
+            'password',
+            'pass',
+            'token',
+            'access_token',
+            'refresh_token',
+            'jwt',
+            'cookie',
+            'cookies',
+            'session',
+            'session_id',
+            'authorization',
+            'hash_id'
+        );
+
+        foreach ($sensitive_keys as $key) {
+            if (array_key_exists($key, $context)) {
+                unset($context[$key]);
+            }
+        }
+
+        $current_user_id = 0;
+
+        if (
+            isset($GLOBALS['wo']) &&
+            is_array($GLOBALS['wo']) &&
+            !empty($GLOBALS['wo']['user']['user_id'])
+        ) {
+            $current_user_id = (int)$GLOBALS['wo']['user']['user_id'];
+        }
+
+        $payload = array(
+            'time'       => gmdate('c'),
+            'event'      => (string)$event,
+            'user_id'    => $current_user_id,
+            'request_id' => sha1(uniqid('', true)),
+            'method'     => isset($_SERVER['REQUEST_METHOD'])
+                ? (string)$_SERVER['REQUEST_METHOD']
+                : '',
+            'uri'        => isset($_SERVER['REQUEST_URI'])
+                ? substr((string)$_SERVER['REQUEST_URI'], 0, 500)
+                : '',
+            'ip'         => isset($_SERVER['REMOTE_ADDR'])
+                ? (string)$_SERVER['REMOTE_ADDR']
+                : '',
+            'context'    => $context
+        );
+
+        $json = json_encode(
+            $payload,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
+        if ($json !== false) {
+            @file_put_contents(
+                $log_file,
+                $json . PHP_EOL,
+                FILE_APPEND | LOCK_EX
+            );
+        }
+    }
+}
+```
+
+This follows GitHub's recommendation and gives us a complete request trail without putting credentials/tokens into the log. 
+
+---
+
+# 2. Replace `Wo_IsFollowing()`
+
+The existing implementation is:
+
+```php
+SELECT COUNT(id) ...
+return COUNT == 1;
+```
+
+That is unnecessarily fragile if duplicate rows exist. 
+
+Replace it with:
+
+```php
+function Wo_IsFollowing($following_id, $user_id = 0)
+{
+    global $sqlConnect, $wo;
+
+    if (empty($wo['loggedin']) || $wo['loggedin'] !== true) {
+        return false;
+    }
+
+    if (
+        empty($following_id) ||
+        !is_numeric($following_id) ||
+        (int)$following_id < 1
+    ) {
+        return false;
+    }
+
+    if (
+        empty($user_id) ||
+        !is_numeric($user_id) ||
+        (int)$user_id < 1
+    ) {
+        $user_id = !empty($wo['user']['user_id'])
+            ? (int)$wo['user']['user_id']
+            : 0;
+    }
+
+    $following_id = (int)$following_id;
+    $user_id      = (int)$user_id;
+
+    if ($user_id < 1) {
+        return false;
+    }
+
+    $query = mysqli_query(
+        $sqlConnect,
+        "SELECT `id`
+         FROM " . T_FOLLOWERS . "
+         WHERE `following_id` = {$following_id}
+           AND `follower_id` = {$user_id}
+           AND `active` = '1'
+         LIMIT 1"
+    );
+
+    if (!$query) {
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'IS_FOLLOWING_QUERY_FAILED',
+                array(
+                    'following_id' => $following_id,
+                    'follower_id'   => $user_id,
+                    'mysql_error'   => mysqli_error($sqlConnect)
+                )
+            );
+        }
+
+        return false;
+    }
+
+    return mysqli_num_rows($query) > 0;
+}
+```
+
+This means:
+
+* one active row = Following
+* two active rows = Following
+* five active rows = Following
+* zero active rows = not Following
+
+That is the correct semantic interpretation.
+
+---
+
+# 3. Replace `Wo_RegisterFollow()`
+
+This is the most important PHP change.
+
+The current function already forces `$active = 1`, but it **doesn't promote an existing inactive row** and doesn't clean duplicates. 
+
+Use this implementation:
+
+```php
+function Wo_RegisterFollow($following_id = 0, $followers_id = 0)
+{
+    global $wo, $sqlConnect;
+
+    if (empty($wo['loggedin']) || $wo['loggedin'] !== true) {
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log('REGISTER_NOT_LOGGED_IN');
+        }
+        return false;
+    }
+
+    if (
+        empty($following_id) ||
+        !is_numeric($following_id) ||
+        (int)$following_id < 1
+    ) {
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'REGISTER_INVALID_TARGET',
+                array(
+                    'following_id' => $following_id
+                )
+            );
+        }
+        return false;
+    }
+
+    if (!is_array($followers_id)) {
+        $followers_id = array($followers_id);
+    }
+
+    $overall_success = false;
+
+    foreach ($followers_id as $follower_id) {
+
+        if (
+            empty($follower_id) ||
+            !is_numeric($follower_id) ||
+            (int)$follower_id < 1
+        ) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_INVALID_FOLLOWER',
+                    array(
+                        'following_id' => (int)$following_id,
+                        'follower_id'  => $follower_id
+                    )
+                );
+            }
+            continue;
+        }
+
+        $following_id_int = (int)$following_id;
+        $follower_id_int  = (int)$follower_id;
+
+        if ($following_id_int === $follower_id_int) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_SELF_FOLLOW_BLOCKED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int
+                    )
+                );
+            }
+            continue;
+        }
+
+        /*
+         * Block protection remains authoritative.
+         */
+        if (Wo_IsBlocked($following_id_int)) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_BLOCKED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int
+                    )
+                );
+            }
+            continue;
+        }
+
+        $follower_data  = Wo_UserData($follower_id_int);
+        $following_data = Wo_UserData($following_id_int);
+
+        if (
+            empty($follower_data['user_id']) ||
+            empty($following_data['user_id'])
+        ) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_USER_LOOKUP_FAILED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'follower_exists' => !empty($follower_data['user_id']),
+                        'following_exists' => !empty($following_data['user_id'])
+                    )
+                );
+            }
+            continue;
+        }
+
+        /*
+         * ================================================================
+         * BUZZJUICE IMMEDIATE-FOLLOW POLICY
+         * ================================================================
+         *
+         * Always persist active=1.
+         *
+         * Do NOT allow:
+         *   - confirm_followers
+         *   - connectivitySystem
+         *   - follow_privacy
+         *
+         * to turn this into a pending request.
+         *
+         * Blocking has already been checked above.
+         */
+        $existing_rows = array();
+
+        $existing_query = mysqli_query(
+            $sqlConnect,
+            "SELECT `id`, `active`
+             FROM " . T_FOLLOWERS . "
+             WHERE `following_id` = {$following_id_int}
+               AND `follower_id` = {$follower_id_int}
+             ORDER BY `active` DESC, `id` ASC"
+        );
+
+        if (!$existing_query) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_EXISTING_QUERY_FAILED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'mysql_error'  => mysqli_error($sqlConnect)
+                    )
+                );
+            }
+            continue;
+        }
+
+        while ($row = mysqli_fetch_assoc($existing_query)) {
+            $existing_rows[] = array(
+                'id'     => (int)$row['id'],
+                'active' => (int)$row['active']
+            );
+        }
+
+        $active_rows   = array();
+        $inactive_rows = array();
+
+        foreach ($existing_rows as $row) {
+            if ($row['active'] === 1) {
+                $active_rows[] = $row;
+            } else {
+                $inactive_rows[] = $row;
+            }
+        }
+
+        $follow_state_changed = false;
+        $relationship_id      = 0;
+
+        /*
+         * ---------------------------------------------------------------
+         * Existing active relationship.
+         * ---------------------------------------------------------------
+         */
+        if (count($active_rows) > 0) {
+
+            $relationship_id = (int)$active_rows[0]['id'];
+
+            /*
+             * Remove duplicate rows, including stale inactive rows.
+             *
+             * Keep exactly one authoritative active relationship.
+             */
+            $delete_duplicates = mysqli_query(
+                $sqlConnect,
+                "DELETE FROM " . T_FOLLOWERS . "
+                 WHERE `following_id` = {$following_id_int}
+                   AND `follower_id` = {$follower_id_int}
+                   AND `id` <> {$relationship_id}"
+            );
+
+            if (!$delete_duplicates && function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_DUPLICATE_CLEANUP_FAILED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id,
+                        'mysql_error' => mysqli_error($sqlConnect)
+                    )
+                );
+            }
+
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_ALREADY_ACTIVE',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id
+                    )
+                );
+            }
+
+            /*
+             * No new notification/activity is generated when the
+             * relationship was already active.
+             */
+            $follow_state_changed = false;
+        }
+
+        /*
+         * ---------------------------------------------------------------
+         * Existing inactive/requested relationship.
+         *
+         * Promote it to active instead of inserting another row.
+         * ---------------------------------------------------------------
+         */
+        elseif (count($inactive_rows) > 0) {
+
+            $relationship_id = (int)$inactive_rows[0]['id'];
+
+            $promote_query = mysqli_query(
+                $sqlConnect,
+                "UPDATE " . T_FOLLOWERS . "
+                 SET `active` = '1'
+                 WHERE `id` = {$relationship_id}
+                 LIMIT 1"
+            );
+
+            if (!$promote_query) {
+                if (function_exists('bzj_streams_follow_log')) {
+                    bzj_streams_follow_log(
+                        'REGISTER_PROMOTION_FAILED',
+                        array(
+                            'following_id' => $following_id_int,
+                            'follower_id'  => $follower_id_int,
+                            'relationship_id' => $relationship_id,
+                            'mysql_error' => mysqli_error($sqlConnect)
+                        )
+                    );
+                }
+
+                continue;
+            }
+
+            /*
+             * Remove any additional stale rows.
+             */
+            $cleanup_query = mysqli_query(
+                $sqlConnect,
+                "DELETE FROM " . T_FOLLOWERS . "
+                 WHERE `following_id` = {$following_id_int}
+                   AND `follower_id` = {$follower_id_int}
+                   AND `id` <> {$relationship_id}"
+            );
+
+            if (!$cleanup_query && function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_POST_PROMOTION_CLEANUP_FAILED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id,
+                        'mysql_error' => mysqli_error($sqlConnect)
+                    )
+                );
+            }
+
+            $follow_state_changed = true;
+
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_INACTIVE_PROMOTED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id
+                    )
+                );
+            }
+        }
+
+        /*
+         * ---------------------------------------------------------------
+         * No relationship exists.
+         * ---------------------------------------------------------------
+         */
+        else {
+
+            $insert_query = mysqli_query(
+                $sqlConnect,
+                "INSERT INTO " . T_FOLLOWERS . "
+                 (`following_id`, `follower_id`, `active`)
+                 VALUES
+                 ({$following_id_int}, {$follower_id_int}, '1')"
+            );
+
+            if (!$insert_query) {
+                if (function_exists('bzj_streams_follow_log')) {
+                    bzj_streams_follow_log(
+                        'REGISTER_INSERT_FAILED',
+                        array(
+                            'following_id' => $following_id_int,
+                            'follower_id'  => $follower_id_int,
+                            'mysql_error'  => mysqli_error($sqlConnect)
+                        )
+                    );
+                }
+
+                continue;
+            }
+
+            $relationship_id = (int)mysqli_insert_id($sqlConnect);
+            $follow_state_changed = true;
+
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_INSERTED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id,
+                        'active' => 1
+                    )
+                );
+            }
+        }
+
+        /*
+         * ================================================================
+         * AUTHORITATIVE POST-WRITE VERIFICATION
+         * ================================================================
+         */
+        $verify_query = mysqli_query(
+            $sqlConnect,
+            "SELECT `id`, `active`
+             FROM " . T_FOLLOWERS . "
+             WHERE `following_id` = {$following_id_int}
+               AND `follower_id` = {$follower_id_int}
+               AND `active` = '1'
+             ORDER BY `id` ASC
+             LIMIT 1"
+        );
+
+        if (
+            !$verify_query ||
+            mysqli_num_rows($verify_query) < 1
+        ) {
+            if (function_exists('bzj_streams_follow_log')) {
+                bzj_streams_follow_log(
+                    'REGISTER_POST_WRITE_VERIFICATION_FAILED',
+                    array(
+                        'following_id' => $following_id_int,
+                        'follower_id'  => $follower_id_int,
+                        'relationship_id' => $relationship_id,
+                        'mysql_error'  => mysqli_error($sqlConnect)
+                    )
+                );
+            }
+
+            continue;
+        }
+
+        $verified_row = mysqli_fetch_assoc($verify_query);
+
+        /*
+         * Cache invalidation.
+         */
+        cache($following_id_int, 'users', 'delete');
+        cache($follower_id_int, 'users', 'delete');
+
+        /*
+         * Only generate notification/activity when the relationship
+         * actually transitioned into Following.
+         */
+        if ($follow_state_changed) {
+
+            $notification_data = array(
+                'recipient_id' => $following_id_int,
+                'notifier_id'  => $follower_id_int,
+                'type'         => 'following',
+                'url'          => 'index.php?link1=timeline&u=' .
+                                  $following_data['username']
+            );
+
+            Wo_RegisterNotification($notification_data);
+
+            $activity_data = array(
+                'user_id'       => $follower_id_int,
+                'follow_id'     => $following_id_int,
+                'activity_type' => 'following'
+            );
+
+            Wo_RegisterActivity($activity_data);
+        }
+
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'REGISTER_FINAL_SUCCESS',
+                array(
+                    'following_id' => $following_id_int,
+                    'follower_id'  => $follower_id_int,
+                    'relationship_id' => !empty($verified_row['id'])
+                        ? (int)$verified_row['id']
+                        : $relationship_id,
+                    'following' => true,
+                    'requested' => false,
+                    'state_changed' => $follow_state_changed
+                )
+            );
+        }
+
+        $overall_success = true;
+    }
+
+    return $overall_success;
+}
+```
+
+### Important correction
+
+Notice that I deliberately removed this existing section:
+
+```php
+if ($following_data['follow_privacy'] == 1) {
+    if (Wo_IsFollowing($follower_id_safe, $following_id_safe) === false) {
+        return false;
+    }
+}
+```
+
+That code is a genuine reason for different accounts to behave differently. It currently exists in the repository. 
+
+If Buzzjuice's requirement is:
+
+> **Everyone can be followed immediately and no follow request exists**
+
+then `follow_privacy`, `confirm_followers`, and `connectivitySystem` must not be allowed to override that rule.
+
+---
+
+# 4. Replace `Wo_DeleteFollow()`
+
+The existing function is actually close, but we should make the deletion authoritative and remove **all duplicate rows**. GitHub correctly identified this as important. 
+
+Replace the active implementation with:
+
+```php
+function Wo_DeleteFollow($following_id = 0, $follower_id = 0)
+{
+    global $wo, $sqlConnect;
+
+    if (empty($wo['loggedin']) || $wo['loggedin'] !== true) {
+        return false;
+    }
+
+    if (
+        empty($following_id) ||
+        !is_numeric($following_id) ||
+        (int)$following_id < 1
+    ) {
+        return false;
+    }
+
+    if (
+        empty($follower_id) ||
+        !is_numeric($follower_id) ||
+        (int)$follower_id < 1
+    ) {
+        return false;
+    }
+
+    $following_id = (int)$following_id;
+    $follower_id  = (int)$follower_id;
+
+    /*
+     * Delete the complete relationship regardless of whether
+     * duplicate active/inactive rows exist.
+     */
+    $delete_query = mysqli_query(
+        $sqlConnect,
+        "DELETE FROM " . T_FOLLOWERS . "
+         WHERE `following_id` = {$following_id}
+           AND `follower_id` = {$follower_id}"
+    );
+
+    if (!$delete_query) {
+
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'DELETE_FOLLOW_FAILED',
+                array(
+                    'following_id' => $following_id,
+                    'follower_id'  => $follower_id,
+                    'mysql_error'  => mysqli_error($sqlConnect)
+                )
+            );
+        }
+
+        return false;
+    }
+
+    $deleted_rows = mysqli_affected_rows($sqlConnect);
+
+    /*
+     * Preserve existing activity cleanup.
+     */
+    if ($wo['config']['connectivitySystem'] == 1) {
+
+        mysqli_query(
+            $sqlConnect,
+            "DELETE FROM " . T_FOLLOWERS . "
+             WHERE `follower_id` = {$following_id}
+               AND `following_id` = {$follower_id}"
+        );
+
+        Wo_DeleteSelectedActivity(
+            $follower_id,
+            'friend',
+            $following_id
+        );
+
+        Wo_DeleteSelectedActivity(
+            $following_id,
+            'friend',
+            $follower_id
+        );
+
+    } else {
+
+        Wo_DeleteSelectedActivity(
+            $follower_id,
+            'following',
+            $following_id
+        );
+    }
+
+    cache($following_id, 'users', 'delete');
+    cache($follower_id, 'users', 'delete');
+
+    if (function_exists('bzj_streams_follow_log')) {
+        bzj_streams_follow_log(
+            'DELETE_FOLLOW_SUCCESS',
+            array(
+                'following_id' => $following_id,
+                'follower_id'  => $follower_id,
+                'deleted_rows' => $deleted_rows
+            )
+        );
+    }
+
+    return true;
+}
+```
+
+---
+
+# 5. Replace `follow_user.php`
+
+This is where the current implementation has one of the biggest defects.
+
+Currently:
+
+```php
+if (Wo_IsFollowing(...) || Wo_IsFollowRequested(...)) {
+    Wo_DeleteFollow(...);
+}
+```
+
+So an inactive/requested row causes the click to become **delete**, rather than **promote to active**. 
+
+That must change.
+
+File:
+
+[follow_user.php](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/xhr/follow_user.php?utm_source=chatgpt.com)
+
+Use:
+
+```php
+<?php
+
+if (
+    $f === 'follow_user' &&
+    !empty($wo['loggedin']) &&
+    $wo['loggedin'] === true
+) {
+
+    $data = array(
+        'status'        => 400,
+        'can_send'      => 0,
+        'following'     => false,
+        'requested'     => false,
+        'follow_status' => 'follow',
+        'message'       => ''
+    );
+
+    $follower_id = !empty($wo['user']['user_id'])
+        ? (int)$wo['user']['user_id']
+        : 0;
+
+    $following_id = 0;
+
+    /*
+     * ---------------------------------------------------------------
+     * Validate target
+     * ---------------------------------------------------------------
+     */
+    if (
+        !isset($_GET['following_id']) ||
+        !is_numeric($_GET['following_id']) ||
+        (int)$_GET['following_id'] < 1
+    ) {
+
+        $data['message'] = 'Invalid follow target.';
+
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'XHR_INVALID_TARGET',
+                array(
+                    'follower_id' => $follower_id,
+                    'target' => isset($_GET['following_id'])
+                        ? $_GET['following_id']
+                        : null
+                )
+            );
+        }
+
+    /*
+     * ---------------------------------------------------------------
+     * Validate session
+     * ---------------------------------------------------------------
+     */
+    } elseif (
+        !isset($hash_id) ||
+        Wo_CheckMainSession($hash_id) !== true
+    ) {
+
+        $data['message'] = 'Invalid session.';
+
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'XHR_INVALID_SESSION',
+                array(
+                    'follower_id' => $follower_id
+                )
+            );
+        }
+
+    } else {
+
+        $following_id = (int)$_GET['following_id'];
+
+        /*
+         * -----------------------------------------------------------
+         * Self-follow
+         * -----------------------------------------------------------
+         */
+        if ($following_id === $follower_id) {
+
+            $data['message'] = 'You cannot follow yourself.';
+
+        /*
+         * -----------------------------------------------------------
+         * Already following -> UNFOLLOW
+         * -----------------------------------------------------------
+         */
+        } elseif (
+            Wo_IsFollowing($following_id, $follower_id) === true
+        ) {
+
+            $deleted = Wo_DeleteFollow(
+                $following_id,
+                $follower_id
+            );
+
+            if ($deleted === true) {
+
+                $data['status']        = 200;
+                $data['following']     = false;
+                $data['requested']     = false;
+                $data['follow_status'] = 'follow';
+                $data['message']       = 'Follow removed.';
+
+                if (function_exists('bzj_streams_follow_log')) {
+                    bzj_streams_follow_log(
+                        'XHR_UNFOLLOW_SUCCESS',
+                        array(
+                            'follower_id'  => $follower_id,
+                            'following_id' => $following_id
+                        )
+                    );
+                }
+
+            } else {
+
+                $data['message'] = 'Unable to remove the follow.';
+
+                if (function_exists('bzj_streams_follow_log')) {
+                    bzj_streams_follow_log(
+                        'XHR_UNFOLLOW_FAILED',
+                        array(
+                            'follower_id'  => $follower_id,
+                            'following_id' => $following_id
+                        )
+                    );
+                }
+            }
+
+        /*
+         * -----------------------------------------------------------
+         * Not currently active -> FOLLOW
+         *
+         * Wo_RegisterFollow() handles:
+         *   - no row
+         *   - inactive row
+         *   - duplicate rows
+         *   - authoritative active=1
+         * -----------------------------------------------------------
+         */
+        } else {
+
+            /*
+             * Preserve the existing follower limit.
+             */
+            $user_followers = Wo_CountFollowing(
+                $follower_id,
+                true
+            );
+
+            $friends_limit = $wo['config']['connectivitySystemLimit'];
+
+            if (
+                $wo['config']['connectivitySystem'] == 1 &&
+                $user_followers >= $friends_limit
+            ) {
+
+                $data['status'] = 400;
+                $data['message'] = 'Follow limit reached.';
+
+                if (function_exists('bzj_streams_follow_log')) {
+                    bzj_streams_follow_log(
+                        'XHR_FOLLOW_LIMIT_REACHED',
+                        array(
+                            'follower_id'  => $follower_id,
+                            'following_id' => $following_id,
+                            'followers'    => $user_followers,
+                            'limit'        => $friends_limit
+                        )
+                    );
+                }
+
+            } else {
+
+                $registered = Wo_RegisterFollow(
+                    $following_id,
+                    $follower_id
+                );
+
+                if ($registered === true) {
+
+                    /*
+                     * Authoritative DB verification.
+                     */
+                    $final_following = Wo_IsFollowing(
+                        $following_id,
+                        $follower_id
+                    );
+
+                    $final_requested = Wo_IsFollowRequested(
+                        $following_id,
+                        $follower_id
+                    );
+
+                    if ($final_following === true) {
+
+                        $data['status']        = 200;
+                        $data['following']     = true;
+                        $data['requested']     = false;
+                        $data['follow_status'] = 'following';
+                        $data['message']       = 'Following.';
+
+                        if (Wo_CanSenEmails()) {
+                            $data['can_send'] = 1;
+                        }
+
+                        if (function_exists('bzj_streams_follow_log')) {
+                            bzj_streams_follow_log(
+                                'XHR_FOLLOW_SUCCESS',
+                                array(
+                                    'follower_id'  => $follower_id,
+                                    'following_id' => $following_id,
+                                    'following'    => true,
+                                    'requested'    => $final_requested
+                                )
+                            );
+                        }
+
+                    } elseif ($final_requested === true) {
+
+                        /*
+                         * This should now be exceptional because Buzzjuice
+                         * uses immediate follow.
+                         *
+                         * We report it rather than pretending success.
+                         */
+                        $data['status']        = 409;
+                        $data['following']     = false;
+                        $data['requested']     = true;
+                        $data['follow_status'] = 'requested';
+                        $data['message']       =
+                            'The follow was saved as pending unexpectedly.';
+
+                        if (function_exists('bzj_streams_follow_log')) {
+                            bzj_streams_follow_log(
+                                'XHR_UNEXPECTED_REQUESTED_STATE',
+                                array(
+                                    'follower_id'  => $follower_id,
+                                    'following_id' => $following_id
+                                )
+                            );
+                        }
+
+                    } else {
+
+                        $data['status'] = 500;
+                        $data['message'] =
+                            'The follow operation did not persist.';
+
+                        if (function_exists('bzj_streams_follow_log')) {
+                            bzj_streams_follow_log(
+                                'XHR_FOLLOW_POST_WRITE_VERIFICATION_FAILED',
+                                array(
+                                    'follower_id'  => $follower_id,
+                                    'following_id' => $following_id
+                                )
+                            );
+                        }
+                    }
+
+                } else {
+
+                    $data['status'] = 500;
+                    $data['message'] =
+                        'Unable to create the follow.';
+
+                    if (function_exists('bzj_streams_follow_log')) {
+                        bzj_streams_follow_log(
+                            'XHR_REGISTER_FOLLOW_FAILED',
+                            array(
+                                'follower_id'  => $follower_id,
+                                'following_id' => $following_id
+                            )
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if (function_exists('Wo_CleanCache')) {
+        Wo_CleanCache();
+    }
+
+    if (function_exists('bzj_streams_follow_log')) {
+        bzj_streams_follow_log(
+            'XHR_FINAL_STATE',
+            array(
+                'follower_id'   => $follower_id,
+                'following_id'  => $following_id,
+                'status'        => $data['status'],
+                'following'     => $data['following'],
+                'requested'     => $data['requested'],
+                'follow_status' => $data['follow_status'],
+                'message'       => $data['message']
+            )
+        );
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode($data);
+
+    exit();
+}
+```
+
+This implements the state machine GitHub proposed, but with the Buzzjuice immediate-follow policy made authoritative. 
+
+---
+
+# 6. Replace the JavaScript `Wo_RegisterFollow()`
+
+This is equally important.
+
+The current browser code changes the UI before the AJAX request completes and can explicitly construct:
+
+```text
+Requested
+```
+
+when `is_confirm_f == 1`. 
+
+That is exactly the wrong architecture for Buzzjuice.
+
+The browser should **never decide the relationship state**.
+
+Replace only the existing JavaScript function around lines 283–372 with:
+
+```javascript
+function Wo_RegisterFollow(id, is_confirm, show_modal) {
+
+    var followContainer = $('[id="Follow-' + id + '"]');
+    var button = followContainer.find('button').first();
+
+    /*
+     * Preserve the existing confirmation modal mechanism.
+     *
+     * IMPORTANT:
+     * is_confirm is intentionally NOT used to create a Requested state.
+     * Buzzjuice Streams uses immediate follows.
+     */
+    if (show_modal === true) {
+        $('#unfriend_btn').attr(
+            'onclick',
+            'Wo_RegisterFollow(' + id + ')'
+        );
+
+        $('#un_friend_modal').modal('show');
+
+        return false;
+    }
+
+    $('#un_friend_modal').modal('hide');
+
+    if (!button.length || button.prop('disabled')) {
+        return false;
+    }
+
+    /*
+     * Capture the current state only for socket notification handling.
+     */
+    var wasFollowing =
+        button.hasClass('btn-active') ||
+        button.hasClass('wo_following_btn');
+
+    var originalHtml = followContainer.html();
+
+    /*
+     * Prevent double-click/race conditions while the server
+     * processes the relationship.
+     */
+    button.prop('disabled', true);
+
+    if (typeof bzj_streams_follow_log_client === 'function') {
+        bzj_streams_follow_log_client(
+            'CLICK',
+            {
+                following_id: id,
+                was_following: wasFollowing
+            }
+        );
+    }
+
+    $.ajax({
+        url: Wo_Ajax_Requests_File(),
+        type: 'GET',
+        dataType: 'json',
+
+        data: {
+            f: 'follow_user',
+            following_id: id
+        }
+
+    }).done(function(data) {
+
+        /*
+         * Never change the UI based on the click itself.
+         *
+         * The server response is authoritative.
+         */
+        if (!data || data.status != 200) {
+
+            followContainer.html(originalHtml);
+
+            followContainer
+                .find('button')
+                .prop('disabled', false);
+
+            console.error(
+                'Buzzjuice Streams follow request failed.',
+                data
+            );
+
+            return;
+        }
+
+        var currentButton =
+            followContainer.find('button').first();
+
+        /*
+         * -----------------------------------------------------------
+         * AUTHORITATIVE FOLLOWING STATE
+         * -----------------------------------------------------------
+         */
+        if (
+            data.following === true ||
+            data.follow_status === 'following'
+        ) {
+
+            currentButton
+                .removeClass(
+                    'wo_follow_btn wo_request_btn btn-requested'
+                )
+                .addClass(
+                    'btn-active wo_following_btn'
+                )
+                .prop('disabled', false);
+
+            currentButton
+                .find('.button-text')
+                .text(
+                    ' <?php echo $wo["lang"]["following_btn"]; ?>'
+                );
+
+            /*
+             * Socket notification only when a new follow was created.
+             */
+            if (
+                typeof node_socket_flow !== 'undefined' &&
+                node_socket_flow == '1' &&
+                !wasFollowing &&
+                typeof socket !== 'undefined'
+            ) {
+
+                socket.emit(
+                    'user_notification',
+                    {
+                        to_id: id,
+                        user_id: _getCookie('user_id'),
+                        type: 'added'
+                    }
+                );
+            }
+
+            if (
+                typeof data.can_send !== 'undefined' &&
+                data.can_send == 1
+            ) {
+                Wo_SendMessages();
+            }
+
+            return;
+        }
+
+        /*
+         * -----------------------------------------------------------
+         * REQUESTED STATE
+         * -----------------------------------------------------------
+         *
+         * This is retained as defensive compatibility with existing
+         * WoWonder data, but Buzzjuice should not normally reach it.
+         */
+        if (
+            data.requested === true ||
+            data.follow_status === 'requested'
+        ) {
+
+            currentButton
+                .removeClass(
+                    'wo_follow_btn btn-active wo_following_btn'
+                )
+                .addClass(
+                    'btn-requested wo_request_btn'
+                )
+                .prop('disabled', false);
+
+            currentButton
+                .find('.button-text')
+                .text(
+                    ' <?php echo $wo["lang"]["requested"]; ?>'
+                );
+
+            console.warn(
+                'Buzzjuice Streams returned an unexpected requested state.',
+                data
+            );
+
+            return;
+        }
+
+        /*
+         * -----------------------------------------------------------
+         * FOLLOW STATE
+         * -----------------------------------------------------------
+         */
+        currentButton
+            .removeClass(
+                'btn-active wo_following_btn ' +
+                'btn-requested wo_request_btn'
+            )
+            .addClass(
+                'wo_follow_btn'
+            )
+            .prop('disabled', false);
+
+        currentButton
+            .find('.button-text')
+            .text(
+                ' <?php echo $wo["lang"]["follow"]; ?>'
+            );
+
+        if (
+            typeof node_socket_flow !== 'undefined' &&
+            node_socket_flow == '1' &&
+            wasFollowing &&
+            typeof socket !== 'undefined'
+        ) {
+
+            socket.emit(
+                'user_notification',
+                {
+                    to_id: id,
+                    user_id: _getCookie('user_id'),
+                    type: 'removed'
+                }
+            );
+        }
+
+    }).fail(function(xhr, status, error) {
+
+        /*
+         * Restore the original button when the HTTP request itself fails.
+         */
+        followContainer.html(originalHtml);
+
+        followContainer
+            .find('button')
+            .prop('disabled', false);
+
+        console.error(
+            'Buzzjuice Streams follow AJAX failure.',
+            {
+                status: status,
+                error: error,
+                http_status: xhr.status
+            }
+        );
+
+    });
+
+    return false;
+}
+```
+
+This directly implements the key GitHub correction: **the browser doesn't change to `Following` or `Requested` until the server has answered.** 
+
+---
+
+# 7. Fix the button templates
+
+The templates should stop passing the account's `confirm_followers` state into the client state machine.
+
+GitHub correctly identified this as another source of the inconsistent `Requested` behaviour. 
+
+## `follow.phtml`
+
+Change:
+
+```php
+onclick="Wo_RegisterFollow(<?php echo $wo['follow']['user_id']; ?>, <?php echo $wo['follow']['confirm_followers']; ?>)"
+```
+
+to:
+
+```php
+onclick="Wo_RegisterFollow(<?php echo (int)$wo['follow']['user_id']; ?>)"
+```
+
+## `requested.phtml`
+
+Change the onclick to:
+
+```php
+onclick="Wo_RegisterFollow(<?php echo (int)$wo['follow']['user_id']; ?>)"
+```
+
+The existing SVG/CSS/button presentation can remain unchanged.
+
+Files:
+
+[follow.phtml](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/buttons/follow.phtml?utm_source=chatgpt.com)
+
+[requested.phtml](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/buttons/requested.phtml?utm_source=chatgpt.com)
+
+---
+
+# 8. `unfollow.phtml`
+
+No major architectural change is required.
+
+The important thing is that it calls the same authoritative function:
+
+```php
+onclick="Wo_RegisterFollow(<?php echo (int)$wo['follow']['user_id']; ?>)"
+```
+
+The browser will then call the endpoint, which sees an active relationship and invokes `Wo_DeleteFollow()`.
+
+File:
+
+[unfollow.phtml](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/buttons/unfollow.phtml?utm_source=chatgpt.com)
+
+---
+
+# 9. Fix `follow_users.php`
+
+GitHub also identified a real secondary defect: the bulk endpoint can report success even when individual follows fail, and `$data` isn't guaranteed to be initialized. 
+
+Use:
+
+```php
+<?php
+
+if (
+    $f === 'follow_users' &&
+    !empty($wo['loggedin']) &&
+    $wo['loggedin'] === true
+) {
+
+    $data = array(
+        'status'  => 400,
+        'followed' => 0,
+        'failed'  => 0
+    );
+
+    $follower_id = !empty($wo['user']['user_id'])
+        ? (int)$wo['user']['user_id']
+        : 0;
+
+    if (!empty($_POST['user'])) {
+
+        $ids = explode(',', (string)$_POST['user']);
+
+        foreach ($ids as $id) {
+
+            $id = trim($id);
+
+            if (!is_numeric($id) || (int)$id < 1) {
+                $data['failed']++;
+                continue;
+            }
+
+            $target_id = (int)$id;
+
+            if ($target_id === $follower_id) {
+                $data['failed']++;
+                continue;
+            }
+
+            $success = Wo_RegisterFollow(
+                $target_id,
+                $follower_id
+            );
+
+            if ($success === true) {
+
+                /*
+                 * Confirm actual DB state.
+                 */
+                if (
+                    Wo_IsFollowing(
+                        $target_id,
+                        $follower_id
+                    ) === true
+                ) {
+                    $data['followed']++;
+                } else {
+                    $data['failed']++;
+                }
+
+            } else {
+                $data['failed']++;
+            }
+        }
+
+        /*
+         * Preserve existing onboarding behaviour.
+         */
+        Wo_UpdateUserData(
+            $follower_id,
+            array(
+                'startup_follow' => '1',
+                'start_up'       => '1'
+            )
+        );
+
+        Wo_UpdateUserDetails(
+            $follower_id,
+            false,
+            false,
+            true
+        );
+
+        if ($data['followed'] > 0) {
+            $data['status'] = 200;
+        }
+
+        if (function_exists('bzj_streams_follow_log')) {
+            bzj_streams_follow_log(
+                'BULK_FOLLOW_COMPLETE',
+                array(
+                    'follower_id' => $follower_id,
+                    'followed'    => $data['followed'],
+                    'failed'      => $data['failed']
+                )
+            );
+        }
+    }
+
+    if (function_exists('Wo_CleanCache')) {
+        Wo_CleanCache();
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode($data);
+
+    exit();
+}
+```
+
+---
+
+# 10. Why the inconsistent accounts are happening
+
+This is the part I think is especially important.
+
+Your observation that:
+
+> user 66 works, while some other accounts behave differently
+
+is very useful.
+
+The current code makes that entirely plausible.
+
+### Target account A
+
+```text
+follow_privacy = 0
+confirm_followers = 0
+```
+
+Result:
+
+```text
+Follow
+  ↓
+Wo_RegisterFollow()
+  ↓
+INSERT active=1
+  ↓
+Following
+```
+
+### Target account B
+
+```text
+follow_privacy = 1
+```
+
+Current code:
+
+```text
+Follow
+ ↓
+Wo_RegisterFollow()
+ ↓
+follow_privacy blocks operation
+ ↓
+false
+ ↓
+Follow remains
+```
+
+That corresponds closely to your **“button stays Follow forever”** symptom.
+
+### Target account C
+
+Has:
+
+```text
+Wo_Followers
+active = 0
+```
+
+Current `follow_user.php` sees:
+
+```php
+Wo_IsFollowRequested() === true
+```
+
+and executes:
+
+```php
+Wo_DeleteFollow()
+```
+
+instead of:
+
+```php
+Wo_RegisterFollow()
+```
+
+That produces the strange:
+
+```text
+Requested
+ ↓
+click
+ ↓
+row deleted
+ ↓
+Follow
+```
+
+behaviour.
+
+That is the strongest explanation for the combination of symptoms you're seeing. 
+
+---
+
+# 11. The account-registration issue
+
+I also reviewed the current `Wo_RegisterUser()` and SSO bridge.
+
+There is something worth correcting conceptually.
+
+The current `Wo_RegisterUser()` inserts whatever fields are supplied in `$registration_data`, then creates a `T_USERS_FIELDS` row. It does **not explicitly normalize all account-behaviour fields such as follow/privacy settings**. 
+
+The SSO bridge currently does:
+
+```php
+$registration = Wo_RegisterUser([
+    'username' => $final_username,
+    'email'    => $wp_email,
+    'password' => bin2hex(random_bytes(16)),
+    'active'   => 1
+]);
+```
+
+and then expects:
+
+```php
+$registration['user_id']
+```
+
+even though the current `Wo_RegisterUser()` returns `true` rather than a user array. The bridge has a fallback DB lookup, which is why this can still work, but the contract is inconsistent. 
+
+I would **not rewrite the entire registration system right now**, because that introduces unnecessary risk.
+
+Instead, the follow system should no longer depend on those account attributes.
+
+---
+
+# 12. Database diagnostic: compare every user against user 66
+
+This is absolutely worth doing.
+
+I would **not automatically modify those accounts yet**. First identify exactly what differs.
+
+Run this in phpMyAdmin against the Streams database.
+
+### A. Compare the important user fields
+
+```sql
+SELECT
+    u.user_id,
+    u.username,
+    u.email,
+    u.active,
+    u.status,
+    u.start_up,
+    u.follow_privacy,
+    u.confirm_followers,
+    u.wp_user_id,
+    u.following,
+    u.followers,
+    u.registered,
+    u.joined
+FROM Wo_Users u
+ORDER BY u.user_id;
+```
+
+If your actual table prefix isn't `Wo_`, use the actual table name.
+
+### B. Specifically compare with user 66
+
+```sql
+SELECT
+    a.user_id,
+    a.username,
+    a.email,
+    a.active,
+    a.status,
+    a.start_up,
+    a.follow_privacy,
+    a.confirm_followers,
+    a.wp_user_id,
+    a.following,
+    a.followers,
+    b.user_id AS reference_user_id,
+    b.username AS reference_username,
+    b.active AS reference_active,
+    b.status AS reference_status,
+    b.start_up AS reference_start_up,
+    b.follow_privacy AS reference_follow_privacy,
+    b.confirm_followers AS reference_confirm_followers,
+    b.wp_user_id AS reference_wp_user_id
+FROM Wo_Users a
+CROSS JOIN Wo_Users b
+WHERE b.user_id = 66
+ORDER BY a.user_id;
+```
+
+This gives us a baseline against the known-good account.
+
+---
+
+# 13. Find suspicious follow/privacy accounts immediately
+
+More useful is this:
+
+```sql
+SELECT
+    user_id,
+    username,
+    email,
+    active,
+    status,
+    follow_privacy,
+    confirm_followers,
+    wp_user_id
+FROM Wo_Users
+WHERE
+       COALESCE(follow_privacy, 0) <> (
+           SELECT COALESCE(follow_privacy, 0)
+           FROM Wo_Users
+           WHERE user_id = 66
+       )
+    OR COALESCE(confirm_followers, 0) <> (
+           SELECT COALESCE(confirm_followers, 0)
+           FROM Wo_Users
+           WHERE user_id = 66
+       )
+    OR COALESCE(active, 0) <> (
+           SELECT COALESCE(active, 0)
+           FROM Wo_Users
+           WHERE user_id = 66
+       )
+ORDER BY user_id;
+```
+
+**Do not update anything based on this yet.**
+
+We first want to see whether the problematic users cluster around one of those fields.
+
+---
+
+# 14. Find corrupted/duplicate follower relationships
+
+This query is particularly important:
+
+```sql
+SELECT
+    following_id,
+    follower_id,
+    COUNT(*) AS row_count,
+    SUM(active = 1) AS active_rows,
+    SUM(active = 0) AS inactive_rows,
+    GROUP_CONCAT(
+        CONCAT(id, ':', active)
+        ORDER BY id
+    ) AS rows_found
+FROM Wo_Followers
+GROUP BY following_id, follower_id
+HAVING COUNT(*) > 1
+ORDER BY row_count DESC;
+```
+
+This will identify relationships such as:
+
+```text
+following_id | follower_id | row_count | active_rows | inactive_rows
+---------------------------------------------------------------------
+81           | 23          | 2         | 1           | 1
+91           | 42          | 3         | 0           | 3
+```
+
+Those are exactly the kinds of historical records that can produce inconsistent UI states.
+
+---
+
+# 15. Find all inactive/requested relationships
+
+```sql
+SELECT
+    f.id,
+    f.following_id,
+    target.username AS following_username,
+    f.follower_id,
+    source.username AS follower_username,
+    f.active,
+    f.seen
+FROM Wo_Followers f
+LEFT JOIN Wo_Users target
+    ON target.user_id = f.following_id
+LEFT JOIN Wo_Users source
+    ON source.user_id = f.follower_id
+WHERE f.active = 0
+ORDER BY f.id DESC;
+```
+
+After the new implementation, these should become increasingly irrelevant to ordinary Buzzjuice following.
+
+---
+
+# 16. One more important diagnostic
+
+Because user **66 is your known-good account**, we should determine whether 66 itself has any unusual relationship rows.
+
+Run:
+
+```sql
+SELECT
+    *
+FROM Wo_Followers
+WHERE follower_id = 66
+   OR following_id = 66
+ORDER BY id DESC;
+```
+
+Then compare that with a problematic user.
+
+For example, if user 66 has:
+
+```text
+active = 1
+```
+
+for all relationships while problematic users have:
+
+```text
+active = 0
+```
+
+that would strongly confirm the diagnosis.
+
+---
+
+# 17. What I would NOT change yet
+
+I would **not** blindly modify:
+
+* `functions_three.php`
+* `admin_setting.php`
+* `Wo_RegisterUser()`
+* the entire SSO bridge
+* database account fields
+* existing follower rows
+
+unless the diagnostics show evidence requiring it.
+
+Those files are much larger and affect unrelated functionality.
+
+The current evidence points primarily to:
+
+```text
+Wo_RegisterFollow()
+        +
+follow_user.php
+        +
+client-side Wo_RegisterFollow()
+        +
+legacy inactive rows
+        +
+account follow/privacy attributes
+```
+
+rather than a fundamental SSO registration failure.
+
+The SSO registration issue is still worth cleaning up later, particularly the `Wo_RegisterUser()` return-value mismatch, but it isn't necessary to solve the immediate Follow problem. 
+
+---
+
+# 18. Final architecture after these changes
+
+The resulting flow becomes deterministic:
+
+```text
+                    BUZZJUICE STREAMS
+                           │
+                           ▼
+                   User taps Follow
+                           │
+                           ▼
+                Wo_RegisterFollow()
+                           │
+             ┌─────────────┼──────────────┐
+             │             │              │
+       active row?     inactive row?    no row?
+             │             │              │
+             ▼             ▼              ▼
+        keep one       promote it      INSERT
+         active           active        active=1
+             │             │              │
+             └─────────────┼──────────────┘
+                           ▼
+                  Verify Wo_Followers
+                           │
+                           ▼
+                   active row exists
+                           │
+                           ▼
+                 JSON: following=true
+                           │
+                           ▼
+                   Browser → Following
+```
+
+And unfollow:
+
+```text
+Following
+    │
+    ▼
+click
+    │
+    ▼
+Wo_IsFollowing() = true
+    │
+    ▼
+Wo_DeleteFollow()
+    │
+    ▼
+DELETE all matching rows
+    │
+    ▼
+verify / invalidate cache
+    │
+    ▼
+JSON: following=false
+    │
+    ▼
+Browser → Follow
+```
+
+There is **no normal Requested state in this model**.
+
+`Requested` remains only as defensive compatibility for old/corrupt data. The server will log it if it unexpectedly survives the new state machine.
+
+---
+
+## Deployment order
+
+I recommend deploying in this order rather than changing everything simultaneously:
+
+1. **Back up the Streams database.**
+2. Add the diagnostic logger.
+3. Replace `Wo_IsFollowing()`.
+4. Replace `Wo_RegisterFollow()`.
+5. Replace `Wo_DeleteFollow()`.
+6. Replace `follow_user.php`.
+7. Replace `follow_users.php`.
+8. Update the JavaScript `Wo_RegisterFollow()`.
+9. Remove `confirm_followers` from the follow/requested button onclick calls.
+10. Clear WoWonder/application/cache layers.
+11. Test with:
+
+* user 66
+* one currently working account
+* one account that stays `Follow`
+* one account that previously showed `Requested`
+
+12. Inspect `data.logs/bzj-streams-follow.log`.
+13. **Only after that**, run the database comparison queries above.
+
+The most valuable diagnostic will be the sequence in the log for a failing account. It should tell us whether the failure is occurring at **session validation → target lookup → block check → existing-row state → database write → post-write verification → client rendering**.
+
+That gives us a much stronger foundation than simply normalizing users to look like user 66. The goal should be to make **the relationship state authoritative in `Wo_Followers`**, while treating account attributes as secondary rather than allowing them to create contradictory follow states.
+
+
+<<STOP CHATGPT>>
