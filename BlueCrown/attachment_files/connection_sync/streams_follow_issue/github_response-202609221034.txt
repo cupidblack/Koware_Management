@@ -1,0 +1,1627 @@
+<<START GITHUB>>
+
+## Diagnosis
+
+The follow operation is failing because the browser, server session, and rendered `main_hash_id` are becoming disconnected.
+
+The important distinction is:
+
+- `$_SESSION['hash_id']` and `$_SESSION['main_hash_id']` are **server-side PHP-session values**.
+- They will never appear directly in browser cookies or DevTools.
+- The browser only receives the PHP session cookie, normally `PHPSESSID`.
+- The browser must also receive the rendered `.main_session` value and send that value back with protected AJAX requests.
+
+The current follow request does not send a hash:
+
+```javascript
+$.get(Wo_Ajax_Requests_File(), {
+    f: 'follow_user',
+    following_id: id
+}, ...)
+```
+
+However, `follow_user.php` validates the router-selected `$hash_id` with:
+
+```php
+Wo_CheckMainSession($hash_id)
+```
+
+Therefore the request normally reaches the endpoint with an empty or stale hash.
+
+The diagnostic log confirms an additional problem. It repeatedly shows:
+
+- a rendered `main_hash_id` being created;
+- later requests sending a previous `main_hash_id`;
+- the server creating a new PHP session with another `main_hash_id`;
+- `check_main_session_failed`;
+- the same stale client fingerprint being sent repeatedly.
+
+That means this is not primarily an automatic-follow problem. It is a session continuity and token-transport problem.
+
+Do **not** permanently change `Wo_CheckMainSession()` to `return true`. That disables a request-security boundary for follow, chat, payments, admin functions, and other endpoints.
+
+The relevant current code is:
+
+- [`streams/assets/init.php`](https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/assets/init.php)
+- [`streams/assets/includes/functions_two.php`](https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/assets/includes/functions_two.php#L5590-L5638)
+- [`streams/requests.php`](https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/requests.php#L1-L23)
+- [`streams/xhr/follow_user.php`](https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/xhr/follow_user.php)
+- [`streams/ww-sso-bridge.php`](https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/ww-sso-bridge.php)
+
+The repository code-search results are limited and may be incomplete. Review the complete search in GitHub:
+
+https://github.com/cupidblack/buzzjuice.net/search?q=Wo_CheckMainSession&type=code
+
+---
+
+# 1. First back up the files
+
+From the Buzzjuice document root:
+
+```bash
+cd /path/to/buzzjuice.net
+
+cp streams/assets/init.php \
+   streams/assets/init.php.bak.$(date +%Y%m%d%H%M%S)
+
+cp streams/assets/includes/functions_two.php \
+   streams/assets/includes/functions_two.php.bak.$(date +%Y%m%d%H%M%S)
+
+cp streams/requests.php \
+   streams/requests.php.bak.$(date +%Y%m%d%H%M%S)
+
+cp streams/xhr/follow_user.php \
+   streams/xhr/follow_user.php.bak.$(date +%Y%m%d%H%M%S)
+
+cp streams/ww-sso-bridge.php \
+   streams/ww-sso-bridge.php.bak.$(date +%Y%m%d%H%M%S)
+
+cp streams/themes/sunshine/layout/extra_js/content.phtml \
+   streams/themes/sunshine/layout/extra_js/content.phtml.bak.$(date +%Y%m%d%H%M%S)
+```
+
+Create the logging directory:
+
+```bash
+mkdir -p data/logs
+chmod 750 data/logs
+```
+
+The PHP-FPM/web-server user must be able to write to it. For example:
+
+```bash
+chown -R www-data:www-data data/logs
+```
+
+Replace `www-data` with the actual PHP process user.
+
+---
+
+# 2. Fix PHP session initialization first
+
+Your current `init.php` starts a session, but it does not explicitly guarantee that Streams and QuickDate use separate, consistent session cookies.
+
+If QuickDate and Streams both use `PHPSESSID`, one application can overwrite, destroy, or reinterpret the other application's session.
+
+The safest architecture is:
+
+- WordPress owns WordPress cookies;
+- QuickDate uses its own session cookie;
+- Streams uses its own session cookie;
+- every Streams request uses the same Streams cookie name, domain, path, and storage backend.
+
+Add the following configuration **before** `bz_safe_session_start()` in `streams/assets/init.php`.
+
+```php name=streams/assets/init.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/assets/init.php
+<?php
+@ini_set('session.cookie_httponly', '1');
+@ini_set('session.use_only_cookies', '1');
+@ini_set('session.use_strict_mode', '1');
+
+if (!version_compare(PHP_VERSION, '7.1.0', '>=')) {
+    exit(
+        "Required PHP_VERSION >= 7.1.0 , Your PHP_VERSION is : " .
+        PHP_VERSION .
+        "\n"
+    );
+}
+
+if (!function_exists('mysqli_connect')) {
+    exit(
+        "MySQLi is required to run the application, please contact your hosting to enable php mysqli."
+    );
+}
+
+date_default_timezone_set('UTC');
+
+/*
+ * Streams must use one stable session cookie.
+ *
+ * This must be identical for every Streams request, including:
+ * - normal pages;
+ * - requests.php;
+ * - ww-sso-bridge.php;
+ * - AJAX requests;
+ * - WebSocket authentication requests, where applicable.
+ *
+ * Use a different cookie name from QuickDate.
+ */
+if (session_status() === PHP_SESSION_NONE) {
+    @ini_set('session.name', 'BUZZSTREAMSESSID');
+    @ini_set('session.cookie_path', '/');
+    @ini_set('session.cookie_domain', '.buzzjuice.net');
+    @ini_set('session.cookie_secure', '1');
+    @ini_set('session.cookie_samesite', 'Lax');
+}
+
+function bz_session_log($event, $context = array())
+{
+    $directory = dirname(__DIR__, 2) . '/data/logs';
+
+    if (!is_dir($directory)) {
+        @mkdir($directory, 0750, true);
+    }
+
+    if (!is_array($context)) {
+        $context = array(
+            'value' => (string) $context
+        );
+    }
+
+    $session_id = '';
+
+    if (
+        function_exists('session_status') &&
+        session_status() === PHP_SESSION_ACTIVE &&
+        function_exists('session_id')
+    ) {
+        $session_id = (string) session_id();
+    }
+
+    $context['timestamp_utc'] = gmdate('c');
+    $context['method'] = isset($_SERVER['REQUEST_METHOD'])
+        ? (string) $_SERVER['REQUEST_METHOD']
+        : '';
+    $context['request_uri'] = isset($_SERVER['REQUEST_URI'])
+        ? (string) $_SERVER['REQUEST_URI']
+        : '';
+    $context['session_status'] = function_exists('session_status')
+        ? session_status()
+        : -1;
+    $context['session_name'] = function_exists('session_name')
+        ? session_name()
+        : '';
+    $context['session_cookie_present'] = function_exists('session_name')
+        ? isset($_COOKIE[session_name()])
+        : false;
+    $context['php_session_id_length'] = strlen($session_id);
+    $context['php_session_id_fingerprint'] = $session_id !== ''
+        ? hash('sha256', $session_id)
+        : '';
+
+    $json = json_encode(
+        array(
+            'event' => (string) $event,
+            'context' => $context
+        ),
+        JSON_UNESCAPED_SLASHES |
+        JSON_UNESCAPED_UNICODE |
+        JSON_PARTIAL_OUTPUT_ON_ERROR
+    );
+
+    if ($json !== false) {
+        @file_put_contents(
+            $directory . '/streams-session-' . gmdate('Y-m-d') . '.log',
+            $json . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
+    }
+}
+
+function bz_safe_session_start()
+{
+    if (!function_exists('session_status')) {
+        return false;
+    }
+
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return true;
+    }
+
+    if (session_status() !== PHP_SESSION_NONE) {
+        bz_session_log(
+            'session_not_startable',
+            array(
+                'session_status' => session_status()
+            )
+        );
+
+        return false;
+    }
+
+    if (headers_sent($headers_file, $headers_line)) {
+        bz_session_log(
+            'session_start_blocked_headers_sent',
+            array(
+                'headers_file' => $headers_file,
+                'headers_line' => $headers_line
+            )
+        );
+
+        return false;
+    }
+
+    try {
+        $started = session_start();
+    } catch (Throwable $exception) {
+        bz_session_log(
+            'session_start_exception',
+            array(
+                'exception_class' => get_class($exception),
+                'exception_message' => $exception->getMessage()
+            )
+        );
+
+        return false;
+    }
+
+    $active = (
+        $started &&
+        session_status() === PHP_SESSION_ACTIVE
+    );
+
+    bz_session_log(
+        $active
+            ? 'session_started'
+            : 'session_start_failed',
+        array(
+            'start_return_value' => $started,
+            'session_name' => session_name(),
+            'last_error' => error_get_last()
+        )
+    );
+
+    return $active;
+}
+
+bz_safe_session_start();
+
+bz_session_log(
+    'session_bootstrap_complete',
+    array(
+        'hash_id_present' => !empty($_SESSION['hash_id']),
+        'main_hash_id_present' => !empty($_SESSION['main_hash_id']),
+        'wo_user_id' => isset($_SESSION['wo_user_id'])
+            ? (int) $_SESSION['wo_user_id']
+            : 0
+    )
+);
+
+@ini_set('gd.jpeg_ignore_warning', 1);
+
+require_once __DIR__ . '/../../shared/palmier/palmier_logger.php';
+require_once __DIR__ . '/libraries/DB/vendor/joshcam/mysqli-database-class/MySQL-Maria.php';
+require_once __DIR__ . '/includes/cache.php';
+require_once __DIR__ . '/includes/functions_general.php';
+require_once __DIR__ . '/includes/tabels.php';
+require_once __DIR__ . '/includes/functions_one.php';
+require_once __DIR__ . '/includes/functions_two.php';
+require_once __DIR__ . '/includes/functions_three.php';
+
+if (!isset($wo['user']) || !is_array($wo['user'])) {
+    $wo['user'] = array(
+        'id' => 0,
+        'admin' => 0
+    );
+}
+```
+
+### Important
+
+If you cannot immediately separate the QuickDate session cookie, do not deploy the new cookie name partially. The name must be changed consistently for all Streams entry points.
+
+After deployment, inspect the response headers. You should see something similar to:
+
+```text
+Set-Cookie: BUZZSTREAMSESSID=...; Path=/; Domain=.buzzjuice.net; Secure; HttpOnly; SameSite=Lax
+```
+
+Then inspect the follow request and confirm that the request contains:
+
+```text
+Cookie: BUZZSTREAMSESSID=...
+```
+
+If the cookie is absent from the AJAX request, the problem is cookie scope, browser policy, domain mismatch, or the request being sent to another hostname.
+
+---
+
+# 3. Replace the four session functions
+
+The functions belong in `streams/assets/includes/functions_two.php`.
+
+The following implementation:
+
+- preserves valid existing values;
+- generates cryptographically secure values;
+- keeps `hash_id` at 40 hexadecimal characters;
+- keeps `main_hash_id` at 20 hexadecimal characters;
+- uses `hash_equals()`;
+- logs fingerprints rather than full credentials;
+- does not close and reopen the session;
+- logs the stored and supplied values during every check.
+
+Replace the existing four functions with this block.
+
+```php name=streams/assets/includes/functions_two.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/assets/includes/functions_two.php#L5590-L5638
+if (!function_exists('Wo_SessionValueDiagnostics')) {
+    function Wo_SessionValueDiagnostics($value)
+    {
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string) $value;
+
+        return array(
+            'present' => ($value !== ''),
+            'length' => strlen($value),
+            'sha256' => ($value !== '')
+                ? hash('sha256', $value)
+                : '',
+            'format' => ($value !== '')
+                ? (
+                    preg_match('/^[a-f0-9]+$/i', $value)
+                        ? 'hexadecimal'
+                        : 'invalid'
+                )
+                : 'empty'
+        );
+    }
+}
+
+if (!function_exists('Wo_SessionDiagnosticLog')) {
+    function Wo_SessionDiagnosticLog($event, $context = array())
+    {
+        $directory = dirname(__DIR__, 3) . '/data/logs';
+
+        if (!is_dir($directory)) {
+            @mkdir($directory, 0750, true);
+        }
+
+        if (!is_array($context)) {
+            $context = array(
+                'value' => (string) $context
+            );
+        }
+
+        $session_id = '';
+
+        if (
+            function_exists('session_status') &&
+            session_status() === PHP_SESSION_ACTIVE &&
+            function_exists('session_id')
+        ) {
+            $session_id = (string) session_id();
+        }
+
+        $context['timestamp_utc'] = gmdate('c');
+        $context['request_method'] = isset($_SERVER['REQUEST_METHOD'])
+            ? (string) $_SERVER['REQUEST_METHOD']
+            : '';
+        $context['request_uri'] = isset($_SERVER['REQUEST_URI'])
+            ? (string) $_SERVER['REQUEST_URI']
+            : '';
+        $context['session_status'] = function_exists('session_status')
+            ? session_status()
+            : -1;
+        $context['session_name'] = function_exists('session_name')
+            ? session_name()
+            : '';
+        $context['session_cookie_present'] = function_exists('session_name')
+            ? isset($_COOKIE[session_name()])
+            : false;
+        $context['php_session_id'] = Wo_SessionValueDiagnostics(
+            $session_id
+        );
+
+        $json = json_encode(
+            array(
+                'event' => (string) $event,
+                'context' => $context
+            ),
+            JSON_UNESCAPED_SLASHES |
+            JSON_UNESCAPED_UNICODE |
+            JSON_PARTIAL_OUTPUT_ON_ERROR
+        );
+
+        if ($json !== false) {
+            @file_put_contents(
+                $directory . '/session-' . gmdate('Y-m-d') . '.log',
+                $json . PHP_EOL,
+                FILE_APPEND | LOCK_EX
+            );
+        }
+    }
+}
+
+if (!function_exists('Wo_EnsurePhpSession')) {
+    function Wo_EnsurePhpSession()
+    {
+        if (!function_exists('session_status')) {
+            Wo_SessionDiagnosticLog(
+                'php_session_unavailable'
+            );
+
+            return false;
+        }
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            return true;
+        }
+
+        if (session_status() !== PHP_SESSION_NONE) {
+            Wo_SessionDiagnosticLog(
+                'php_session_not_startable',
+                array(
+                    'session_status' => session_status()
+                )
+            );
+
+            return false;
+        }
+
+        if (headers_sent($headers_file, $headers_line)) {
+            Wo_SessionDiagnosticLog(
+                'php_session_headers_already_sent',
+                array(
+                    'headers_file' => $headers_file,
+                    'headers_line' => $headers_line
+                )
+            );
+
+            return false;
+        }
+
+        try {
+            $started = session_start();
+        } catch (Throwable $exception) {
+            Wo_SessionDiagnosticLog(
+                'php_session_start_exception',
+                array(
+                    'exception_class' => get_class($exception),
+                    'exception_message' => $exception->getMessage()
+                )
+            );
+
+            return false;
+        }
+
+        $active = (
+            $started &&
+            session_status() === PHP_SESSION_ACTIVE
+        );
+
+        Wo_SessionDiagnosticLog(
+            $active
+                ? 'php_session_started'
+                : 'php_session_start_failed',
+            array(
+                'start_return_value' => $started,
+                'session_name' => session_name(),
+                'last_error' => error_get_last()
+            )
+        );
+
+        return $active;
+    }
+}
+
+if (!function_exists('Wo_CreateSession')) {
+    function Wo_CreateSession()
+    {
+        if (!Wo_EnsurePhpSession()) {
+            Wo_SessionDiagnosticLog(
+                'create_session_failed',
+                array(
+                    'session_key' => 'hash_id',
+                    'reason' => 'php_session_not_active'
+                )
+            );
+
+            return '';
+        }
+
+        $existing = isset($_SESSION['hash_id'])
+            ? (string) $_SESSION['hash_id']
+            : '';
+
+        if (preg_match('/^[a-f0-9]{40}$/i', $existing)) {
+            Wo_SessionDiagnosticLog(
+                'create_session_reused',
+                array(
+                    'session_key' => 'hash_id',
+                    'value' => Wo_SessionValueDiagnostics(
+                        $existing
+                    )
+                )
+            );
+
+            return $existing;
+        }
+
+        try {
+            $hash = bin2hex(random_bytes(20));
+        } catch (Throwable $exception) {
+            Wo_SessionDiagnosticLog(
+                'create_session_random_bytes_failed',
+                array(
+                    'session_key' => 'hash_id',
+                    'exception_class' => get_class($exception),
+                    'exception_message' => $exception->getMessage()
+                )
+            );
+
+            return '';
+        }
+
+        $_SESSION['hash_id'] = $hash;
+
+        Wo_SessionDiagnosticLog(
+            'create_session_created',
+            array(
+                'session_key' => 'hash_id',
+                'old_value' => Wo_SessionValueDiagnostics(
+                    $existing
+                ),
+                'new_value' => Wo_SessionValueDiagnostics(
+                    $hash
+                )
+            )
+        );
+
+        return $hash;
+    }
+}
+
+if (!function_exists('Wo_CheckSession')) {
+    function Wo_CheckSession($hash = '')
+    {
+        $provided = is_scalar($hash)
+            ? (string) $hash
+            : '';
+
+        if (!Wo_EnsurePhpSession()) {
+            Wo_SessionDiagnosticLog(
+                'check_session_failed',
+                array(
+                    'session_key' => 'hash_id',
+                    'reason' => 'php_session_not_active',
+                    'provided' => Wo_SessionValueDiagnostics(
+                        $provided
+                    )
+                )
+            );
+
+            return false;
+        }
+
+        $stored = isset($_SESSION['hash_id'])
+            ? (string) $_SESSION['hash_id']
+            : '';
+
+        $provided_valid = (bool) preg_match(
+            '/^[a-f0-9]{40}$/i',
+            $provided
+        );
+
+        $stored_valid = (bool) preg_match(
+            '/^[a-f0-9]{40}$/i',
+            $stored
+        );
+
+        $matched = (
+            $provided_valid &&
+            $stored_valid &&
+            hash_equals($stored, $provided)
+        );
+
+        Wo_SessionDiagnosticLog(
+            $matched
+                ? 'check_session_passed'
+                : 'check_session_failed',
+            array(
+                'session_key' => 'hash_id',
+                'provided' => Wo_SessionValueDiagnostics(
+                    $provided
+                ),
+                'stored' => Wo_SessionValueDiagnostics(
+                    $stored
+                ),
+                'provided_valid' => $provided_valid,
+                'stored_valid' => $stored_valid,
+                'matched' => $matched
+            )
+        );
+
+        return $matched;
+    }
+}
+
+if (!function_exists('Wo_CreateMainSession')) {
+    function Wo_CreateMainSession()
+    {
+        if (!Wo_EnsurePhpSession()) {
+            Wo_SessionDiagnosticLog(
+                'create_main_session_failed',
+                array(
+                    'session_key' => 'main_hash_id',
+                    'reason' => 'php_session_not_active'
+                )
+            );
+
+            return '';
+        }
+
+        $existing = isset($_SESSION['main_hash_id'])
+            ? (string) $_SESSION['main_hash_id']
+            : '';
+
+        if (preg_match('/^[a-f0-9]{20}$/i', $existing)) {
+            Wo_SessionDiagnosticLog(
+                'create_main_session_reused',
+                array(
+                    'session_key' => 'main_hash_id',
+                    'value' => Wo_SessionValueDiagnostics(
+                        $existing
+                    )
+                )
+            );
+
+            return $existing;
+        }
+
+        try {
+            $hash = bin2hex(random_bytes(10));
+        } catch (Throwable $exception) {
+            Wo_SessionDiagnosticLog(
+                'create_main_session_random_bytes_failed',
+                array(
+                    'session_key' => 'main_hash_id',
+                    'exception_class' => get_class($exception),
+                    'exception_message' => $exception->getMessage()
+                )
+            );
+
+            return '';
+        }
+
+        $_SESSION['main_hash_id'] = $hash;
+
+        Wo_SessionDiagnosticLog(
+            'create_main_session_created',
+            array(
+                'session_key' => 'main_hash_id',
+                'old_value' => Wo_SessionValueDiagnostics(
+                    $existing
+                ),
+                'new_value' => Wo_SessionValueDiagnostics(
+                    $hash
+                )
+            )
+        );
+
+        return $hash;
+    }
+}
+
+if (!function_exists('Wo_CheckMainSession')) {
+    function Wo_CheckMainSession($hash = '')
+    {
+        $provided = is_scalar($hash)
+            ? (string) $hash
+            : '';
+
+        if (!Wo_EnsurePhpSession()) {
+            Wo_SessionDiagnosticLog(
+                'check_main_session_failed',
+                array(
+                    'session_key' => 'main_hash_id',
+                    'reason' => 'php_session_not_active',
+                    'provided' => Wo_SessionValueDiagnostics(
+                        $provided
+                    )
+                )
+            );
+
+            return false;
+        }
+
+        $stored = isset($_SESSION['main_hash_id'])
+            ? (string) $_SESSION['main_hash_id']
+            : '';
+
+        $provided_valid = (bool) preg_match(
+            '/^[a-f0-9]{20}$/i',
+            $provided
+        );
+
+        $stored_valid = (bool) preg_match(
+            '/^[a-f0-9]{20}$/i',
+            $stored
+        );
+
+        $matched = (
+            $provided_valid &&
+            $stored_valid &&
+            hash_equals($stored, $provided)
+        );
+
+        Wo_SessionDiagnosticLog(
+            $matched
+                ? 'check_main_session_passed'
+                : 'check_main_session_failed',
+            array(
+                'session_key' => 'main_hash_id',
+                'provided' => Wo_SessionValueDiagnostics(
+                    $provided
+                ),
+                'stored' => Wo_SessionValueDiagnostics(
+                    $stored
+                ),
+                'provided_valid' => $provided_valid,
+                'stored_valid' => $stored_valid,
+                'matched' => $matched
+            )
+        );
+
+        return $matched;
+    }
+}
+```
+
+The actual hash is intentionally not logged. A raw session hash is a bearer credential. The SHA-256 fingerprint is sufficient to establish whether two requests received the same value.
+
+---
+
+# 4. Initialize both values during SSO
+
+In the current bridge, `Wo_SSO_Login()` sets:
+
+```php
+$_SESSION['user_id'];
+$_SESSION['wo_user_id'];
+$_SESSION['wp_Wo_SSO_Login'];
+```
+
+but does not initialize `hash_id` or `main_hash_id`.
+
+Immediately after:
+
+```php
+$session_token = Wo_CreateLoginSession($accepted_user_id);
+```
+
+add:
+
+```php name=streams/ww-sso-bridge.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/ww-sso-bridge.php#L967-L975
+$session_token = Wo_CreateLoginSession($accepted_user_id);
+
+$request_hash_id = Wo_CreateSession();
+$main_hash_id = Wo_CreateMainSession();
+
+if (
+    empty($session_token) ||
+    empty($request_hash_id) ||
+    empty($main_hash_id)
+) {
+    if (function_exists('Wo_SessionDiagnosticLog')) {
+        Wo_SessionDiagnosticLog(
+            'sso_session_initialization_failed',
+            array(
+                'wo_user_id' => (int) $accepted_user_id,
+                'login_session_present' => !empty($session_token),
+                'hash_id' => Wo_SessionValueDiagnostics(
+                    $request_hash_id
+                ),
+                'main_hash_id' => Wo_SessionValueDiagnostics(
+                    $main_hash_id
+                )
+            )
+        );
+    }
+
+    http_response_code(500);
+
+    echo json_encode(
+        array(
+            'status' => 500,
+            'errors' => array(
+                'The Streams session could not be initialized.'
+            )
+        )
+    );
+
+    exit;
+}
+
+$_SESSION['user_id'] = $session_token;
+$_SESSION['wo_user_id'] = (int) $accepted_user_id;
+$_SESSION['wp_Wo_SSO_Login'] = true;
+$_SESSION['hash_id'] = $request_hash_id;
+$_SESSION['main_hash_id'] = $main_hash_id;
+
+if (function_exists('Wo_SessionDiagnosticLog')) {
+    Wo_SessionDiagnosticLog(
+        'sso_session_initialized',
+        array(
+            'wo_user_id' => (int) $accepted_user_id,
+            'hash_id' => Wo_SessionValueDiagnostics(
+                $_SESSION['hash_id']
+            ),
+            'main_hash_id' => Wo_SessionValueDiagnostics(
+                $_SESSION['main_hash_id']
+            )
+        )
+    );
+}
+```
+
+Do not log:
+
+- `$session_token`;
+- the SSO JWT;
+- passwords;
+- the full `$_SESSION`;
+- the full `$_COOKIE`.
+
+---
+
+# 5. Repair the SSO fast path
+
+The current fast path redirects immediately when the user already appears to be logged in:
+
+```php
+if (
+    !empty($wo['loggedin']) &&
+    !empty($wo['user']['user_id']) &&
+    !empty($_SESSION['wo_user_id']) &&
+    (string) $_SESSION['wo_user_id'] === (string) $wo['user']['user_id']
+) {
+    header('Location: ' . $last_url);
+    exit;
+}
+```
+
+This can redirect before the two request-security values exist.
+
+Replace it with:
+
+```php name=streams/ww-sso-bridge.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/ww-sso-bridge.php#L180-L193
+if (
+    !empty($wo['loggedin']) &&
+    !empty($wo['user']['user_id']) &&
+    !empty($_SESSION['wo_user_id']) &&
+    (string) $_SESSION['wo_user_id'] ===
+    (string) $wo['user']['user_id']
+) {
+    $fast_hash_id = Wo_CreateSession();
+    $fast_main_hash_id = Wo_CreateMainSession();
+
+    $fast_path_ready = (
+        $fast_hash_id !== '' &&
+        $fast_main_hash_id !== ''
+    );
+
+    if (function_exists('Wo_SessionDiagnosticLog')) {
+        Wo_SessionDiagnosticLog(
+            'sso_fast_path_checked',
+            array(
+                'wo_user_id' => (int) $wo['user']['user_id'],
+                'hash_id' => Wo_SessionValueDiagnostics(
+                    $fast_hash_id
+                ),
+                'main_hash_id' => Wo_SessionValueDiagnostics(
+                    $fast_main_hash_id
+                ),
+                'ready' => $fast_path_ready
+            )
+        );
+    }
+
+    if (!$fast_path_ready) {
+        http_response_code(500);
+        exit('Unable to initialize the Streams request session.');
+    }
+
+    header('Location: ' . $last_url);
+    exit;
+}
+```
+
+---
+
+# 6. Render a canonical `.main_session` value
+
+Every page that uses protected AJAX requests must render the same value stored in:
+
+```php
+$_SESSION['main_hash_id']
+```
+
+The active Sunshine layout must contain a hidden input similar to this:
+
+```php name=streams/themes/sunshine/layout/container.phtml url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/themes/sunshine/layout/container.phtml
+<?php
+$rendered_main_hash_id = Wo_CreateMainSession();
+
+if (function_exists('Wo_SessionDiagnosticLog')) {
+    Wo_SessionDiagnosticLog(
+        'main_hash_rendered',
+        array(
+            'page' => isset($wo['page'])
+                ? (string) $wo['page']
+                : '',
+            'user_id' => isset($wo['user']['user_id'])
+                ? (int) $wo['user']['user_id']
+                : 0,
+            'rendered' => Wo_SessionValueDiagnostics(
+                $rendered_main_hash_id
+            ),
+            'stored' => Wo_SessionValueDiagnostics(
+                isset($_SESSION['main_hash_id'])
+                    ? $_SESSION['main_hash_id']
+                    : ''
+            ),
+            'same_value' => (
+                (string) $rendered_main_hash_id ===
+                (string) (
+                    isset($_SESSION['main_hash_id'])
+                        ? $_SESSION['main_hash_id']
+                        : ''
+                )
+            )
+        )
+    );
+}
+?>
+
+<input
+    type="hidden"
+    name="main_session"
+    class="main_session"
+    value="<?php echo htmlspecialchars(
+        $rendered_main_hash_id,
+        ENT_QUOTES,
+        'UTF-8'
+    ); ?>"
+>
+```
+
+The previous search found `.main_session` in other layouts, but the active Sunshine container must be verified directly. Do not assume `container.phtml.fresh` is the live file.
+
+The log should show:
+
+```text
+main_hash_rendered
+rendered.length = 20
+stored.length = 20
+same_value = true
+```
+
+If the page is rendered with one value and the AJAX request submits another value, the browser is using stale page markup or the PHP session changed between page rendering and the AJAX request.
+
+---
+
+# 7. Fix the client-side follow request
+
+The current `Wo_RegisterFollow()` sends no `hash_id`.
+
+At the beginning of the function, retrieve the canonical value:
+
+```javascript name=streams/themes/sunshine/layout/extra_js/content.phtml url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/themes/sunshine/layout/extra_js/content.phtml
+function Wo_RegisterFollow(id, is_confirm, show_modal = false) {
+  var _follow_con = $('[id=Follow-' + id + ']');
+  var main_session = $('.main_session').first().val() || '';
+
+  if (!main_session) {
+    console.error('Wo_RegisterFollow: main_session is missing', {
+      following_id: id
+    });
+
+    return false;
+  }
+
+  var is_confirm_f = 0;
+
+  if (is_confirm == 1) {
+    is_confirm_f = 1;
+  }
+
+  if (show_modal == true) {
+    $('#unfriend_btn').attr(
+      'onclick',
+      'Wo_RegisterFollow(' + id + ')'
+    );
+    $('#un_friend_modal').modal('show');
+    return false;
+  }
+
+  $('#un_friend_modal').modal('hide');
+
+  /*
+   * Keep the existing button-rendering logic here.
+   * The important change is that the AJAX request below sends:
+   *
+   *     hash_id: main_session
+   *
+   * Do not use hash_id from a different session type.
+   */
+
+  /*
+   * Existing html_ selection logic remains here.
+   */
+
+  _follow_con.html(html_);
+
+  $.get(
+    Wo_Ajax_Requests_File(),
+    {
+      f: 'follow_user',
+      following_id: id,
+      hash_id: main_session
+    },
+    function(data) {
+      if (data && data.can_send == 1) {
+        Wo_SendMessages();
+      }
+
+      if (data && data.status == 400) {
+        /*
+         * Restore the server-safe Follow button when the request
+         * is rejected.
+         */
+        _follow_con.html(
+          '<button type="button" ' +
+          'onclick="Wo_RegisterFollow(' + id + ')" ' +
+          'class="btn btn-default btn-sm wo_follow_btn" ' +
+          'id="wo_useract_btn">' +
+          '<span class="button-text">Follow</span>' +
+          '</button>'
+        );
+
+        $('#modal-alert').modal('show');
+
+        Wo_Delay(function() {
+          $('#modal-alert').modal('hide');
+        }, 3000);
+      }
+    }
+  ).fail(function(xhr) {
+    console.error(
+      'Wo_RegisterFollow: AJAX request failed',
+      {
+        status: xhr.status,
+        following_id: id
+      }
+    );
+  });
+}
+```
+
+Do not replace the entire existing function with the shortened example above unless you also preserve the complete SVG/button HTML currently used by your theme.
+
+The minimal required change in the existing function is:
+
+```javascript
+var main_session = $('.main_session').first().val() || '';
+
+if (!main_session) {
+  console.error('Missing .main_session value');
+  return false;
+}
+
+$.get(Wo_Ajax_Requests_File(), {
+  f: 'follow_user',
+  following_id: id,
+  hash_id: main_session
+}, function(data) {
+  // existing callback
+});
+```
+
+The same canonical token should be used consistently by other protected calls:
+
+```javascript
+hash: $('.main_session').first().val()
+```
+
+or:
+
+```javascript
+hash_id: $('.main_session').first().val()
+```
+
+The router currently accepts both names, but `hash_id` is clearer for this endpoint.
+
+---
+
+# 8. Add diagnostic logging to `requests.php`
+
+Add logging immediately after the router selects `$hash_id`.
+
+```php name=streams/requests.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/requests.php#L13-L23
+$hash_id = '';
+
+if (!empty($_POST['hash_id'])) {
+    $hash_id = $_POST['hash_id'];
+} else if (!empty($_GET['hash_id'])) {
+    $hash_id = $_GET['hash_id'];
+} else if (!empty($_GET['hash'])) {
+    $hash_id = $_GET['hash'];
+} else if (!empty($_POST['hash'])) {
+    $hash_id = $_POST['hash'];
+}
+
+if (function_exists('Wo_SessionDiagnosticLog')) {
+    Wo_SessionDiagnosticLog(
+        'request_router_hash_selected',
+        array(
+            'function' => isset($f) ? (string) $f : '',
+            'subfunction' => isset($s) ? (string) $s : '',
+            'source' => !empty($_POST['hash_id'])
+                ? 'post.hash_id'
+                : (
+                    !empty($_GET['hash_id'])
+                        ? 'get.hash_id'
+                        : (
+                            !empty($_GET['hash'])
+                                ? 'get.hash'
+                                : (
+                                    !empty($_POST['hash'])
+                                        ? 'post.hash'
+                                        : 'none'
+                                )
+                        )
+                ),
+            'request_hash' => Wo_SessionValueDiagnostics(
+                $hash_id
+            ),
+            'stored_main_hash' => Wo_SessionValueDiagnostics(
+                isset($_SESSION['main_hash_id'])
+                    ? $_SESSION['main_hash_id']
+                    : ''
+            ),
+            'stored_request_hash' => Wo_SessionValueDiagnostics(
+                isset($_SESSION['hash_id'])
+                    ? $_SESSION['hash_id']
+                    : ''
+            ),
+            'logged_in' => !empty($wo['loggedin']),
+            'wo_user_id' => isset($wo['user']['user_id'])
+                ? (int) $wo['user']['user_id']
+                : 0
+        )
+    );
+}
+```
+
+For a working follow request, the log should show:
+
+```text
+function = follow_user
+source = get.hash_id
+request_hash.length = 20
+stored_main_hash.length = 20
+request_hash.sha256 = stored_main_hash.sha256
+```
+
+If `request_hash.length` is zero, the JavaScript still is not sending the token.
+
+If both are length 20 but fingerprints differ, the page contains a stale token or the PHP session changed.
+
+---
+
+# 9. Harden `follow_user.php`
+
+The endpoint currently does not guarantee that `$data` has a defined value for every failure path.
+
+Use the following implementation:
+
+```php name=streams/xhr/follow_user.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/xhr/follow_user.php
+<?php
+
+if ($f == 'follow_user' && $wo['loggedin'] === true) {
+    $data = array(
+        'status' => 400,
+        'can_send' => 0,
+        'message' => 'Unable to process the follow request.'
+    );
+
+    $following_id = isset($_GET['following_id'])
+        ? (int) $_GET['following_id']
+        : 0;
+
+    $session_valid = Wo_CheckMainSession($hash_id);
+
+    if (function_exists('Wo_SessionDiagnosticLog')) {
+        Wo_SessionDiagnosticLog(
+            'follow_user_request',
+            array(
+                'following_id' => $following_id,
+                'follower_id' => isset($wo['user']['user_id'])
+                    ? (int) $wo['user']['user_id']
+                    : 0,
+                'hash_id' => Wo_SessionValueDiagnostics(
+                    $hash_id
+                ),
+                'main_hash_id' => Wo_SessionValueDiagnostics(
+                    isset($_SESSION['main_hash_id'])
+                        ? $_SESSION['main_hash_id']
+                        : ''
+                ),
+                'session_valid' => $session_valid
+            )
+        );
+    }
+
+    if ($following_id <= 0) {
+        $data['message'] = 'Invalid user ID.';
+    } else if (!$session_valid) {
+        $data['message'] = 'Your session expired. Please refresh the page.';
+    } else {
+        $user_followers = Wo_CountFollowing(
+            $wo['user']['id'],
+            true
+        );
+
+        $friends_limit = $wo['config']['connectivitySystemLimit'];
+
+        $is_following = Wo_IsFollowing(
+            $following_id,
+            $wo['user']['user_id']
+        );
+
+        $is_requested = Wo_IsFollowRequested(
+            $following_id,
+            $wo['user']['user_id']
+        );
+
+        if ($is_following === true || $is_requested === true) {
+            if (
+                Wo_DeleteFollow(
+                    $following_id,
+                    $wo['user']['user_id']
+                )
+            ) {
+                $data = array(
+                    'status' => 200,
+                    'can_send' => 0,
+                    'html' => '',
+                    'state' => 'removed'
+                );
+            } else {
+                $data['message'] = 'Unable to remove the follow relationship.';
+            }
+        } else if (
+            $wo['config']['connectivitySystem'] == 1 &&
+            $user_followers >= $friends_limit
+        ) {
+            $data = array(
+                'status' => 400,
+                'can_send' => 0,
+                'message' => 'Your follow limit has been reached.'
+            );
+        } else {
+            $registered = Wo_RegisterFollow(
+                $following_id,
+                $wo['user']['user_id']
+            );
+
+            if ($registered) {
+                $data = array(
+                    'status' => 200,
+                    'can_send' => 0,
+                    'html' => '',
+                    'state' => 'added'
+                );
+
+                if (Wo_CanSenEmails()) {
+                    $data['can_send'] = 1;
+                }
+            } else {
+                $data['message'] = 'Unable to create the follow relationship.';
+            }
+        }
+    }
+
+    if ($wo['loggedin'] == true) {
+        Wo_CleanCache();
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit();
+}
+```
+
+This does not force automatic acceptance. It first ensures that the request is valid and then calls the existing relationship logic.
+
+If you want all new relationships to be accepted immediately, that policy must be implemented in the relationship-registration logic and verified in the database. Changing only the button label or making the session check always return true does not guarantee automatic acceptance.
+
+---
+
+# 10. Verify the automatic-follow assumption
+
+The frontend can show `Requested` before the AJAX response completes because the current JavaScript changes the button optimistically.
+
+That does not prove the database contains a pending request.
+
+Check the actual relationship after the request:
+
+```sql
+SELECT *
+FROM Wo_Followers
+WHERE (
+    following_id = TARGET_USER_ID
+    AND follower_id = CURRENT_USER_ID
+)
+OR (
+    following_id = CURRENT_USER_ID
+    AND follower_id = TARGET_USER_ID
+)
+ORDER BY id DESC;
+```
+
+Use the actual table name defined by `T_FOLLOWERS` in `streams/assets/includes/tabels.php`.
+
+Also inspect the values of:
+
+- `connectivitySystem`;
+- the target user's privacy/follow setting;
+- whether the relationship row has an `active` or approval field;
+- whether `Wo_RegisterFollow()` inserts a request instead of an active relationship;
+- whether a separate acceptance function is required.
+
+The session repair must be completed before diagnosing that policy, because a rejected request can be mistaken for a pending follow.
+
+---
+
+# 11. Add a session continuity test endpoint
+
+Temporarily create a diagnostic endpoint outside the public production workflow, or add a protected development-only branch to `requests.php`.
+
+It should report fingerprints only:
+
+```php name=streams/xhr/session_status.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/xhr/session_status.php
+<?php
+
+if ($f === 'session_status') {
+    $main_hash = isset($_SESSION['main_hash_id'])
+        ? (string) $_SESSION['main_hash_id']
+        : '';
+
+    $request_hash = isset($_SESSION['hash_id'])
+        ? (string) $_SESSION['hash_id']
+        : '';
+
+    $data = array(
+        'status' => 200,
+        'session_name' => session_name(),
+        'session_cookie_present' => isset(
+            $_COOKIE[session_name()]
+        ),
+        'php_session_id' => Wo_SessionValueDiagnostics(
+            session_id()
+        ),
+        'hash_id' => Wo_SessionValueDiagnostics(
+            $request_hash
+        ),
+        'main_hash_id' => Wo_SessionValueDiagnostics(
+            $main_hash
+        ),
+        'user_id' => isset($wo['user']['user_id'])
+            ? (int) $wo['user']['user_id']
+            : 0
+    );
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit();
+}
+```
+
+Call it three times:
+
+1. normal `/streams` page;
+2. immediately after clicking Follow;
+3. after reloading the profile page.
+
+The following values must remain stable for the same browser session:
+
+- session cookie name;
+- PHP session ID fingerprint;
+- `main_hash_id` fingerprint;
+- `hash_id` fingerprint;
+- authenticated WoWonder user ID.
+
+If the PHP session ID changes between those calls, investigate:
+
+- the SSO bridge destroying the session;
+- cookie domain/path mismatch;
+- HTTP versus HTTPS;
+- `www.buzzjuice.net` versus `buzzjuice.net`;
+- a reverse proxy or load balancer without shared PHP session storage;
+- multiple PHP session save paths;
+- QuickDate using and destroying the same cookie;
+- `session_regenerate_id(true)` being called by another application;
+- concurrent requests reaching different application servers.
+
+---
+
+# 12. Prevent the bridge from destroying an unrelated session
+
+The current bridge contains this behavior:
+
+```php
+if (!$wordpress_logged_in) {
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION = [];
+        session_unset();
+        @session_destroy();
+    }
+
+    ...
+}
+```
+
+That is dangerous if the request is sent to Streams without WordPress cookies or if the cookie domains are inconsistent.
+
+At minimum, log before destruction:
+
+```php name=streams/ww-sso-bridge.php url=https://github.com/cupidblack/buzzjuice.net/blob/5a35fd9f80c6a97a4d5f2f91e96dfc722277f49d/streams/ww-sso-bridge.php#L205-L215
+if (!$wordpress_logged_in) {
+    if (function_exists('Wo_SessionDiagnosticLog')) {
+        Wo_SessionDiagnosticLog(
+            'sso_bridge_no_wordpress_cookie',
+            array(
+                'session_name' => session_name(),
+                'session_cookie_present' => isset(
+                    $_COOKIE[session_name()]
+                ),
+                'wo_user_id' => isset($_SESSION['wo_user_id'])
+                    ? (int) $_SESSION['wo_user_id']
+                    : 0,
+                'hash_id' => Wo_SessionValueDiagnostics(
+                    isset($_SESSION['hash_id'])
+                        ? $_SESSION['hash_id']
+                        : ''
+                ),
+                'main_hash_id' => Wo_SessionValueDiagnostics(
+                    isset($_SESSION['main_hash_id'])
+                        ? $_SESSION['main_hash_id']
+                        : ''
+                )
+            )
+        );
+    }
+
+    /*
+     * Only destroy the Streams session if this is intentionally
+     * a logout/session-reset operation.
+     *
+     * Do not destroy it merely because a WordPress cookie is absent
+     * from one bridge request.
+     */
+    header(
+        'Location: /wp-login.php?redirect_to=' .
+        urlencode($last_url)
+    );
+    exit;
+}
+```
+
+Do not destroy the active Streams session merely because one SSO request did not receive a WordPress cookie.
+
+---
+
+# 13. Test in this order
+
+Perform the following tests using one clean browser profile.
+
+## Test A — Session creation
+
+1. Clear cookies for `buzzjuice.net`.
+2. Open `/streams`.
+3. Confirm one Streams session cookie exists.
+4. Confirm the page contains exactly one `.main_session`.
+5. Confirm the value is 20 hexadecimal characters.
+6. Confirm the server log contains:
+   - `session_started`;
+   - `create_main_session_created` or `create_main_session_reused`;
+   - `main_hash_rendered`.
+
+## Test B — Follow request
+
+1. Open DevTools → Network.
+2. Click Follow.
+3. Inspect the request to `requests.php`.
+4. Confirm the query string or form data includes:
+
+```text
+f=follow_user
+following_id=<target>
+hash_id=<20-character-token>
+```
+
+5. Confirm the request contains the same Streams cookie.
+6. Confirm the server log shows:
+   - `request_router_hash_selected`;
+   - source `get.hash_id`;
+   - request hash length `20`;
+   - stored main hash length `20`;
+   - matching fingerprints;
+   - `check_main_session_passed`;
+   - `follow_user_request`;
+   - status `200`.
+
+## Test C — Reload
+
+1. Reload the profile page.
+2. Confirm the new page's `.main_session` still matches the server session.
+3. Confirm the relationship is loaded from the database.
+4. Confirm the button reflects the database state rather than the optimistic client state.
+
+## Test D — Multiple accounts
+
+Repeat the same test with:
+
+- an account that previously worked;
+- an account that previously showed `Requested`;
+- target user ID `66`;
+- another target user.
+
+If only one account fails after session fingerprints match, the remaining problem is relationship data or privacy configuration, not PHP session validation.
+
+---
+
+# Expected final result
+
+For a successful follow request, the complete chain should be:
+
+```text
+SSO bridge starts Streams session
+        ↓
+Wo_CreateSession() creates/reuses hash_id
+        ↓
+Wo_CreateMainSession() creates/reuses main_hash_id
+        ↓
+page renders .main_session
+        ↓
+Wo_RegisterFollow() reads .main_session
+        ↓
+AJAX sends hash_id=<main_hash_id>
+        ↓
+requests.php selects $_GET['hash_id']
+        ↓
+follow_user.php calls Wo_CheckMainSession()
+        ↓
+provided fingerprint equals stored fingerprint
+        ↓
+Wo_RegisterFollow() updates the database
+        ↓
+page reload reads the persisted relationship
+```
+
+The most important changes are:
+
+1. Do not return `true` unconditionally from either session-check function.
+2. Ensure Streams has a stable, separate session cookie.
+3. Initialize both hashes in the SSO bridge.
+4. Render `.main_session` in the active Sunshine layout.
+5. Send `.main_session` as `hash_id` from `Wo_RegisterFollow()`.
+6. Log fingerprints and session IDs at the router and endpoint.
+7. Do not let the SSO bridge destroy the Streams session during an ordinary missing-cookie condition.
+8. Verify the actual relationship row after the request instead of relying on the optimistic button state.
+
+<<STOP GITHUB>>
