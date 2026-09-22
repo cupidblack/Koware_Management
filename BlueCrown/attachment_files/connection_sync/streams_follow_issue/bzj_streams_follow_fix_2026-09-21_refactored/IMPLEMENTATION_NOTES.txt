@@ -1,0 +1,43 @@
+IMPLEMENTATION NOTES
+====================
+
+The refactor incorporates the useful recommendations from the previous review
+while correcting the newly observed "invalid_main_session" failure.
+
+Key corrections:
+
+1. Removed the secondary Wo_CheckMainSession() requirement from follow_user.php.
+   requests.php already supplies authenticated session enforcement.
+
+2. Removed confirm_followers from all button calls.
+
+3. Removed follow_privacy as a reason to create/reject a pending request. The
+   Buzzjuice Streams rule is immediate follow.
+
+4. Existing active=0 rows are promoted to active=1.
+
+5. Duplicate rows for the exact pair are collapsed to one surviving row.
+
+6. Wo_IsFollowing() uses existence (LIMIT 1), not COUNT == 1.
+
+7. Wo_DeleteFollow() deletes every row for the exact relationship pair and
+   verifies that none remains.
+
+8. The endpoint reads the relationship back after the write and returns:
+      state=following
+   or:
+      state=follow
+
+9. Requested is never returned by the new endpoint.
+
+10. Extensive JSON-line logging is written under data.logs/follow.
+
+11. The SSO registration path is diagnosed but not rewritten. The current
+    Wo_RegisterUser() registration call already supplies active=1.
+
+12. The SQL diagnostics compare all Wo_Users against working user 66 and
+    inspect pending/duplicate follow relationships.
+
+13. The existing WP/BuddyBoss connection projection hook is retained where
+    bzj_connection_client() exists. A projection failure is logged rather
+    than allowing a successful Streams relationship to be undone.
