@@ -1,0 +1,284 @@
+<<START CHATGPT>>
+
+The log points to a **session/hash regression rather than a follow-function failure**. The important clue is that WoWonder is receiving a **64-character hash from the browser**, while its stored session hashes are **20 and 40 characters**, so `Wo_CheckMainSession()` rejects the request before the follow-related operation can work.
+
+### What the log is showing
+
+The browser sends:
+
+* `GET /streams/requests.php?hash=...`
+* `received_hash.length = 64`
+
+But the session contains:
+
+* `hash_id.length = 40`
+* `main_hash_id.length = 20`
+
+Then:
+
+```text
+Wo_CheckMainSession_failed
+reason: "hash_mismatch"
+length_match: false
+```
+
+So this is decisive:
+
+```text
+received: 64 chars
+stored main hash: 20 chars
+```
+
+The failure is **not** that the stored hash is simply wrong. The comparison is being made between values produced by **different hash-generation schemes**.
+
+### The second important clue
+
+Immediately afterward:
+
+```text
+Wo_CreateMainSession_reused
+Wo_CreateSession_reused
+```
+
+and the `/followers` page is requested several times.
+
+That means the application is trying to recover from the failed main-session validation, but the existing session state is inconsistent:
+
+```text
+user_id_present: false
+wo_user_id: null
+wp_user_id: null
+wp_Wo_SSO_Login: false
+```
+
+In other words, WoWonder currently has a PHP session, but **that session is not associated with a logged-in WoWonder user** according to the state your diagnostic code is observing.
+
+Then eventually:
+
+```text
+Wo_CreateMainSession_created
+Wo_CreateSession_created
+```
+
+for `/streams/404`.
+
+That looks like the session machinery eventually creates a new session/hash pair, but it is happening in response to a request that has already fallen out of the authenticated state.
+
+---
+
+# The likely root cause
+
+I would **not change `Wo_Follow()` yet**.
+
+The error-control changes have exposed a more fundamental problem in the authentication/session integration.
+
+Your browser is apparently carrying a **64-character hash**, while the WoWonder code expects the traditional:
+
+```text
+main_hash_id = 20 characters
+hash_id      = 40 characters
+```
+
+That strongly suggests that one of the recent SSO/session modifications is generating or injecting a **SHA-256-style 64-character value into the `hash` parameter**.
+
+The critical question is therefore:
+
+> **Where is the 64-character `hash=5a4245...` being generated?**
+
+It should not be guessed at.
+
+---
+
+# What I recommend we do next
+
+We should trace the hash **backward from the browser request**.
+
+There are three things I would inspect before changing anything else.
+
+### 1. Find where `hash` is generated on the Streams frontend
+
+Search the WoWonder Streams code for things such as:
+
+```php
+' hash'
+```
+
+and especially:
+
+```php
+hash
+$wo['user']['session_id']
+$wo['user']['hash_id']
+$wo['user']['main_hash_id']
+Wo_CreateSession()
+Wo_CreateMainSession()
+```
+
+Also search JavaScript for:
+
+```javascript
+hash:
+```
+
+and:
+
+```javascript
+hash =
+```
+
+The objective is to find the code producing:
+
+```text
+hash=5a4245359336ed872cf530860f33241e2ee61410baddfba62a12bc7195346078
+```
+
+---
+
+### 2. Find exactly what your modified `Wo_CheckMainSession()` expects
+
+The diagnostic output tells us the function is comparing:
+
+```text
+provided = 64 chars
+stored   = 20 chars
+```
+
+We need to see the **actual implementation** of the modified function.
+
+In particular, I want to see whether it now does something conceptually like:
+
+```php
+hash_equals($stored, $provided)
+```
+
+when `$provided` is actually a different hash representation.
+
+The error-control changes should **never alter the authentication contract**.
+
+---
+
+### 3. Inspect `Wo_CreateMainSession()` and `Wo_CreateSession()`
+
+The log is especially useful here:
+
+```text
+Wo_CreateMainSession_reused
+```
+
+followed by:
+
+```text
+Wo_CreateSession_reused
+```
+
+Those functions need to agree on the relationship between:
+
+```text
+main_hash_id
+hash_id
+```
+
+The current state appears to be:
+
+```text
+main_hash_id = 20 chars
+hash_id      = 40 chars
+browser hash = 64 chars
+```
+
+That is a three-format mismatch.
+
+We should establish the intended WoWonder architecture first:
+
+```text
+Browser
+   │
+   │ hash=?
+   ▼
+requests.php
+   │
+   ▼
+Wo_CheckMainSession()
+   │
+   ├── main_hash_id
+   │
+   └── hash_id
+          │
+          ▼
+       authenticated user
+```
+
+The browser's value must correspond to the value the appropriate session-validation function actually expects.
+
+---
+
+# One thing I would NOT do
+
+I would **not simply modify `Wo_CheckMainSession()` to accept 64-character hashes**.
+
+For example, don't "fix" this by doing something like:
+
+```php
+if (strlen($provided) === 64) {
+    // accept it
+}
+```
+
+That could mask the actual SSO/session problem and potentially weaken authentication.
+
+Likewise, I would not convert the stored 20-character or 40-character hashes to SHA-256 merely to make the lengths match.
+
+The correct solution is to determine **which component is supposed to own/generate the session hash** and restore that contract.
+
+---
+
+## There is also a potentially separate issue
+
+This:
+
+```text
+user_id_present:false
+wo_user_id:null
+wp_user_id:null
+wp_Wo_SSO_Login:false
+```
+
+is significant.
+
+Even after we fix the hash mismatch, we need to verify that the Streams session actually resolves to the correct WoWonder user.
+
+Otherwise we could end up with:
+
+```text
+hash validation = fixed
+        ↓
+session exists
+        ↓
+but WoWonder user = null
+        ↓
+follow still fails
+```
+
+So I would treat the debugging sequence as:
+
+**1. Hash generation → 2. Main-session validation → 3. User/session association → 4. Follow operation → 5. WP projection**
+
+That keeps us from modifying the integration layer prematurely.
+
+### Next step
+
+Send me the **current implementations of these four functions** after your error-control changes:
+
+```php
+Wo_CheckMainSession()
+Wo_CreateMainSession()
+Wo_CreateSession()
+Wo_Follow()
+```
+
+And, if `requests.php` itself was modified, send the relevant section where it obtains/validates `$_GET['hash']`.
+
+I can then trace the exact path producing the **64 → 40 → 20-character mismatch** and tell you precisely which function needs changing, rather than patching the follow system around the authentication failure.
+
+
+<<STOP CHATGPT>>
