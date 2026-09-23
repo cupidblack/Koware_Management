@@ -1,0 +1,1567 @@
+<<START GITHUB>>
+
+The evidence indicates that `Wo_GetMedia()` is not directly regenerating the session. It only constructs a URL. The likely failure chain is:
+
+1. A profile avatar URL is generated incorrectly or points to a PHP endpoint.
+2. The browser requests that URL.
+3. The endpoint loads `streams/assets/init.php`.
+4. `bz_safe_session_start()` encounters a session-start error.
+5. The current recovery code destroys the session and expires its cookie.
+6. `$_SESSION['main_hash_id']` disappears.
+7. `Wo_CheckMainSession($hash_id)` fails in `follow_user.php`.
+8. The JavaScript has already changed the button optimistically to `Requested`.
+9. The follow request is rejected or returns an empty response.
+
+The existing destructive code is in [`streams/assets/init.php`](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/init.php), while the session hashes are in [`functions_two.php`](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_two.php).
+
+The correct fix is coordinated:
+
+- Make session recovery non-destructive.
+- Preserve application hashes for the lifetime of the PHP session.
+- Keep `Wo_CheckMainSession()` strict.
+- Make `Wo_GetMedia()` completely side-effect-free.
+- Return explicit JSON errors from follow requests.
+- Do not change the follow button until the server confirms the result.
+- Centralize diagnostic logging in `data/logs/buzzjuice-streams.log`.
+
+---
+
+## 1. Replace `streams/assets/init.php`
+
+Replace the current session bootstrap section with the following complete file.
+
+````php name=streams/assets/init.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/init.php
+<?php
+
+/*
+ * Buzzjuice Streams bootstrap.
+ *
+ * This file must never destroy or regenerate an authenticated PHP session
+ * merely because session_start() encounters a transient error.
+ */
+
+@ini_set('session.cookie_httponly', '1');
+@ini_set('session.use_only_cookies', '1');
+
+if (!version_compare(PHP_VERSION, '7.1.0', '>=')) {
+    exit(
+        "Required PHP_VERSION >= 7.1.0, Your PHP_VERSION is: " .
+        PHP_VERSION . PHP_EOL
+    );
+}
+
+if (!function_exists('mysqli_connect')) {
+    exit(
+        'MySQLi is required to run the application. ' .
+        'Please contact your hosting provider to enable mysqli.'
+    );
+}
+
+date_default_timezone_set('UTC');
+
+
+if (!function_exists('bz_streams_log')) {
+    /**
+     * Central Streams log.
+     *
+     * File:
+     * /buzzjuice.net/data/logs/buzzjuice-streams.log
+     *
+     * Sensitive values must never be written here.
+     */
+    function bz_streams_log($event, $context = array())
+    {
+        static $log_file = null;
+
+        if ($log_file === null) {
+            /*
+             * This file is:
+             * /buzzjuice.net/streams/assets/init.php
+             *
+             * dirname(__DIR__, 2) resolves to:
+             * /buzzjuice.net
+             */
+            $root_dir = dirname(__DIR__, 2);
+
+            $log_dir = $root_dir .
+                DIRECTORY_SEPARATOR . 'data' .
+                DIRECTORY_SEPARATOR . 'logs';
+
+            if (!is_dir($log_dir)) {
+                @mkdir($log_dir, 0755, true);
+            }
+
+            $log_file = $log_dir .
+                DIRECTORY_SEPARATOR .
+                'buzzjuice-streams.log';
+        }
+
+        $request_id = '';
+
+        if (!empty($_SERVER['HTTP_X_REQUEST_ID'])) {
+            $request_id = substr(
+                preg_replace(
+                    '/[^a-zA-Z0-9._:-]/',
+                    '',
+                    (string)$_SERVER['HTTP_X_REQUEST_ID']
+                ),
+                0,
+                128
+            );
+        }
+
+        if ($request_id === '') {
+            try {
+                $request_id = bin2hex(random_bytes(8));
+            } catch (Throwable $exception) {
+                $request_id = substr(
+                    hash(
+                        'sha256',
+                        uniqid('', true) . mt_rand(),
+                        false
+                    ),
+                    0,
+                    16
+                );
+            }
+        }
+
+        $entry = array(
+            'time' => gmdate('Y-m-d\TH:i:s\Z'),
+            'event' => (string)$event,
+            'request_id' => $request_id,
+            'method' => isset($_SERVER['REQUEST_METHOD'])
+                ? (string)$_SERVER['REQUEST_METHOD']
+                : '',
+            'uri' => isset($_SERVER['REQUEST_URI'])
+                ? (string)$_SERVER['REQUEST_URI']
+                : '',
+            'script' => isset($_SERVER['SCRIPT_NAME'])
+                ? (string)$_SERVER['SCRIPT_NAME']
+                : '',
+            'remote_ip' => isset($_SERVER['REMOTE_ADDR'])
+                ? (string)$_SERVER['REMOTE_ADDR']
+                : '',
+            'context' => is_array($context)
+                ? $context
+                : array('value' => $context)
+        );
+
+        @file_put_contents(
+            $log_file,
+            json_encode(
+                $entry,
+                JSON_UNESCAPED_SLASHES |
+                JSON_UNESCAPED_UNICODE
+            ) . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
+    }
+}
+
+
+if (!function_exists('bz_streams_session_fingerprint')) {
+    /**
+     * Returns only a non-reversible diagnostic fingerprint.
+     */
+    function bz_streams_session_fingerprint($session_id)
+    {
+        if ($session_id === null || $session_id === '') {
+            return '';
+        }
+
+        return substr(
+            hash('sha256', (string)$session_id),
+            0,
+            16
+        );
+    }
+}
+
+
+if (!function_exists('bz_safe_session_start')) {
+    /**
+     * Starts the existing PHP session without destructive recovery.
+     *
+     * This function intentionally never calls:
+     *
+     * - session_destroy()
+     * - session_regenerate_id()
+     * - session_unset()
+     * - setcookie() to expire the session
+     * - $_SESSION = array()
+     */
+    function bz_safe_session_start()
+    {
+        if (!function_exists('session_status')) {
+            bz_streams_log('session_api_unavailable');
+            return false;
+        }
+
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            return true;
+        }
+
+        $session_name_before = function_exists('session_name')
+            ? session_name()
+            : '';
+
+        $session_id_before = function_exists('session_id')
+            ? session_id()
+            : '';
+
+        try {
+            $started = @session_start();
+
+            if (
+                $started === true &&
+                session_status() === PHP_SESSION_ACTIVE
+            ) {
+                return true;
+            }
+
+            $last_error = error_get_last();
+
+            bz_streams_log(
+                'session_start_failed',
+                array(
+                    'session_name' => $session_name_before,
+                    'session_fingerprint' =>
+                        bz_streams_session_fingerprint(
+                            $session_id_before
+                        ),
+                    'last_error' => is_array($last_error)
+                        ? array(
+                            'type' => isset($last_error['type'])
+                                ? $last_error['type']
+                                : null,
+                            'message' => isset($last_error['message'])
+                                ? $last_error['message']
+                                : null,
+                            'file' => isset($last_error['file'])
+                                ? $last_error['file']
+                                : null,
+                            'line' => isset($last_error['line'])
+                                ? $last_error['line']
+                                : null
+                        )
+                        : null
+                )
+            );
+        } catch (Throwable $exception) {
+            bz_streams_log(
+                'session_start_exception',
+                array(
+                    'session_name' => $session_name_before,
+                    'session_fingerprint' =>
+                        bz_streams_session_fingerprint(
+                            $session_id_before
+                        ),
+                    'exception' => $exception->getMessage(),
+                    'file' => $exception->getFile(),
+                    'line' => $exception->getLine()
+                )
+            );
+        }
+
+        /*
+         * One non-destructive retry only.
+         */
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            try {
+                $retry_started = @session_start();
+
+                if (
+                    $retry_started === true &&
+                    session_status() === PHP_SESSION_ACTIVE
+                ) {
+                    bz_streams_log(
+                        'session_start_retry_success'
+                    );
+
+                    return true;
+                }
+            } catch (Throwable $exception) {
+                bz_streams_log(
+                    'session_start_retry_exception',
+                    array(
+                        'session_name' =>
+                            function_exists('session_name')
+                                ? session_name()
+                                : '',
+                        'exception' => $exception->getMessage(),
+                        'file' => $exception->getFile(),
+                        'line' => $exception->getLine()
+                    )
+                );
+            }
+        }
+
+        $active = session_status() === PHP_SESSION_ACTIVE;
+
+        if (!$active) {
+            bz_streams_log(
+                'session_unavailable_after_retry',
+                array(
+                    'session_name' =>
+                        function_exists('session_name')
+                            ? session_name()
+                            : ''
+                )
+            );
+        }
+
+        return $active;
+    }
+}
+
+
+bz_safe_session_start();
+
+
+@ini_set('gd.jpeg_ignore_warning', '1');
+
+require_once __DIR__ . '/../../shared/palmier/palmier_logger.php';
+
+require_once __DIR__ .
+    '/libraries/DB/vendor/joshcam/mysqli-database-class/MySQL-Maria.php';
+
+require_once __DIR__ . '/includes/cache.php';
+require_once __DIR__ . '/includes/functions_general.php';
+require_once __DIR__ . '/includes/tabels.php';
+require_once __DIR__ . '/includes/functions_one.php';
+require_once __DIR__ . '/includes/functions_two.php';
+require_once __DIR__ . '/includes/functions_three.php';
+
+
+if (!isset($wo['user']) || !is_array($wo['user'])) {
+    $wo['user'] = array(
+        'id' => 0,
+        'user_id' => 0,
+        'admin' => 0
+    );
+}
+````
+
+### Important
+
+The previous code called:
+
+```php
+session_destroy();
+setcookie(session_name(), '', time() - 42000, ...);
+session_start();
+```
+
+That must not be used as automatic recovery. A session-storage problem must result in a logged failure, not silent logout.
+
+---
+
+## 2. Replace the session-hash functions
+
+The current Streams implementation uses:
+
+```php
+$hash = sha1(rand(1111, 9999));
+```
+
+and:
+
+```php
+$_SESSION['main_hash_id'] = $_SESSION['main_hash_id'];
+```
+
+The latter does nothing. Replace the four functions in `functions_two.php` with the following.
+
+The existing `main_hash_id` is 20 hexadecimal characters, so this replacement retains that format for compatibility with the Node/socket code.
+
+````php name=streams/assets/includes/functions_two.php url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/includes/functions_two.php
+function Wo_CreateSession()
+{
+    if (
+        function_exists('session_status') &&
+        session_status() !== PHP_SESSION_ACTIVE
+    ) {
+        if (function_exists('bz_streams_log')) {
+            bz_streams_log(
+                'application_session_hash_requested_without_active_php_session'
+            );
+        }
+
+        return '';
+    }
+
+    if (
+        isset($_SESSION['hash_id']) &&
+        is_string($_SESSION['hash_id']) &&
+        preg_match(
+            '/^[a-f0-9]{40}$/i',
+            $_SESSION['hash_id']
+        )
+    ) {
+        return $_SESSION['hash_id'];
+    }
+
+    try {
+        $hash = bin2hex(random_bytes(20));
+    } catch (Throwable $exception) {
+        /*
+         * Compatibility fallback for old PHP environments.
+         */
+        $hash = sha1(
+            uniqid(
+                (string)mt_rand(),
+                true
+            )
+        );
+
+        if (function_exists('bz_streams_log')) {
+            bz_streams_log(
+                'application_session_hash_random_bytes_fallback',
+                array(
+                    'exception' => $exception->getMessage()
+                )
+            );
+        }
+    }
+
+    $_SESSION['hash_id'] = $hash;
+
+    return $hash;
+}
+
+
+function Wo_CheckSession($hash = '')
+{
+    if (
+        function_exists('session_status') &&
+        session_status() !== PHP_SESSION_ACTIVE
+    ) {
+        return false;
+    }
+
+    if (
+        $hash === null ||
+        $hash === '' ||
+        !isset($_SESSION['hash_id']) ||
+        !is_string($_SESSION['hash_id']) ||
+        $_SESSION['hash_id'] === ''
+    ) {
+        return false;
+    }
+
+    return hash_equals(
+        (string)$_SESSION['hash_id'],
+        (string)$hash
+    );
+}
+
+
+function Wo_CreateMainSession()
+{
+    if (
+        function_exists('session_status') &&
+        session_status() !== PHP_SESSION_ACTIVE
+    ) {
+        if (function_exists('bz_streams_log')) {
+            bz_streams_log(
+                'main_application_session_requested_without_active_php_session'
+            );
+        }
+
+        return '';
+    }
+
+    /*
+     * Preserve the existing 20-character format.
+     */
+    if (
+        isset($_SESSION['main_hash_id']) &&
+        is_string($_SESSION['main_hash_id']) &&
+        preg_match(
+            '/^[a-f0-9]{20}$/i',
+            $_SESSION['main_hash_id']
+        )
+    ) {
+        return $_SESSION['main_hash_id'];
+    }
+
+    try {
+        /*
+         * Ten random bytes produce twenty hexadecimal characters.
+         */
+        $hash = bin2hex(random_bytes(10));
+    } catch (Throwable $exception) {
+        $hash = substr(
+            hash(
+                'sha256',
+                uniqid(
+                    (string)mt_rand(),
+                    true
+                )
+            ),
+            0,
+            20
+        );
+
+        if (function_exists('bz_streams_log')) {
+            bz_streams_log(
+                'main_application_session_random_bytes_fallback',
+                array(
+                    'exception' => $exception->getMessage()
+                )
+            );
+        }
+    }
+
+    $_SESSION['main_hash_id'] = $hash;
+
+    return $hash;
+}
+
+
+function Wo_CheckMainSession($hash = '')
+{
+    if (
+        function_exists('session_status') &&
+        session_status() !== PHP_SESSION_ACTIVE
+    ) {
+        return false;
+    }
+
+    if (
+        $hash === null ||
+        $hash === '' ||
+        !isset($_SESSION['main_hash_id']) ||
+        !is_string($_SESSION['main_hash_id']) ||
+        $_SESSION['main_hash_id'] === ''
+    ) {
+        return false;
+    }
+
+    return hash_equals(
+        (string)$_SESSION['main_hash_id'],
+        (string)$hash
+    );
+}
+````
+
+Do **not** change `Wo_CheckMainSession()` to return `true` when the session value is missing. That would bypass an authorization/integrity check.
+
+---
+
+## 3. Replace `Wo_GetMedia()`
+
+The function should be pure. It must not:
+
+- start a session;
+- destroy a session;
+- regenerate a session;
+- modify `$_SESSION`;
+- set or delete cookies;
+- call SSO code;
+- access the database;
+- redirect;
+- write logs;
+- perform filesystem access.
+
+Use the following complete replacement wherever the current `Wo_GetMedia()` is defined.
+
+````php name=Wo_GetMedia.php
+function Wo_GetMedia($media)
+{
+    global $wo;
+
+    /*
+     * This function is deliberately side-effect-free.
+     */
+
+    if ($media === null || $media === '') {
+        return '';
+    }
+
+    if (!is_string($media)) {
+        if (is_scalar($media)) {
+            $media = (string)$media;
+        } elseif (
+            is_object($media) &&
+            method_exists($media, '__toString')
+        ) {
+            $media = (string)$media;
+        } else {
+            return '';
+        }
+    }
+
+    $media = trim($media);
+
+    if ($media === '') {
+        return '';
+    }
+
+    /*
+     * Preserve protocol-relative URLs.
+     */
+    if (strpos($media, '//') === 0) {
+        return $media;
+    }
+
+    /*
+     * Preserve absolute URLs exactly.
+     */
+    if (
+        stripos($media, 'http://') === 0 ||
+        stripos($media, 'https://') === 0
+    ) {
+        return $media;
+    }
+
+    $config = array();
+
+    if (
+        isset($wo['config']) &&
+        is_array($wo['config'])
+    ) {
+        $config = $wo['config'];
+    }
+
+    $site_url = '';
+
+    if (
+        isset($config['site_url']) &&
+        is_scalar($config['site_url'])
+    ) {
+        $site_url = trim((string)$config['site_url']);
+    }
+
+    $media_path = ltrim($media, '/');
+
+    /*
+     * If configuration is unavailable, return a relative path instead
+     * of producing a malformed URL.
+     */
+    if ($site_url === '') {
+        return $media_path;
+    }
+
+    $site_url = rtrim($site_url, '/');
+
+    $build_url = static function ($base, $path) {
+        $base = rtrim((string)$base, '/');
+        $path = ltrim((string)$path, '/');
+
+        if ($base === '') {
+            return $path;
+        }
+
+        if ($path === '') {
+            return $base;
+        }
+
+        return $base . '/' . $path;
+    };
+
+    /*
+     * Amazon S3.
+     */
+    if (
+        !empty($config['amazone_s3']) &&
+        (int)$config['amazone_s3'] === 1
+    ) {
+        if (!empty($config['amazon_endpoint'])) {
+            $endpoint = rtrim(
+                (string)$config['amazon_endpoint'],
+                '/'
+            );
+
+            if (filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                return $build_url(
+                    $endpoint,
+                    $media_path
+                );
+            }
+        }
+
+        if (
+            !empty($config['bucket_name']) &&
+            !empty($config['s3_site_url'])
+        ) {
+            return $build_url(
+                $config['s3_site_url'],
+                $media_path
+            );
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * Wasabi.
+     */
+    if (
+        !empty($config['wasabi_storage']) &&
+        (int)$config['wasabi_storage'] === 1
+    ) {
+        if (!empty($config['wasabi_endpoint'])) {
+            $endpoint = rtrim(
+                (string)$config['wasabi_endpoint'],
+                '/'
+            );
+
+            if (filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                return $build_url(
+                    $endpoint,
+                    $media_path
+                );
+            }
+        }
+
+        if (
+            !empty($config['wasabi_bucket_name']) &&
+            !empty($config['wasabi_site_url'])
+        ) {
+            return $build_url(
+                $config['wasabi_site_url'],
+                $media_path
+            );
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * DigitalOcean Spaces.
+     */
+    if (
+        !empty($config['spaces']) &&
+        (int)$config['spaces'] === 1
+    ) {
+        if (!empty($config['spaces_endpoint'])) {
+            $endpoint = rtrim(
+                (string)$config['spaces_endpoint'],
+                '/'
+            );
+
+            if (filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                return $build_url(
+                    $endpoint,
+                    $media_path
+                );
+            }
+        }
+
+        if (
+            !empty($config['space_name']) &&
+            !empty($config['space_region'])
+        ) {
+            return 'https://' .
+                rawurlencode((string)$config['space_name']) .
+                '.' .
+                rawurlencode((string)$config['space_region']) .
+                '.digitaloceanspaces.com/' .
+                $media_path;
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * FTP-backed media.
+     */
+    if (
+        !empty($config['ftp_upload']) &&
+        (int)$config['ftp_upload'] === 1
+    ) {
+        $ftp_endpoint = !empty($config['ftp_endpoint'])
+            ? trim((string)$config['ftp_endpoint'])
+            : '';
+
+        if ($ftp_endpoint !== '') {
+            if (
+                stripos($ftp_endpoint, 'http://') !== 0 &&
+                stripos($ftp_endpoint, 'https://') !== 0 &&
+                strpos($ftp_endpoint, '//') !== 0
+            ) {
+                $ftp_endpoint = 'https://' .
+                    ltrim($ftp_endpoint, '/');
+            }
+
+            return $build_url(
+                $ftp_endpoint,
+                $media_path
+            );
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * Google Cloud Storage.
+     */
+    if (
+        !empty($config['cloud_upload']) &&
+        (int)$config['cloud_upload'] === 1
+    ) {
+        if (!empty($config['cloud_endpoint'])) {
+            $endpoint = rtrim(
+                (string)$config['cloud_endpoint'],
+                '/'
+            );
+
+            if (filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                return $build_url(
+                    $endpoint,
+                    $media_path
+                );
+            }
+        }
+
+        if (!empty($config['cloud_bucket_name'])) {
+            return 'https://storage.googleapis.com/' .
+                rawurlencode(
+                    (string)$config['cloud_bucket_name']
+                ) .
+                '/' .
+                $media_path;
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * Backblaze B2.
+     */
+    if (
+        !empty($config['backblaze_storage']) &&
+        (int)$config['backblaze_storage'] === 1
+    ) {
+        if (!empty($config['backblaze_endpoint'])) {
+            $endpoint = rtrim(
+                (string)$config['backblaze_endpoint'],
+                '/'
+            );
+
+            if (filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                return $build_url(
+                    $endpoint,
+                    $media_path
+                );
+            }
+        }
+
+        if (
+            !empty($config['backblaze_bucket_name']) &&
+            !empty($config['backblaze_bucket_region'])
+        ) {
+            return 'https://' .
+                rawurlencode(
+                    (string)$config['backblaze_bucket_name']
+                ) .
+                '.s3.' .
+                rawurlencode(
+                    (string)$config['backblaze_bucket_region']
+                ) .
+                '.backblazeb2.com/' .
+                $media_path;
+        }
+
+        return $build_url(
+            $site_url,
+            $media_path
+        );
+    }
+
+    /*
+     * Local/default storage.
+     */
+    return $build_url(
+        $site_url,
+        $media_path
+    );
+}
+````
+
+### Important limitation
+
+`Wo_GetMedia()` does not make the browser request. It only returns a string. After applying this change, inspect the rendered avatar URL.
+
+A normal result should resemble:
+
+```text
+https://buzzjuice.net/streams/upload/photos/2026/09/avatar_full.jpg
+```
+
+It should not point to:
+
+```text
+/streams/requests.php
+/streams/index.php
+/streams/image.php
+/streams/upload.php
+```
+
+If the image URL points to a PHP endpoint, that endpoint must be changed so it does not load the authenticated Streams bootstrap unnecessarily.
+
+---
+
+## 4. Fix the avatar markup
+
+In [`streams/themes/sunshine/layout/timeline/content.phtml`](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/timeline/content.phtml), do not use the raw database path in `data-image`.
+
+Use the same normalized URL for both attributes:
+
+````php name=streams/themes/sunshine/layout/timeline/content.phtml url=https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/timeline/content.phtml
+<?php
+$profile_avatar_source = '';
+
+if (
+    isset($wo['user_profile']['avatar_full']) &&
+    $wo['user_profile']['avatar_full'] !== ''
+) {
+    $profile_avatar_source =
+        $wo['user_profile']['avatar_full'];
+} elseif (
+    isset($wo['user_profile']['avatar']) &&
+    $wo['user_profile']['avatar'] !== ''
+) {
+    $profile_avatar_source =
+        $wo['user_profile']['avatar'];
+}
+
+$profile_avatar_url =
+    Wo_GetMedia($profile_avatar_source);
+
+if (
+    $profile_avatar_url === '' &&
+    !empty($wo['userDefaultAvatar'])
+) {
+    $profile_avatar_url =
+        Wo_GetMedia($wo['userDefaultAvatar']);
+}
+
+$profile_avatar_name =
+    isset($wo['user_profile']['name'])
+        ? $wo['user_profile']['name']
+        : 'avatar';
+
+$profile_avatar_user_id =
+    isset($wo['user_profile']['user_id'])
+        ? (int)$wo['user_profile']['user_id']
+        : 0;
+?>
+
+<img
+    id="updateImage-<?php echo $profile_avatar_user_id; ?>"
+    class="pointer"
+    src="<?php echo htmlspecialchars(
+        $profile_avatar_url,
+        ENT_QUOTES,
+        'UTF-8'
+    ); ?>"
+    data-image="<?php echo htmlspecialchars(
+        $profile_avatar_url,
+        ENT_QUOTES,
+        'UTF-8'
+    ); ?>"
+    alt="<?php echo htmlspecialchars(
+        $profile_avatar_name,
+        ENT_QUOTES,
+        'UTF-8'
+    ); ?>"
+>
+````
+
+This avoids the current mismatch:
+
+```php
+src="<?php echo Wo_GetMedia(...); ?>"
+data-image="<?php echo $wo['user_profile']['avatar_full']; ?>"
+```
+
+---
+
+## 5. Correct the follow endpoint response
+
+The repository search results were incomplete, so the exact current `streams/xhr/follow_user.php` implementation should be checked before replacing it. The code search results are limited to the first results and may be incomplete. More results are available here:
+
+[View all Wo_CheckMainSession matches in GitHub](https://github.com/cupidblack/buzzjuice.net/search?q=Wo_CheckMainSession&type=code)
+
+The important correction is that a failed `Wo_CheckMainSession()` must return an explicit JSON error instead of an empty response.
+
+At the beginning of `follow_user.php`, initialize the response:
+
+````php name=streams/xhr/follow_user.php
+<?php
+
+if ($f === 'follow_user') {
+    $data = array(
+        'status' => 400,
+        'can_send' => 0,
+        'follow_state' => 'follow',
+        'message' => 'Unable to process follow request.'
+    );
+
+    $following_id = isset($_GET['following_id'])
+        ? (int)$_GET['following_id']
+        : 0;
+
+    $main_session_valid =
+        Wo_CheckMainSession($hash_id);
+
+    if (function_exists('bz_streams_log')) {
+        bz_streams_log(
+            'follow_request_received',
+            array(
+                'following_id' => $following_id,
+                'logged_user_id' =>
+                    isset($wo['user']['user_id'])
+                        ? (int)$wo['user']['user_id']
+                        : 0,
+                'session_active' =>
+                    function_exists('session_status') &&
+                    session_status() === PHP_SESSION_ACTIVE
+                        ? 1
+                        : 0,
+                'main_session_present' =>
+                    isset($_SESSION['main_hash_id'])
+                        ? 1
+                        : 0,
+                'main_session_valid' =>
+                    $main_session_valid ? 1 : 0
+            )
+        );
+    }
+
+    if ($wo['loggedin'] !== true) {
+        $data['status'] = 401;
+        $data['message'] = 'Please log in again.';
+    } elseif ($following_id < 1) {
+        $data['message'] = 'Invalid user.';
+    } elseif ($main_session_valid !== true) {
+        /*
+         * Never bypass this check.
+         */
+        $data['status'] = 403;
+        $data['message'] =
+            'Session validation failed. Please refresh the page.';
+    } elseif (
+        isset($wo['user']['user_id']) &&
+        $following_id === (int)$wo['user']['user_id']
+    ) {
+        $data['message'] = 'You cannot follow yourself.';
+    } else {
+        /*
+         * Keep the existing WoWonder follow logic below this point.
+         *
+         * The successful branch must set:
+         *
+         *     $data['status'] = 200;
+         *     $data['follow_state'] = 'following';
+         *
+         * The unfollow branch must set:
+         *
+         *     $data['status'] = 200;
+         *     $data['follow_state'] = 'follow';
+         */
+    }
+
+    if (function_exists('bz_streams_log')) {
+        bz_streams_log(
+            'follow_request_response',
+            array(
+                'following_id' => $following_id,
+                'status' => (int)$data['status'],
+                'follow_state' => $data['follow_state'],
+                'message' => $data['message']
+            )
+        );
+    }
+
+    header(
+        'Content-Type: application/json; charset=UTF-8'
+    );
+
+    echo json_encode($data);
+    exit();
+}
+````
+
+The existing follow operation should not be duplicated blindly. In particular, do not replace database table names or function signatures unless they match the actual WoWonder installation.
+
+---
+
+## 6. Make the follow button server-authoritative
+
+The current JavaScript in [`extra_js/content.phtml`](https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/extra_js/content.phtml) changes the button before the AJAX call finishes. That explains why a failed request can leave the browser showing `Requested`.
+
+Replace the current `Wo_RegisterFollow()` function with this state-management version. It preserves the existing button HTML during the request and only applies the final state after the server response.
+
+````javascript name=Wo_RegisterFollow.js
+function Wo_RegisterFollow(id, is_confirm, show_modal) {
+    var followContainer = $('#Follow-' + id);
+
+    if (!followContainer.length) {
+        return false;
+    }
+
+    if (typeof is_confirm === 'undefined') {
+        is_confirm = 0;
+    }
+
+    if (typeof show_modal === 'undefined') {
+        show_modal = false;
+    }
+
+    if (show_modal === true) {
+        $('#unfriend_btn').attr(
+            'onclick',
+            'Wo_RegisterFollow(' + id + ')'
+        );
+
+        $('#un_friend_modal').modal('show');
+        return false;
+    }
+
+    $('#un_friend_modal').modal('hide');
+
+    var button = followContainer.find('button').first();
+
+    if (!button.length) {
+        return false;
+    }
+
+    if (button.prop('disabled') === true) {
+        return false;
+    }
+
+    var previousHtml = followContainer.html();
+
+    button.prop('disabled', true);
+    button.attr('aria-busy', 'true');
+
+    /*
+     * Do not change the button to Requested or Following here.
+     * The server is authoritative.
+     */
+    var request = $.ajax({
+        url: Wo_Ajax_Requests_File(),
+        type: 'GET',
+        dataType: 'json',
+        cache: false,
+        data: {
+            f: 'follow_user',
+            following_id: id,
+            hash_id: $('.main_session').val()
+        }
+    });
+
+    request.done(function(data) {
+        var status = data && parseInt(data.status, 10);
+        var state = data && data.follow_state
+            ? String(data.follow_state)
+            : '';
+
+        /*
+         * Explicit successful server state.
+         */
+        if (
+            status === 200 &&
+            (state === 'following' || state === 'follow')
+        ) {
+            /*
+             * Reload the current follow control from the server.
+             * This avoids duplicating WoWonder's SVG/button markup here.
+             */
+            $.get(
+                window.location.href,
+                {
+                    partial_follow_button: id,
+                    _follow_refresh: Date.now()
+                }
+            ).always(function() {
+                /*
+                 * If the current page does not provide a partial response,
+                 * restore the button and reload its authoritative state.
+                 */
+                window.location.reload();
+            });
+
+            return;
+        }
+
+        /*
+         * Any non-success response restores the previous button.
+         */
+        followContainer.html(previousHtml);
+
+        var message = data && data.message
+            ? String(data.message)
+            : 'Unable to process follow request.';
+
+        if (typeof $('#modal-alert').modal === 'function') {
+            $('#modal-alert').modal('show');
+
+            if (typeof Wo_Delay === 'function') {
+                Wo_Delay(function() {
+                    $('#modal-alert').modal('hide');
+                }, 3000);
+            }
+        }
+
+        if (typeof console !== 'undefined') {
+            console.warn(
+                'Follow request rejected:',
+                status,
+                message
+            );
+        }
+    });
+
+    request.fail(function(xhr) {
+        followContainer.html(previousHtml);
+
+        if (typeof console !== 'undefined') {
+            console.warn(
+                'Follow request failed:',
+                xhr.status,
+                xhr.responseText
+            );
+        }
+    });
+
+    request.always(function() {
+        followContainer
+            .find('button')
+            .prop('disabled', false)
+            .removeAttr('aria-busy');
+    });
+
+    return false;
+}
+````
+
+### Better option
+
+Rather than reloading the entire page after a successful follow, return the final button HTML from the endpoint:
+
+```php
+$data['html'] = Wo_GetFollowButton($following_id);
+```
+
+Then update:
+
+```javascript
+if (status === 200 && data.html) {
+    followContainer.html(data.html);
+}
+```
+
+That is preferable, but the exact function must be confirmed against the installed WoWonder version.
+
+---
+
+## 7. Do not apply the proposed `social/core.php` replacement without verification
+
+The earlier recommendation to replace `Wo_RegisterFollow()` in `social/core.php` is unsafe for this repository because:
+
+- `social/core.php` belongs to the QuickDate/Social application.
+- Streams uses its own `Wo_RegisterFollow()` implementation.
+- The database schema and function signatures may differ.
+- The function may be called by more than one application.
+- A replacement that assumes a particular `followers` schema can introduce duplicate rows or incorrect notifications.
+
+The actual acceptance policy must be applied in the Streams follow implementation that receives:
+
+```text
+/streams/requests.php?f=follow_user
+```
+
+The server-side follow insertion must ultimately write:
+
+```text
+active = 1
+```
+
+for the immediate-follow policy.
+
+The code path should be audited for any branch resembling:
+
+```php
+if ($following_data['confirm_followers'] == '1') {
+    $active = 0;
+}
+```
+
+If immediate acceptance is globally required, that branch must be removed or changed to:
+
+```php
+$active = 1;
+```
+
+However, preserve the existing table constants, duplicate handling, notification calls, cache invalidation, and synchronization hooks from the installed Streams version.
+
+---
+
+## 8. SSO files currently violate the “one log file” requirement
+
+The supplied files currently contain separate logging destinations, including:
+
+```php
+BUZZ_SSO_BRIDGE_LOG
+qd_sso_bridge.log
+ww_sso_bridge.log
+error_log(...)
+```
+
+For the Streams application, these should be redirected to the centralized logger from `init.php`:
+
+```php
+if (function_exists('bz_streams_log')) {
+    bz_streams_log(
+        'sso_event',
+        array(
+            'message' => 'SSO event description'
+        )
+    );
+}
+```
+
+Do not log:
+
+- JWT values;
+- cookies;
+- full session IDs;
+- passwords;
+- complete `$_SESSION`;
+- SSO secrets.
+
+The existing `ww-sso-bridge.php` also logs sensitive data in some places, including complete session/cookie structures. Those logs should be removed or sanitized.
+
+---
+
+## 9. Check session cookie configuration
+
+The observed data shows:
+
+```text
+Main page session:
+BUZZSTREAMSESSID = 266b5192...
+
+Profile page:
+BUZZSTREAMSESSID = 92fda11e...
+
+Profile refresh:
+BUZZSTREAMSESSID = e4f765ad...
+```
+
+That is not normal if the browser is using the same host, protocol, and cookie path.
+
+Check the response headers for:
+
+```text
+Set-Cookie: BUZZSTREAMSESSID=...
+```
+
+Pay particular attention to:
+
+- different `Domain` values;
+- different `Path` values;
+- `Secure` being inconsistent between HTTP and HTTPS;
+- `SameSite` differences;
+- redirects between `www.buzzjuice.net` and `buzzjuice.net`;
+- redirects between `/streams` and `/social`;
+- separate PHP applications overwriting the same cookie name;
+- AJAX requests using a different hostname;
+- reverse-proxy or CDN cache behavior.
+
+The Streams session cookie should have one consistent configuration. For example:
+
+```php
+<?php
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_name('BUZZSTREAMSESSID');
+
+    session_set_cookie_params(array(
+        'lifetime' => 0,
+        'path' => '/',
+        'domain' => 'buzzjuice.net',
+        'secure' => true,
+        'httponly' => true,
+        'samesite' => 'Lax'
+    ));
+}
+```
+
+This configuration must be applied before `session_start()`. Do not apply it after the session is active.
+
+If both `social` and `streams` intentionally share the same PHP session cookie, they must also share compatible session storage and session configuration. Otherwise, use separate cookie names.
+
+---
+
+## 10. Verify whether the session is actually changing
+
+Add temporary diagnostic logging after `bz_safe_session_start()`:
+
+````php name=session-diagnostic.php
+<?php
+
+if (function_exists('bz_streams_log')) {
+    bz_streams_log(
+        'request_session_snapshot',
+        array(
+            'session_active' =>
+                function_exists('session_status') &&
+                session_status() === PHP_SESSION_ACTIVE
+                    ? 1
+                    : 0,
+            'session_name' =>
+                function_exists('session_name')
+                    ? session_name()
+                    : '',
+            'session_fingerprint' =>
+                function_exists('session_id') &&
+                function_exists('bz_streams_session_fingerprint')
+                    ? bz_streams_session_fingerprint(session_id())
+                    : '',
+            'has_user_id' =>
+                isset($_SESSION['user_id']) ? 1 : 0,
+            'has_hash_id' =>
+                isset($_SESSION['hash_id']) ? 1 : 0,
+            'has_main_hash_id' =>
+                isset($_SESSION['main_hash_id']) ? 1 : 0,
+            'hash_id_length' =>
+                isset($_SESSION['hash_id']) &&
+                is_string($_SESSION['hash_id'])
+                    ? strlen($_SESSION['hash_id'])
+                    : 0,
+            'main_hash_id_length' =>
+                isset($_SESSION['main_hash_id']) &&
+                is_string($_SESSION['main_hash_id'])
+                    ? strlen($_SESSION['main_hash_id'])
+                    : 0
+        )
+    );
+}
+````
+
+Do not log the actual hash values. The browser does not expose `$_SESSION` directly; it only receives rendered values. The presence of:
+
+```html
+<input type="hidden" class="main_session" value="...">
+```
+
+proves only that PHP rendered a value. It does not prove that subsequent AJAX requests are using the same PHP session.
+
+---
+
+## 11. Important issue in `container.phtml`
+
+This line is executed during every full render:
+
+```php
+<input type="hidden" class="main_session" value="<?php echo Wo_CreateMainSession();?>">
+```
+
+That is safe only if:
+
+- the PHP session is active;
+- the session ID remains unchanged;
+- `Wo_CreateMainSession()` preserves the existing value.
+
+After the hash-function change, repeated page loads should return the same `main_hash_id` for the same PHP session.
+
+The expected result is:
+
+```text
+Page load:
+session ID = A
+main_hash_id = X
+
+Page refresh:
+session ID = A
+main_hash_id = X
+
+Profile navigation:
+session ID = A
+main_hash_id = X
+```
+
+If this instead occurs:
+
+```text
+Page load:
+session ID = A
+main_hash_id = X
+
+Profile load:
+session ID = B
+main_hash_id = Y
+```
+
+then the remaining problem is session-cookie scope, SSO session handling, or another endpoint calling `session_destroy()`/`session_regenerate_id()`. It is not `Wo_GetMedia()` itself.
+
+---
+
+## 12. Database repair for stale pending follows
+
+Do not run a broad repair unless pending requests are no longer used anywhere.
+
+For one affected relationship:
+
+```sql
+UPDATE followers
+SET active = 1
+WHERE following_id = 66
+  AND follower_id = YOUR_FOLLOWER_ID;
+```
+
+Before running the repair, verify the actual table and column names used by the installed Streams build. The repository contains both Streams and Social applications, and they may not use identical schemas.
+
+---
+
+## Recommended deployment order
+
+1. Back up the repository and database.
+2. Replace `streams/assets/init.php`.
+3. Replace the four hash functions in `functions_two.php`.
+4. Replace `Wo_GetMedia()`.
+5. Restore the avatar markup using the normalized, escaped URL.
+6. Inspect the generated avatar URL in browser developer tools.
+7. Add explicit follow endpoint logging and JSON failure responses.
+8. Update the follow JavaScript so it does not optimistically show `Requested`.
+9. Verify the follow insertion uses `active = 1`.
+10. Check `Set-Cookie` headers across `/streams`, profile pages, and AJAX requests.
+11. Test the same account through:
+    - main page reload;
+    - profile page reload;
+    - AJAX profile navigation;
+    - avatar enabled;
+    - avatar disabled;
+    - follow;
+    - unfollow;
+    - another account.
+12. Remove or redirect all secondary log files into:
+
+```text
+buzzjuice.net/data/logs/buzzjuice-streams.log
+```
+
+The central fix is not to make `Wo_CheckMainSession()` permissive. The correct fix is to stop destroying the session, preserve the main hash, ensure the browser sends the same `BUZZSTREAMSESSID` cookie, and make the follow UI wait for an authoritative server response.
+
+<<STOP GITHUB>>
