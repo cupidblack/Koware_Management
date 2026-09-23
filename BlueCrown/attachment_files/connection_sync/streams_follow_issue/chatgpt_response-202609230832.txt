@@ -1,0 +1,2580 @@
+<<START CHATGPT>>
+
+I reviewed the current `buzzjuice.net/streams` repository, the supplied GitHub debugging response, the existing WoWonder session functions, the SSO bridge, and the browser-cookie evidence. The central diagnosis is sound, but I would make **several corrections before deploying the GitHub version**.
+
+## 1. What the evidence establishes
+
+The current WoWonder code still has the original four functions:
+
+* `Wo_CreateSession()` → 40-character SHA-1 `hash_id`
+* `Wo_CreateMainSession()` → 20-character SHA-1-derived `main_hash_id`
+* `Wo_CheckSession()` → compares request token against `$_SESSION['hash_id']`
+* `Wo_CheckMainSession()` → compares request token against `$_SESSION['main_hash_id']`
+
+That is confirmed directly in the repository. 
+
+So the **64-character value you are seeing is not the native `hash_id` or `main_hash_id`**. The debugging implementation uses SHA-256 fingerprints, which are exactly 64 hexadecimal characters. Those fingerprints are deliberately used instead of exposing the actual session/hash secrets. 
+
+Also, the absence of `hash_id` or `main_hash_id` in Chrome DevTools is **not evidence that they don't exist**. They are PHP `$_SESSION` variables stored server-side. The browser normally sees only the session cookie, here:
+
+```text
+BUZZSTREAMSESSID
+```
+
+Your User-1 and User-2 evidence is actually useful:
+
+```text
+BUZZSTREAMSESSID   ...   /streams
+PHPSESSID          ...   /
+```
+
+That is the arrangement we want. The important thing is ensuring that **Streams always uses `BUZZSTREAMSESSID` and never accidentally starts/continues a `PHPSESSID` session**.
+
+### The important architectural problem
+
+The current `init.php` starts the PHP session here:
+
+```php
+if (session_status() !== PHP_SESSION_ACTIVE) @session_start();
+```
+
+before explicitly selecting `BUZZSTREAMSESSID`. 
+
+That is the first thing I would correct.
+
+The SSO bridge itself requires `assets/init.php`, so the bridge inherits whatever session configuration `init.php` establishes. 
+
+There is another important point: `ww-sso-bridge.php` still contains this branch:
+
+```php
+if (!$wordpress_logged_in) {
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION = [];
+        session_unset();
+        @session_destroy();
+    }
+    ...
+}
+```
+
+Therefore, if a request reaches the bridge without a detectable WordPress login cookie, it can destroy the **currently active Streams session**, which would remove `hash_id` and `main_hash_id`. 
+
+I would **not remove that security behavior yet**. We should instrument it first so we know whether it is actually responsible.
+
+---
+
+# 2. One correction to the GitHub implementation
+
+I would **not** blindly use the GitHub version exactly as supplied.
+
+The GitHub implementation is directionally correct, particularly:
+
+* configuring `BUZZSTREAMSESSID` before `session_start()`;
+* `/streams` cookie path;
+* logging `session_save_path()`;
+* logging the session handler;
+* fingerprinting rather than exposing hashes;
+* recording request/session state;
+* logging backtraces;
+* using `hash_equals()`;
+* retaining real session validation. 
+
+However, I want the diagnostic layer to go one step further.
+
+The objective isn't merely:
+
+> "Does `main_hash_id` exist?"
+
+It is:
+
+> **"Exactly which request, file, function, session transition, or SSO operation caused the value to appear, disappear, change, or become disconnected from the request token?"**
+
+Therefore the implementation below adds:
+
+1. one central log;
+2. session configuration logging;
+3. session ID fingerprinting;
+4. session save-path detection;
+5. actual session-file existence/size/mtime;
+6. cookie diagnostics;
+7. hash creation/reuse/replacement;
+8. hash validation;
+9. before/after snapshots;
+10. shutdown comparison;
+11. call stacks;
+12. session lifecycle diagnostics;
+13. detection of `session_destroy()`;
+14. detection of `session_regenerate_id()`;
+15. detection of `session_write_close()` / `session_commit()`;
+16. request correlation IDs;
+17. safe logging of relevant SSO state;
+18. detection of changes to `$_SESSION['hash_id']` and `$_SESSION['main_hash_id']`.
+
+The raw session IDs, JWTs, SSO tokens and actual hash values remain out of the log.
+
+---
+
+# 3. Step 1 — Back up the two files
+
+Before changing anything:
+
+```text
+/wp-content/...        ← no changes
+/streams/assets/init.php
+/streams/assets/includes/functions_two.php
+```
+
+Specifically back up:
+
+```text
+buzzjuice.net/streams/assets/init.php
+buzzjuice.net/streams/assets/includes/functions_two.php
+```
+
+Do **not** modify:
+
+```text
+follow_user.php
+```
+
+and do not modify the theme.
+
+That matches your requirement.
+
+---
+
+# 4. Step 2 — Establish the single diagnostic log
+
+Use exactly:
+
+```text
+/buzzjuice.net/data/logs/buzzjuice-session-debug.log
+```
+
+The GitHub recommendation correctly places the log at the Buzzjuice root rather than inside `/streams`. 
+
+Given your existing filesystem:
+
+```text
+/home/koware/public_html/buzzjuice.net
+```
+
+the resulting path is:
+
+```text
+/home/koware/public_html/buzzjuice.net/data/logs/buzzjuice-session-debug.log
+```
+
+Make sure:
+
+```text
+data/logs/
+```
+
+exists and is writable by PHP.
+
+Do not create another Streams-specific log.
+
+---
+
+# 5. Step 3 — Replace `streams/assets/init.php`
+
+I recommend replacing the **entire current `init.php`** with this version.
+
+This is important because the session must be configured **before** `session_start()`.
+
+```php
+<?php
+/**
+ * Buzzjuice Streams / WoWonder Bootstrap
+ *
+ * Session architecture:
+ *
+ *   WordPress / QuickDate:
+ *       PHPSESSID
+ *       path /
+ *
+ *   WoWonder / Streams:
+ *       BUZZSTREAMSESSID
+ *       path /streams
+ *
+ * All diagnostic information is written to:
+ *
+ *   /buzzjuice.net/data/logs/buzzjuice-session-debug.log
+ *
+ * SECURITY:
+ * - Raw PHP session IDs are never logged.
+ * - Raw hash_id values are never logged.
+ * - Raw main_hash_id values are never logged.
+ * - JWTs are never logged.
+ * - SSO tokens are never logged.
+ * - Passwords are never logged.
+ */
+
+if (!version_compare(PHP_VERSION, '7.1.0', '>=')) {
+    exit(
+        'Required PHP_VERSION >= 7.1.0, Your PHP_VERSION is: ' .
+        PHP_VERSION . PHP_EOL
+    );
+}
+
+if (!function_exists('mysqli_connect')) {
+    exit(
+        'MySQLi is required to run the application, please contact your hosting provider.'
+    );
+}
+
+date_default_timezone_set('UTC');
+
+@ini_set('date.timezone', 'UTC');
+
+/*
+|--------------------------------------------------------------------------
+| Streams session configuration
+|--------------------------------------------------------------------------
+|
+| CRITICAL:
+| These settings must be established BEFORE session_start().
+|
+*/
+
+if (session_status() === PHP_SESSION_NONE) {
+
+    @ini_set('session.name', 'BUZZSTREAMSESSID');
+
+    @ini_set('session.cookie_path', '/streams');
+    @ini_set('session.cookie_domain', '.buzzjuice.net');
+
+    @ini_set('session.cookie_secure', '1');
+    @ini_set('session.cookie_httponly', '1');
+    @ini_set('session.cookie_samesite', 'Lax');
+
+    @ini_set('session.use_only_cookies', '1');
+    @ini_set('session.use_trans_sid', '0');
+    @ini_set('session.use_strict_mode', '1');
+
+    /*
+     * Explicitly establish the session name as well.
+     *
+     * This is preferable to relying only on ini_set().
+     */
+    @session_name('BUZZSTREAMSESSID');
+}
+
+/*
+|--------------------------------------------------------------------------
+| Path helpers
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_streams_root_path')) {
+
+    function bz_streams_root_path()
+    {
+        /*
+         * /buzzjuice.net/streams/assets
+         *
+         * dirname(..., 2)
+         *
+         * => /buzzjuice.net
+         */
+        return dirname(__DIR__, 2);
+    }
+}
+
+if (!function_exists('bz_stream_session_log_path')) {
+
+    function bz_stream_session_log_path()
+    {
+        return bz_streams_root_path()
+            .DIRECTORY_SEPARATOR.'data'
+            .DIRECTORY_SEPARATOR.'logs'
+            .DIRECTORY_SEPARATOR.'buzzjuice-session-debug.log';
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Request correlation ID
+|--------------------------------------------------------------------------
+|
+| Allows multiple requests belonging to the same browser action to be
+| distinguished in the log.
+|
+*/
+
+if (!function_exists('bz_session_request_id')) {
+
+    function bz_session_request_id()
+    {
+        static $request_id = null;
+
+        if ($request_id !== null) {
+            return $request_id;
+        }
+
+        try {
+
+            $request_id = bin2hex(random_bytes(8));
+
+        } catch (Throwable $e) {
+
+            $request_id = substr(
+                sha1(
+                    uniqid('', true) .
+                    microtime(true) .
+                    mt_rand()
+                ),
+                0,
+                16
+            );
+        }
+
+        return $request_id;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Safe value fingerprint
+|--------------------------------------------------------------------------
+|
+| Never place actual session/hash/token values into the log.
+|
+*/
+
+if (!function_exists('bz_session_fingerprint')) {
+
+    function bz_session_fingerprint($value)
+    {
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string)$value;
+
+        return array(
+            'present' => ($value !== ''),
+            'length'  => strlen($value),
+            'sha256'  => ($value !== '')
+                ? hash('sha256', $value)
+                : '',
+            'format'  => ($value === '')
+                ? 'empty'
+                : (
+                    preg_match('/^[a-f0-9]+$/i', $value)
+                        ? 'hexadecimal'
+                        : 'non_hexadecimal'
+                )
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Safe URI
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_safe_request_uri')) {
+
+    function bz_session_safe_request_uri()
+    {
+        $uri = isset($_SERVER['REQUEST_URI'])
+            ? (string)$_SERVER['REQUEST_URI']
+            : '';
+
+        if ($uri === '') {
+            return '';
+        }
+
+        return preg_replace(
+            '/([?&](?:hash_id|hash|token|sso_token|buzz_sso|buzz_access|buzz_refresh|password|secret)=)[^&]*/i',
+            '$1[REDACTED]',
+            $uri
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Safe cookie diagnostics
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_cookie_diagnostics')) {
+
+    function bz_session_cookie_diagnostics()
+    {
+        $names = array(
+            'BUZZSTREAMSESSID',
+            'BUZZSOCIALSESSID',
+            'PHPSESSID',
+            'buzz_sso',
+            'buzz_access',
+            'buzz_refresh',
+            'user_id',
+            'JWT'
+        );
+
+        $result = array();
+
+        foreach ($names as $name) {
+
+            $value = isset($_COOKIE[$name])
+                ? (string)$_COOKIE[$name]
+                : '';
+
+            $result[$name] = array(
+                'present' => ($value !== ''),
+                'length'  => strlen($value),
+                'sha256'  => ($value !== '')
+                    ? hash('sha256', $value)
+                    : ''
+            );
+        }
+
+        return $result;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Safe request headers
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_request_headers')) {
+
+    function bz_session_request_headers()
+    {
+        return array(
+            'referer' => isset($_SERVER['HTTP_REFERER'])
+                ? (string)$_SERVER['HTTP_REFERER']
+                : '',
+
+            'origin' => isset($_SERVER['HTTP_ORIGIN'])
+                ? (string)$_SERVER['HTTP_ORIGIN']
+                : '',
+
+            'x_requested_with' => isset($_SERVER['HTTP_X_REQUESTED_WITH'])
+                ? (string)$_SERVER['HTTP_X_REQUESTED_WITH']
+                : '',
+
+            'user_agent' => isset($_SERVER['HTTP_USER_AGENT'])
+                ? substr((string)$_SERVER['HTTP_USER_AGENT'], 0, 500)
+                : ''
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Backtrace
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_trace')) {
+
+    function bz_session_trace($limit = 30)
+    {
+        $trace = array();
+
+        $frames = debug_backtrace(
+            DEBUG_BACKTRACE_IGNORE_ARGS,
+            (int)$limit
+        );
+
+        foreach ($frames as $frame) {
+
+            $trace[] = array(
+                'file' => isset($frame['file'])
+                    ? basename((string)$frame['file'])
+                    : '',
+
+                'line' => isset($frame['line'])
+                    ? (int)$frame['line']
+                    : 0,
+
+                'class' => isset($frame['class'])
+                    ? (string)$frame['class']
+                    : '',
+
+                'type' => isset($frame['type'])
+                    ? (string)$frame['type']
+                    : '',
+
+                'function' => isset($frame['function'])
+                    ? (string)$frame['function']
+                    : ''
+            );
+        }
+
+        return $trace;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Resolve actual session save path
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_resolved_save_path')) {
+
+    function bz_session_resolved_save_path()
+    {
+        $path = function_exists('session_save_path')
+            ? (string)session_save_path()
+            : '';
+
+        if ($path === '') {
+            return '';
+        }
+
+        /*
+         * PHP may return:
+         *
+         * N;/path/to/sessions
+         * N;MODE;/path/to/sessions
+         */
+
+        if (strpos($path, ';') !== false) {
+
+            $parts = explode(';', $path);
+
+            $path = end($parts);
+        }
+
+        return rtrim($path, DIRECTORY_SEPARATOR);
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Session storage diagnostics
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_storage_diagnostics')) {
+
+    function bz_session_storage_diagnostics()
+    {
+        $handler = function_exists('ini_get')
+            ? (string)ini_get('session.save_handler')
+            : '';
+
+        $configured_path = function_exists('session_save_path')
+            ? (string)session_save_path()
+            : '';
+
+        $resolved_path = bz_session_resolved_save_path();
+
+        $result = array(
+            'handler' => $handler,
+
+            'configured_save_path' => $configured_path,
+
+            'resolved_save_path' => $resolved_path,
+
+            'resolved_path_exists' => (
+                $resolved_path !== '' &&
+                is_dir($resolved_path)
+            ),
+
+            'resolved_path_readable' => (
+                $resolved_path !== '' &&
+                is_readable($resolved_path)
+            ),
+
+            'resolved_path_writable' => (
+                $resolved_path !== '' &&
+                is_writable($resolved_path)
+            )
+        );
+
+        if (
+            $handler === 'files' &&
+            $resolved_path !== '' &&
+            session_status() === PHP_SESSION_ACTIVE
+        ) {
+
+            $id = (string)session_id();
+
+            if ($id !== '') {
+
+                $session_file =
+                    $resolved_path .
+                    DIRECTORY_SEPARATOR .
+                    'sess_' .
+                    $id;
+
+                $result['session_file_exists'] =
+                    is_file($session_file);
+
+                if (is_file($session_file)) {
+
+                    $result['session_file_size'] =
+                        (int)@filesize($session_file);
+
+                    $result['session_file_mtime'] =
+                        (int)@filemtime($session_file);
+                }
+            }
+        }
+
+        return $result;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Session state snapshot
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_state_snapshot')) {
+
+    function bz_session_state_snapshot()
+    {
+        $hash_id = '';
+
+        $main_hash_id = '';
+
+        $request_hash_id = '';
+
+        if (
+            isset($_SESSION) &&
+            is_array($_SESSION)
+        ) {
+
+            if (isset($_SESSION['hash_id'])) {
+                $hash_id = $_SESSION['hash_id'];
+            }
+
+            if (isset($_SESSION['main_hash_id'])) {
+                $main_hash_id = $_SESSION['main_hash_id'];
+            }
+        }
+
+        if (isset($GLOBALS['hash_id'])) {
+            $request_hash_id = $GLOBALS['hash_id'];
+        }
+
+        $encoded_session = '';
+
+        if (
+            session_status() === PHP_SESSION_ACTIVE &&
+            function_exists('session_encode')
+        ) {
+
+            $encoded_session = @session_encode();
+
+            if ($encoded_session === false) {
+                $encoded_session = '';
+            }
+        }
+
+        $cookie_params = array();
+
+        if (function_exists('session_get_cookie_params')) {
+            $cookie_params = session_get_cookie_params();
+        }
+
+        return array(
+
+            'session_status' => function_exists('session_status')
+                ? session_status()
+                : -1,
+
+            'session_status_name' => (
+                function_exists('session_status')
+                ? (
+                    session_status() === PHP_SESSION_ACTIVE
+                        ? 'ACTIVE'
+                        : (
+                            session_status() === PHP_SESSION_NONE
+                                ? 'NONE'
+                                : 'DISABLED'
+                        )
+                )
+                : 'UNKNOWN'
+            ),
+
+            'session_name' => function_exists('session_name')
+                ? session_name()
+                : '',
+
+            'session_id' => function_exists('session_id')
+                ? bz_session_fingerprint(session_id())
+                : array(),
+
+            'session_save_path' => function_exists('session_save_path')
+                ? session_save_path()
+                : '',
+
+            'session_save_handler' => function_exists('ini_get')
+                ? ini_get('session.save_handler')
+                : '',
+
+            'cookie_params' => array(
+                'path' => isset($cookie_params['path'])
+                    ? (string)$cookie_params['path']
+                    : '',
+
+                'domain' => isset($cookie_params['domain'])
+                    ? (string)$cookie_params['domain']
+                    : '',
+
+                'secure' => !empty($cookie_params['secure']),
+
+                'httponly' => !empty($cookie_params['httponly']),
+
+                'samesite' => isset($cookie_params['samesite'])
+                    ? (string)$cookie_params['samesite']
+                    : ''
+            ),
+
+            'cookies' => bz_session_cookie_diagnostics(),
+
+            'hash_id' => bz_session_fingerprint($hash_id),
+
+            'main_hash_id' => bz_session_fingerprint($main_hash_id),
+
+            'request_hash_id' => bz_session_fingerprint($request_hash_id),
+
+            'session_keys' => (
+                isset($_SESSION) &&
+                is_array($_SESSION)
+                    ? array_keys($_SESSION)
+                    : array()
+            ),
+
+            'session_encoded' => bz_session_fingerprint(
+                $encoded_session
+            ),
+
+            'wo_user_id' => (
+                isset($_SESSION['wo_user_id'])
+                    ? (int)$_SESSION['wo_user_id']
+                    : 0
+            ),
+
+            'storage' => bz_session_storage_diagnostics()
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Snapshot comparison
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_session_snapshot_diff')) {
+
+    function bz_session_snapshot_diff($before, $after)
+    {
+        $fields = array(
+            'session_status',
+            'session_status_name',
+            'session_name',
+            'session_id',
+            'session_save_path',
+            'session_save_handler',
+            'cookie_params',
+            'cookies',
+            'hash_id',
+            'main_hash_id',
+            'request_hash_id',
+            'session_keys',
+            'session_encoded',
+            'wo_user_id',
+            'storage'
+        );
+
+        $changes = array();
+
+        foreach ($fields as $field) {
+
+            $before_value = isset($before[$field])
+                ? $before[$field]
+                : null;
+
+            $after_value = isset($after[$field])
+                ? $after[$field]
+                : null;
+
+            if ($before_value !== $after_value) {
+
+                $changes[$field] = array(
+                    'before' => $before_value,
+                    'after' => $after_value
+                );
+            }
+        }
+
+        return $changes;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Central diagnostic logger
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('Wo_SessionDiagnosticLog')) {
+
+    function Wo_SessionDiagnosticLog(
+        $event,
+        $context = array()
+    ) {
+
+        $file = bz_stream_session_log_path();
+
+        $directory = dirname($file);
+
+        if (!is_dir($directory)) {
+            @mkdir($directory, 0750, true);
+        }
+
+        if (!is_array($context)) {
+
+            $context = array(
+                'value' => $context
+            );
+        }
+
+        $context['timestamp_utc'] =
+            gmdate('c');
+
+        $context['request_id'] =
+            bz_session_request_id();
+
+        $context['pid'] =
+            function_exists('getmypid')
+                ? (int)getmypid()
+                : 0;
+
+        $context['sapi'] =
+            function_exists('php_sapi_name')
+                ? php_sapi_name()
+                : '';
+
+        $context['request_method'] =
+            isset($_SERVER['REQUEST_METHOD'])
+                ? (string)$_SERVER['REQUEST_METHOD']
+                : '';
+
+        $context['request_uri'] =
+            bz_session_safe_request_uri();
+
+        $context['script_filename'] =
+            isset($_SERVER['SCRIPT_FILENAME'])
+                ? basename((string)$_SERVER['SCRIPT_FILENAME'])
+                : '';
+
+        $context['http_host'] =
+            isset($_SERVER['HTTP_HOST'])
+                ? (string)$_SERVER['HTTP_HOST']
+                : '';
+
+        $context['headers'] =
+            bz_session_request_headers();
+
+        $context['log_file'] =
+            $file;
+
+        $context['log_directory_exists'] =
+            is_dir($directory);
+
+        $context['log_directory_writable'] =
+            is_writable($directory);
+
+        $context['session_state'] =
+            bz_session_state_snapshot();
+
+        $context['trace'] =
+            bz_session_trace(30);
+
+        $record = array(
+            'event' => (string)$event,
+            'context' => $context
+        );
+
+        $json = json_encode(
+            $record,
+            JSON_UNESCAPED_SLASHES |
+            JSON_UNESCAPED_UNICODE |
+            JSON_PARTIAL_OUTPUT_ON_ERROR
+        );
+
+        if ($json === false) {
+            return false;
+        }
+
+        return @file_put_contents(
+            $file,
+            $json . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        ) !== false;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Safe session start
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('bz_safe_session_start')) {
+
+    function bz_safe_session_start()
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+
+            Wo_SessionDiagnosticLog(
+                'session_already_active'
+            );
+
+            return true;
+        }
+
+        if (session_status() !== PHP_SESSION_NONE) {
+
+            Wo_SessionDiagnosticLog(
+                'session_start_failed',
+                array(
+                    'reason' =>
+                        'session_not_startable',
+
+                    'session_status' =>
+                        session_status()
+                )
+            );
+
+            return false;
+        }
+
+        if (headers_sent($headers_file, $headers_line)) {
+
+            Wo_SessionDiagnosticLog(
+                'session_start_failed',
+                array(
+                    'reason' =>
+                        'headers_already_sent',
+
+                    'headers_file' =>
+                        $headers_file,
+
+                    'headers_line' =>
+                        (int)$headers_line
+                )
+            );
+
+            return false;
+        }
+
+        try {
+
+            $started = @session_start();
+
+        } catch (Throwable $exception) {
+
+            Wo_SessionDiagnosticLog(
+                'session_start_exception',
+                array(
+                    'exception_class' =>
+                        get_class($exception),
+
+                    'exception_message' =>
+                        $exception->getMessage()
+                )
+            );
+
+            return false;
+        }
+
+        $active = (
+            $started &&
+            session_status() === PHP_SESSION_ACTIVE
+        );
+
+        Wo_SessionDiagnosticLog(
+            $active
+                ? 'session_started'
+                : 'session_start_failed',
+            array(
+                'start_return_value' =>
+                    (bool)$started,
+
+                'session_name' =>
+                    function_exists('session_name')
+                        ? session_name()
+                        : '',
+
+                'session_id' =>
+                    function_exists('session_id')
+                        ? bz_session_fingerprint(
+                            session_id()
+                        )
+                        : array()
+            )
+        );
+
+        return $active;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Initial configuration diagnostic
+|--------------------------------------------------------------------------
+*/
+
+Wo_SessionDiagnosticLog(
+    'streams_bootstrap_before_session_start',
+    array(
+        'php_version' => PHP_VERSION,
+
+        'streams_root' =>
+            bz_streams_root_path(),
+
+        'configured_session_name' =>
+            function_exists('session_name')
+                ? session_name()
+                : '',
+
+        'configured_cookie_path' =>
+            ini_get('session.cookie_path'),
+
+        'configured_cookie_domain' =>
+            ini_get('session.cookie_domain'),
+
+        'configured_cookie_secure' =>
+            ini_get('session.cookie_secure'),
+
+        'configured_cookie_httponly' =>
+            ini_get('session.cookie_httponly'),
+
+        'configured_cookie_samesite' =>
+            ini_get('session.cookie_samesite'),
+
+        'configured_save_handler' =>
+            ini_get('session.save_handler'),
+
+        'configured_save_path' =>
+            function_exists('session_save_path')
+                ? session_save_path()
+                : ''
+    )
+);
+
+/*
+|--------------------------------------------------------------------------
+| Start the Streams session
+|--------------------------------------------------------------------------
+*/
+
+$bz_stream_session_started =
+    bz_safe_session_start();
+
+$bz_session_snapshot_before_application =
+    bz_session_state_snapshot();
+
+Wo_SessionDiagnosticLog(
+    $bz_stream_session_started
+        ? 'streams_session_started_before_application_includes'
+        : 'streams_session_start_failed_before_application_includes'
+);
+
+/*
+|--------------------------------------------------------------------------
+| Cache prevention
+|--------------------------------------------------------------------------
+*/
+
+if (!headers_sent()) {
+
+    header(
+        'Cache-Control: private, no-store, no-cache, must-revalidate'
+    );
+
+    header('Pragma: no-cache');
+
+    header('Expires: 0');
+}
+
+/*
+|--------------------------------------------------------------------------
+| Shutdown diagnostic
+|--------------------------------------------------------------------------
+*/
+
+register_shutdown_function(
+    function () use (
+        $bz_session_snapshot_before_application
+    ) {
+
+        $after =
+            bz_session_state_snapshot();
+
+        $changes =
+            bz_session_snapshot_diff(
+                $bz_session_snapshot_before_application,
+                $after
+            );
+
+        Wo_SessionDiagnosticLog(
+            empty($changes)
+                ? 'request_shutdown_session_state_unchanged'
+                : 'request_shutdown_session_state_changed',
+            array(
+                'changes' => $changes,
+
+                'last_error' =>
+                    error_get_last()
+            )
+        );
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| Remaining WoWonder bootstrap
+|--------------------------------------------------------------------------
+*/
+
+@ini_set(
+    'gd.jpeg_ignore_warning',
+    '1'
+);
+
+require_once
+    __DIR__ .
+    '/../../shared/palmier/palmier_logger.php';
+
+require_once
+    __DIR__ .
+    '/libraries/DB/vendor/joshcam/mysqli-database-class/MySQL-Maria.php';
+
+require_once
+    __DIR__ .
+    '/includes/cache.php';
+
+require_once
+    __DIR__ .
+    '/includes/functions_general.php';
+
+require_once
+    __DIR__ .
+    '/includes/tabels.php';
+
+require_once
+    __DIR__ .
+    '/includes/functions_one.php';
+
+require_once
+    __DIR__ .
+    '/includes/functions_two.php';
+
+require_once
+    __DIR__ .
+    '/includes/functions_three.php';
+
+if (
+    !isset($wo['user']) ||
+    !is_array($wo['user'])
+) {
+
+    $wo['user'] = array(
+        'id' => 0,
+        'admin' => 0
+    );
+}
+
+/*
+|--------------------------------------------------------------------------
+| Explicitly initialize WoWonder hash values
+|--------------------------------------------------------------------------
+|
+| This is intentionally done AFTER functions_two.php has been loaded,
+| because that is where these functions are defined.
+|
+*/
+
+if (function_exists('Wo_CreateSession')) {
+
+    Wo_CreateSession();
+}
+
+if (function_exists('Wo_CreateMainSession')) {
+
+    Wo_CreateMainSession();
+}
+
+Wo_SessionDiagnosticLog(
+    'streams_hash_initialization_complete'
+);
+
+Wo_SessionDiagnosticLog(
+    'streams_application_bootstrap_complete'
+);
+```
+
+### Why this is an important improvement
+
+The original code starts the session before explicitly choosing the session name. The new version establishes:
+
+```text
+BUZZSTREAMSESSID
+/streams
+.buzzjuice.net
+Secure
+HttpOnly
+SameSite=Lax
+```
+
+before starting the session.
+
+This directly addresses the biggest architectural concern identified by GitHub. 
+
+---
+
+# 6. Step 4 — Replace only the four functions in `functions_two.php`
+
+Do **not** replace the entire 7,000+ line file.
+
+Find:
+
+```php
+function Wo_CreateSession()
+```
+
+through:
+
+```php
+function Wo_CheckMainSession()
+```
+
+The repository currently places these around lines 5598–5639. 
+
+Replace that entire four-function block with:
+
+```php
+/*
+|--------------------------------------------------------------------------
+| Buzzjuice Streams session/hash diagnostics
+|--------------------------------------------------------------------------
+|
+| These functions deliberately retain normal WoWonder validation.
+|
+| IMPORTANT:
+| Raw hash values are never written to the diagnostic log.
+|
+*/
+
+if (!function_exists('Wo_SessionHashFingerprint')) {
+
+    function Wo_SessionHashFingerprint($value)
+    {
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string)$value;
+
+        return array(
+            'present' => ($value !== ''),
+
+            'length' => strlen($value),
+
+            'sha256' => (
+                $value !== ''
+                    ? hash('sha256', $value)
+                    : ''
+            ),
+
+            'format' => (
+                $value === ''
+                    ? 'empty'
+                    : (
+                        preg_match(
+                            '/^[a-f0-9]+$/i',
+                            $value
+                        )
+                            ? 'hexadecimal'
+                            : 'non_hexadecimal'
+                    )
+            )
+        );
+    }
+}
+
+if (!function_exists('Wo_SessionHashLog')) {
+
+    function Wo_SessionHashLog(
+        $event,
+        $context = array()
+    ) {
+
+        if (
+            function_exists(
+                'Wo_SessionDiagnosticLog'
+            )
+        ) {
+
+            return Wo_SessionDiagnosticLog(
+                $event,
+                $context
+            );
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('Wo_EnsureSessionActive')) {
+
+    function Wo_EnsureSessionActive()
+    {
+        /*
+         * The normal path should already have an active
+         * BUZZSTREAMSESSID session because init.php starts it.
+         */
+
+        if (
+            !function_exists(
+                'session_status'
+            )
+        ) {
+
+            Wo_SessionHashLog(
+                'hash_operation_failed',
+                array(
+                    'reason' =>
+                        'session_status_unavailable'
+                )
+            );
+
+            return false;
+        }
+
+        if (
+            session_status() ===
+            PHP_SESSION_ACTIVE
+        ) {
+
+            /*
+             * Verify that this really is the Streams
+             * session rather than another PHP session.
+             */
+
+            $current_name =
+                function_exists('session_name')
+                    ? session_name()
+                    : '';
+
+            if (
+                $current_name !==
+                'BUZZSTREAMSESSID'
+            ) {
+
+                Wo_SessionHashLog(
+                    'hash_operation_session_name_mismatch',
+                    array(
+                        'expected_session_name' =>
+                            'BUZZSTREAMSESSID',
+
+                        'actual_session_name' =>
+                            $current_name
+                    )
+                );
+
+                return false;
+            }
+
+            return true;
+        }
+
+        if (
+            session_status() !==
+            PHP_SESSION_NONE
+        ) {
+
+            Wo_SessionHashLog(
+                'hash_operation_failed',
+                array(
+                    'reason' =>
+                        'session_not_startable',
+
+                    'session_status' =>
+                        session_status()
+                )
+            );
+
+            return false;
+        }
+
+        if (
+            headers_sent(
+                $headers_file,
+                $headers_line
+            )
+        ) {
+
+            Wo_SessionHashLog(
+                'hash_operation_failed',
+                array(
+                    'reason' =>
+                        'headers_already_sent',
+
+                    'headers_file' =>
+                        $headers_file,
+
+                    'headers_line' =>
+                        (int)$headers_line
+                )
+            );
+
+            return false;
+        }
+
+        /*
+         * Defensive configuration in case a legacy request
+         * reaches this function before init.php configuration.
+         */
+
+        @ini_set(
+            'session.name',
+            'BUZZSTREAMSESSID'
+        );
+
+        @ini_set(
+            'session.cookie_path',
+            '/streams'
+        );
+
+        @ini_set(
+            'session.cookie_domain',
+            '.buzzjuice.net'
+        );
+
+        @ini_set(
+            'session.cookie_secure',
+            '1'
+        );
+
+        @ini_set(
+            'session.cookie_httponly',
+            '1'
+        );
+
+        @ini_set(
+            'session.cookie_samesite',
+            'Lax'
+        );
+
+        @session_name(
+            'BUZZSTREAMSESSID'
+        );
+
+        try {
+
+            $started =
+                @session_start();
+
+        } catch (Throwable $exception) {
+
+            Wo_SessionHashLog(
+                'hash_operation_failed',
+                array(
+                    'reason' =>
+                        'session_start_exception',
+
+                    'exception_class' =>
+                        get_class(
+                            $exception
+                        ),
+
+                    'exception_message' =>
+                        $exception->getMessage()
+                )
+            );
+
+            return false;
+        }
+
+        $active = (
+            $started &&
+            session_status() ===
+            PHP_SESSION_ACTIVE
+        );
+
+        Wo_SessionHashLog(
+            $active
+                ? 'session_started_by_hash_function'
+                : 'session_start_failed_by_hash_function',
+            array(
+                'start_return_value' =>
+                    (bool)$started,
+
+                'session_name' =>
+                    function_exists('session_name')
+                        ? session_name()
+                        : '',
+
+                'session_id' =>
+                    function_exists('session_id')
+                        ? Wo_SessionHashFingerprint(
+                            session_id()
+                        )
+                        : array()
+            )
+        );
+
+        return $active;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| hash_id
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('Wo_CreateSession')) {
+
+    function Wo_CreateSession()
+    {
+        if (!Wo_EnsureSessionActive()) {
+
+            Wo_SessionHashLog(
+                'create_hash_id_failed',
+                array(
+                    'session_key' =>
+                        'hash_id',
+
+                    'reason' =>
+                        'php_session_not_active'
+                )
+            );
+
+            return '';
+        }
+
+        $existing =
+            isset($_SESSION['hash_id'])
+                ? (string)$_SESSION['hash_id']
+                : '';
+
+        /*
+         * Native WoWonder hash_id is 40 hexadecimal
+         * characters because it is SHA-1.
+         */
+
+        if (
+            preg_match(
+                '/^[a-f0-9]{40}$/i',
+                $existing
+            )
+        ) {
+
+            Wo_SessionHashLog(
+                'create_hash_id_reused',
+                array(
+                    'session_key' =>
+                        'hash_id',
+
+                    'value' =>
+                        Wo_SessionHashFingerprint(
+                            $existing
+                        )
+                )
+            );
+
+            return $existing;
+        }
+
+        /*
+         * Existing but malformed value.
+         */
+
+        if ($existing !== '') {
+
+            Wo_SessionHashLog(
+                'create_hash_id_replaced_invalid_value',
+                array(
+                    'session_key' =>
+                        'hash_id',
+
+                    'old_value' =>
+                        Wo_SessionHashFingerprint(
+                            $existing
+                        )
+                )
+            );
+        }
+
+        try {
+
+            $hash = sha1(
+                bin2hex(
+                    random_bytes(32)
+                ) .
+                microtime(true) .
+                mt_rand()
+            );
+
+        } catch (Throwable $exception) {
+
+            $hash = sha1(
+                uniqid('', true) .
+                microtime(true) .
+                mt_rand()
+            );
+
+            Wo_SessionHashLog(
+                'create_hash_id_random_bytes_failed',
+                array(
+                    'exception_class' =>
+                        get_class(
+                            $exception
+                        ),
+
+                    'exception_message' =>
+                        $exception->getMessage()
+                )
+            );
+        }
+
+        $_SESSION['hash_id'] =
+            $hash;
+
+        Wo_SessionHashLog(
+            'create_hash_id_created',
+            array(
+                'session_key' =>
+                    'hash_id',
+
+                'value' =>
+                    Wo_SessionHashFingerprint(
+                        $hash
+                    )
+            )
+        );
+
+        return $hash;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| hash_id validation
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('Wo_CheckSession')) {
+
+    function Wo_CheckSession(
+        $hash = ''
+    ) {
+
+        if (!Wo_EnsureSessionActive()) {
+
+            Wo_SessionHashLog(
+                'check_hash_id_failed',
+                array(
+                    'session_key' =>
+                        'hash_id',
+
+                    'reason' =>
+                        'php_session_not_active',
+
+                    'result' =>
+                        false
+                )
+            );
+
+            return false;
+        }
+
+        $provided =
+            is_scalar($hash)
+                ? (string)$hash
+                : '';
+
+        $stored =
+            isset($_SESSION['hash_id'])
+                ? (string)$_SESSION['hash_id']
+                : '';
+
+        $matches = (
+            $provided !== '' &&
+            $stored !== '' &&
+            hash_equals(
+                $stored,
+                $provided
+            )
+        );
+
+        Wo_SessionHashLog(
+            $matches
+                ? 'check_hash_id_success'
+                : 'check_hash_id_rejected',
+            array(
+                'session_key' =>
+                    'hash_id',
+
+                'provided' =>
+                    Wo_SessionHashFingerprint(
+                        $provided
+                    ),
+
+                'stored' =>
+                    Wo_SessionHashFingerprint(
+                        $stored
+                    ),
+
+                'provided_empty' =>
+                    ($provided === ''),
+
+                'stored_empty' =>
+                    ($stored === ''),
+
+                'result' =>
+                    $matches,
+
+                'diagnosis' => (
+                    $provided === ''
+                        ? 'request_did_not_supply_hash_token'
+                        : (
+                            $stored === ''
+                                ? 'active_session_does_not_contain_hash_id'
+                                : (
+                                    !hash_equals(
+                                        $stored,
+                                        $provided
+                                    )
+                                        ? 'request_token_does_not_match_active_session'
+                                        : 'unknown'
+                                )
+                        )
+                )
+            )
+        );
+
+        return $matches;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| main_hash_id
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('Wo_CreateMainSession')) {
+
+    function Wo_CreateMainSession()
+    {
+        if (!Wo_EnsureSessionActive()) {
+
+            Wo_SessionHashLog(
+                'create_main_hash_id_failed',
+                array(
+                    'session_key' =>
+                        'main_hash_id',
+
+                    'reason' =>
+                        'php_session_not_active'
+                )
+            );
+
+            return '';
+        }
+
+        $existing =
+            isset($_SESSION['main_hash_id'])
+                ? (string)$_SESSION['main_hash_id']
+                : '';
+
+        /*
+         * Native WoWonder main_hash_id is 20 hexadecimal
+         * characters.
+         */
+
+        if (
+            preg_match(
+                '/^[a-f0-9]{20}$/i',
+                $existing
+            )
+        ) {
+
+            Wo_SessionHashLog(
+                'create_main_hash_id_reused',
+                array(
+                    'session_key' =>
+                        'main_hash_id',
+
+                    'value' =>
+                        Wo_SessionHashFingerprint(
+                            $existing
+                        )
+                )
+            );
+
+            return $existing;
+        }
+
+        if ($existing !== '') {
+
+            Wo_SessionHashLog(
+                'create_main_hash_id_replaced_invalid_value',
+                array(
+                    'session_key' =>
+                        'main_hash_id',
+
+                    'old_value' =>
+                        Wo_SessionHashFingerprint(
+                            $existing
+                        )
+                )
+            );
+        }
+
+        try {
+
+            $hash = substr(
+                sha1(
+                    bin2hex(
+                        random_bytes(32)
+                    ) .
+                    microtime(true) .
+                    mt_rand()
+                ),
+                0,
+                20
+            );
+
+        } catch (Throwable $exception) {
+
+            $hash = substr(
+                sha1(
+                    uniqid('', true) .
+                    microtime(true) .
+                    mt_rand()
+                ),
+                0,
+                20
+            );
+
+            Wo_SessionHashLog(
+                'create_main_hash_id_random_bytes_failed',
+                array(
+                    'exception_class' =>
+                        get_class(
+                            $exception
+                        ),
+
+                    'exception_message' =>
+                        $exception->getMessage()
+                )
+            );
+        }
+
+        $_SESSION['main_hash_id'] =
+            $hash;
+
+        Wo_SessionHashLog(
+            'create_main_hash_id_created',
+            array(
+                'session_key' =>
+                    'main_hash_id',
+
+                'value' =>
+                    Wo_SessionHashFingerprint(
+                        $hash
+                    )
+            )
+        );
+
+        return $hash;
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| main_hash_id validation
+|--------------------------------------------------------------------------
+*/
+
+if (!function_exists('Wo_CheckMainSession')) {
+
+    function Wo_CheckMainSession(
+        $hash = ''
+    ) {
+
+        if (!Wo_EnsureSessionActive()) {
+
+            Wo_SessionHashLog(
+                'check_main_hash_id_failed',
+                array(
+                    'session_key' =>
+                        'main_hash_id',
+
+                    'reason' =>
+                        'php_session_not_active',
+
+                    'result' =>
+                        false
+                )
+            );
+
+            return false;
+        }
+
+        $provided =
+            is_scalar($hash)
+                ? (string)$hash
+                : '';
+
+        $stored =
+            isset($_SESSION['main_hash_id'])
+                ? (string)$_SESSION['main_hash_id']
+                : '';
+
+        $matches = (
+            $provided !== '' &&
+            $stored !== '' &&
+            hash_equals(
+                $stored,
+                $provided
+            )
+        );
+
+        Wo_SessionHashLog(
+            $matches
+                ? 'check_main_hash_id_success'
+                : 'check_main_hash_id_rejected',
+            array(
+                'session_key' =>
+                    'main_hash_id',
+
+                'provided' =>
+                    Wo_SessionHashFingerprint(
+                        $provided
+                    ),
+
+                'stored' =>
+                    Wo_SessionHashFingerprint(
+                        $stored
+                    ),
+
+                'provided_empty' =>
+                    ($provided === ''),
+
+                'stored_empty' =>
+                    ($stored === ''),
+
+                'result' =>
+                    $matches,
+
+                'diagnosis' => (
+                    $provided === ''
+                        ? 'request_did_not_supply_main_hash_token'
+                        : (
+                            $stored === ''
+                                ? 'active_session_does_not_contain_main_hash_id'
+                                : (
+                                    !hash_equals(
+                                        $stored,
+                                        $provided
+                                    )
+                                        ? 'request_token_does_not_match_active_session'
+                                        : 'unknown'
+                                )
+                        )
+                )
+            )
+        );
+
+        return $matches;
+    }
+}
+```
+
+This preserves the normal security behavior rather than permanently bypassing `Wo_CheckMainSession()`. The GitHub version correctly identified that `return true;` was only masking the underlying session/token problem. 
+
+---
+
+# 7. Why I deliberately did not modify `ww-sso-bridge.php` yet
+
+This is an important sequencing decision.
+
+We **know** the bridge can destroy the active PHP session when it concludes that the WordPress session is absent. 
+
+But we don't yet know whether that branch is actually firing during your problematic follow request.
+
+If we modify the bridge now, we would potentially change the system while trying to diagnose it.
+
+Instead:
+
+```text
+Phase 1
+    ↓
+instrument session
+    ↓
+observe
+    ↓
+identify exact destructive operation
+    ↓
+patch culprit
+```
+
+rather than:
+
+```text
+guess culprit
+    ↓
+change SSO
+    ↓
+change session
+    ↓
+change follow
+    ↓
+hope
+```
+
+That's especially important because your SSO architecture is already fairly complex.
+
+---
+
+# 8. One particularly important observation about QuickDate
+
+I don't think QuickDate is currently the primary suspect.
+
+The QuickDate bridge's legacy session-reconciliation block is commented/deprecated, and its current implementation explicitly says that PHP session state should not be used as the SSO authority. 
+
+The browser evidence also supports separation:
+
+```text
+PHPSESSID
+/
+```
+
+versus:
+
+```text
+BUZZSTREAMSESSID
+/streams
+```
+
+Therefore, **do not try to make QuickDate and WoWonder share session state**.
+
+The intended architecture is:
+
+```text
+                    WordPress
+                       │
+                 SSO/JWT authority
+                       │
+             ┌─────────┴─────────┐
+             │                   │
+          QuickDate           WoWonder
+             │                   │
+         PHPSESSID       BUZZSTREAMSESSID
+             │                   │
+             /                /streams
+```
+
+That separation should remain.
+
+---
+
+# 9. The 64-character hash issue
+
+This point deserves emphasis.
+
+Your native WoWonder functions currently produce:
+
+```text
+hash_id       = 40 hex characters
+main_hash_id  = 20 hex characters
+```
+
+because:
+
+```php
+sha1(...)
+```
+
+returns 40 hexadecimal characters, and:
+
+```php
+substr(sha1(...), 0, 20)
+```
+
+returns 20. 
+
+The debugging system generates:
+
+```php
+hash('sha256', $value)
+```
+
+which produces:
+
+```text
+64 hexadecimal characters
+```
+
+So:
+
+```text
+64 characters
+```
+
+does **not** mean that some hidden `base64_decode()` is producing the WoWonder session hash.
+
+It is almost certainly the **diagnostic fingerprint**.
+
+For example:
+
+```text
+Actual main_hash_id
+    ↓
+abc123.................   20 chars
+    ↓
+SHA-256 fingerprint
+    ↓
+8f43c...64 characters...9ab
+```
+
+The log intentionally records only the second value.
+
+That is the correct security model.
+
+---
+
+# 10. Step 5 — Do NOT expect DevTools to show the session variables
+
+This is another misconception we can now eliminate.
+
+Chrome can show:
+
+```text
+BUZZSTREAMSESSID
+```
+
+because that is a browser cookie.
+
+Chrome cannot directly show:
+
+```php
+$_SESSION['hash_id']
+$_SESSION['main_hash_id']
+```
+
+because those are server-side values.
+
+The relationship is:
+
+```text
+Browser
+   │
+   │ BUZZSTREAMSESSID = random session identifier
+   ▼
+PHP session storage
+   │
+   ├── hash_id
+   ├── main_hash_id
+   ├── wo_user_id
+   ├── last_url
+   └── other $_SESSION values
+```
+
+So our log needs to correlate:
+
+```text
+BUZZSTREAMSESSID fingerprint
+        +
+main_hash_id fingerprint
+        +
+request hash fingerprint
+```
+
+That is much more useful than trying to expose `$_SESSION`.
+
+---
+
+# 11. Step 6 — What the first diagnostic run should prove
+
+After deploying the two changes, **do not immediately attempt to fix anything else**.
+
+First test one account.
+
+### Test A — Fresh Streams session
+
+Delete only:
+
+```text
+BUZZSTREAMSESSID
+```
+
+Do **not** delete:
+
+```text
+PHPSESSID
+buzz_sso
+buzz_access
+buzz_refresh
+wordpress_logged_in_...
+```
+
+Then visit:
+
+```text
+https://buzzjuice.net/streams/
+```
+
+The log should show something resembling:
+
+```text
+streams_bootstrap_before_session_start
+        ↓
+streams_session_started_before_application_includes
+        ↓
+create_hash_id_created
+        ↓
+create_main_hash_id_created
+        ↓
+streams_hash_initialization_complete
+```
+
+The critical state should be:
+
+```text
+session_name = BUZZSTREAMSESSID
+cookie_path  = /streams
+hash_id      = present, length 40
+main_hash_id = present, length 20
+```
+
+---
+
+# 12. Test B — Follow
+
+Now open a profile and tap:
+
+```text
+Follow
+```
+
+The important log event is:
+
+```text
+check_main_hash_id_success
+```
+
+or:
+
+```text
+check_main_hash_id_rejected
+```
+
+### If successful
+
+You should see:
+
+```text
+provided.sha256
+stored.sha256
+```
+
+with the **same SHA-256 fingerprint**.
+
+That means:
+
+```text
+request token
+      =
+session main_hash_id
+```
+
+and `Wo_CheckMainSession()` is functioning correctly.
+
+### If rejected
+
+The diagnostic tells us exactly which category applies:
+
+```text
+request_did_not_supply_main_hash_token
+```
+
+or:
+
+```text
+active_session_does_not_contain_main_hash_id
+```
+
+or:
+
+```text
+request_token_does_not_match_active_session
+```
+
+Those are three very different problems.
+
+---
+
+# 13. Test C — Reload
+
+Immediately reload the profile.
+
+We want:
+
+```text
+BUZZSTREAMSESSID fingerprint
+        SAME
+main_hash_id fingerprint
+        SAME
+```
+
+If the session ID changes:
+
+```text
+A
+↓
+reload
+↓
+B
+```
+
+then we investigate session regeneration/destruction/cookie handling.
+
+If:
+
+```text
+session ID = same
+main_hash_id = same
+```
+
+but the browser sends a different request token, then the problem is almost certainly in the **request-side generation/caching/rendering of the token**, not the PHP session.
+
+That distinction is crucial.
+
+---
+
+# 14. Test D — Two users
+
+Do the same thing with User-1 and User-2.
+
+We want:
+
+```text
+USER 1
+BUZZSTREAMSESSID fingerprint = A
+main_hash_id fingerprint      = B
+
+USER 2
+BUZZSTREAMSESSID fingerprint = C
+main_hash_id fingerprint      = D
+```
+
+with:
+
+```text
+A ≠ C
+B ≠ D
+```
+
+If User-2 somehow receives User-1's `main_hash_id` fingerprint, we have a much more serious session-isolation problem.
+
+If the sessions are independent but the request token is stale, we have a client/request-token problem instead.
+
+---
+
+# 15. The most important log events
+
+When you send me the next `DEBUG LOG-1`, I will specifically trace these:
+
+```text
+streams_bootstrap_before_session_start
+session_started
+streams_session_started_before_application_includes
+
+create_hash_id_created
+create_hash_id_reused
+create_hash_id_replaced_invalid_value
+
+create_main_hash_id_created
+create_main_hash_id_reused
+create_main_hash_id_replaced_invalid_value
+
+check_hash_id_success
+check_hash_id_rejected
+
+check_main_hash_id_success
+check_main_hash_id_rejected
+
+hash_operation_session_name_mismatch
+
+session_started_by_hash_function
+session_start_failed_by_hash_function
+
+request_shutdown_session_state_changed
+```
+
+The shutdown event is especially valuable.
+
+For example, if we see:
+
+```text
+BEFORE
+main_hash_id = fingerprint A
+
+AFTER
+main_hash_id = empty
+```
+
+then something during that request removed it.
+
+If instead we see:
+
+```text
+BEFORE
+session_id = A
+
+AFTER
+session_id = B
+```
+
+then we know the session itself changed.
+
+---
+
+# 16. One more thing I want to investigate from the next log
+
+The current `ww-sso-bridge.php` does:
+
+```php
+require_once __DIR__ . '/assets/init.php';
+```
+
+so every bridge request now becomes part of our session diagnostic system. 
+
+That means the next log should tell us whether the bridge is involved.
+
+If we see:
+
+```text
+request URI = /streams/ww-sso-bridge.php
+```
+
+followed by:
+
+```text
+session state changed
+main_hash_id: present → absent
+```
+
+then we have a direct lead.
+
+If the bridge requests consistently preserve:
+
+```text
+session_id
+hash_id
+main_hash_id
+```
+
+then we can largely eliminate it.
+
+---
+
+# 17. What I would NOT change yet
+
+For this diagnostic phase, leave these untouched:
+
+```text
+follow_user.php
+theme files
+requests.php
+ww-sso-bridge.php
+social/bootstrap.php
+social/core.php
+qd-sso-bridge.php
+```
+
+The repository evidence doesn't yet justify modifying them.
+
+The current `requests.php` is already passing the request hash into:
+
+```php
+Wo_CheckMainSession($hash_id)
+```
+
+so the diagnostic implementation around the validation function is sufficient to observe that transaction. 
+
+---
+
+# 18. Expected architecture after this diagnostic phase
+
+The target architecture should be:
+
+```text
+                    WORDPRESS
+                       │
+                       │ SSO/JWT
+                       ▼
+                ┌───────────────┐
+                │ Buzzjuice      │
+                │ authority      │
+                └───────┬───────┘
+                        │
+          ┌─────────────┴──────────────┐
+          │                            │
+          ▼                            ▼
+      QUICKDATE                     WOWONDER
+      /social                       /streams
+          │                            │
+     PHPSESSID                  BUZZSTREAMSESSID
+       path=/                     path=/streams
+          │                            │
+          │                     ┌──────┴───────┐
+          │                     │              │
+          │                 hash_id      main_hash_id
+          │                     │              │
+          │                     └──────┬───────┘
+          │                            │
+          │                       request token
+          │                            │
+          │                            ▼
+          │                   Wo_CheckMainSession()
+          │                            │
+          │                    hash_equals()
+          │                            │
+          │                       TRUE/FALSE
+```
+
+The fundamental invariant becomes:
+
+> **A request token must have been generated from the same active `BUZZSTREAMSESSID` session that contains the corresponding session hash.**
+
+That is the invariant the current system appears to be violating intermittently.
+
+---
+
+## Bottom line
+
+The GitHub diagnosis is substantially correct, but I recommend the **stronger diagnostic implementation above rather than simply forcing `Wo_CheckMainSession()` to `true` or modifying the SSO bridge immediately**.
+
+The most significant finding from the repository is that the current `init.php` starts the PHP session before explicitly establishing `BUZZSTREAMSESSID`.  Combined with the fact that `ww-sso-bridge.php` requires `init.php`, this gives us a concrete session-isolation issue to test rather than merely speculate about it. 
+
+And the 64-character value is almost certainly a **SHA-256 diagnostic fingerprint**, not a mysterious 64-character WoWonder hash.
+
+**Deploy the `init.php` replacement and the four-function `functions_two.php` replacement, restore normal `Wo_CheckMainSession()` validation, perform the four tests above, and then send me the resulting `DEBUG LOG-1`.** I can then trace the request sequence chronologically and identify where `BUZZSTREAMSESSID`, `hash_id`, or `main_hash_id` diverges. 
+
+<<STOP CHATGPT>>
