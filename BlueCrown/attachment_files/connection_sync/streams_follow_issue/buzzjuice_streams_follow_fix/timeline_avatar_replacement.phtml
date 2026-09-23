@@ -1,0 +1,36 @@
+<?php
+$profile_avatar_source = '';
+
+if (
+    isset($wo['user_profile']['avatar_full']) &&
+    $wo['user_profile']['avatar_full'] !== ''
+) {
+    $profile_avatar_source = $wo['user_profile']['avatar_full'];
+} elseif (
+    isset($wo['user_profile']['avatar']) &&
+    $wo['user_profile']['avatar'] !== ''
+) {
+    $profile_avatar_source = $wo['user_profile']['avatar'];
+}
+
+$profile_avatar_url = Wo_GetMedia($profile_avatar_source);
+
+if ($profile_avatar_url === '' && !empty($wo['userDefaultAvatar'])) {
+    $profile_avatar_url = Wo_GetMedia($wo['userDefaultAvatar']);
+}
+
+$profile_avatar_name = isset($wo['user_profile']['name'])
+    ? $wo['user_profile']['name']
+    : 'avatar';
+
+$profile_avatar_user_id = isset($wo['user_profile']['user_id'])
+    ? (int)$wo['user_profile']['user_id']
+    : 0;
+?>
+<img
+    id="updateImage-<?php echo $profile_avatar_user_id; ?>"
+    class="pointer"
+    src="<?php echo htmlspecialchars($profile_avatar_url, ENT_QUOTES, 'UTF-8'); ?>"
+    data-image="<?php echo htmlspecialchars($profile_avatar_url, ENT_QUOTES, 'UTF-8'); ?>"
+    alt="<?php echo htmlspecialchars($profile_avatar_name, ENT_QUOTES, 'UTF-8'); ?>"
+>
