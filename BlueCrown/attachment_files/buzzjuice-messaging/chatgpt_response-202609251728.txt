@@ -1,0 +1,998 @@
+<<START CHATGPT>>
+
+## Recommended architecture
+
+I reviewed the two prior architecture documents, the current Buzzjuice connectivity control plane, the BP Better Messages source, and the current Better Messages hook/function documentation. The GitHub review's central recommendation is correct: **do not synchronize three independent chat databases**. Make BP Better Messages the canonical messaging engine and make Streams/Socials presentation/adaptation layers. 
+
+The installed repository version I reviewed is **BP Better Messages 2.15.17**, and its source confirms the relevant programmatic functions and hooks, including `new_message()`, `get_pm_thread_id()`, `get_messages()`, `get_recipients()`, `messages_mark_thread_read()`, `better_messages_before_new_thread`, `better_messages_before_message_send`, `better_messages_can_send_message`, `better_messages_message_sent`, and `better_messages_thread_updated`. 
+
+### The resulting architecture
+
+```text
+                    BUZZJUICE NETWORK
+                           │
+                           ▼
+              ┌──────────────────────────┐
+              │       WORDPRESS           │
+              │                           │
+              │   BP Better Messages     │
+              │   Canonical messages      │
+              │   Threads/participants    │
+              │   Read/unread             │
+              │                           │
+              │   BZJ Messaging Core      │
+              │   ├─ Gateway              │
+              │   ├─ Authentication       │
+              │   ├─ Policy               │
+              │   ├─ Chat requests        │
+              │   └─ Idempotency          │
+              └────────────┬─────────────┘
+                           │
+                    Signed HTTPS
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+      ┌──────▼──────┐             ┌──────▼──────┐
+      │   STREAMS   │             │   SOCIALS   │
+      │             │             │             │
+      │ local PHP   │             │ local PHP   │
+      │ adapter     │             │ adapter     │
+      │      │      │             │      │      │
+      │ Unified UI  │             │ Unified UI  │
+      └─────────────┘             └─────────────┘
+```
+
+This also keeps the existing Connections Control Plane authoritative for relationships/blocks rather than letting messaging independently decide friendship state. Your existing ledger contains `connection_state`, `requested_by`, and directional block fields, so the messaging layer can consume that state without duplicating relationship logic. ([GitHub][1])
+
+---
+
+# What I implemented
+
+I generated a **Phase-1 implementation package** incorporating the substantive GitHub recommendations:
+
+[Download the Buzzjuice Unified Messaging Phase-1 package](sandbox:/mnt/data/buzzjuice-unified-messaging-phase1.zip)
+
+### Package structure
+
+```text
+buzzjuice-unified-messaging/
+│
+├── wp-content/
+│   └── mu-plugins/
+│       └── bzj-messaging.php
+│
+└── shared/
+    └── bzj-messaging/
+        ├── bzj-msg-streams-client.php
+        ├── bzj-msg-socials-client.php
+        ├── README.md
+        │
+        ├── js/
+        │   └── bzj-messaging-client.js
+        │
+        ├── addons/
+        │   └── example-addon.php
+        │
+        └── int/
+            ├── streams-adapter.example.php
+            └── socials-adapter.example.php
+```
+
+The PHP files passed PHP syntax validation.
+
+---
+
+# Important improvements over the earlier proposal
+
+### 1. No `wp-load.php`
+
+I deliberately did **not** implement:
+
+```php
+require_once '/path/to/wp-load.php';
+```
+
+inside Streams or Socials.
+
+The GitHub analysis correctly identified memory, bootstrap, global-variable, cookie/session, plugin-side-effect and rollback risks. The signed gateway is a cleaner first integration boundary. 
+
+`wp-load.php` can still become a future optimization if we later prove that the shared runtime is safe.
+
+---
+
+### 2. Existing Streams/Socials APIs remain reference-only
+
+The package does **not** use:
+
+```text
+streams/api/v2/endpoints/chat.php
+streams/api/v2/endpoints/notifications.php
+
+social/endpoint/v1/models/messages.php
+social/endpoint/v1/models/notifications.php
+```
+
+as the messaging contract.
+
+Instead:
+
+```text
+Streams/Socials
+      ↓
+BZJ Messaging Client
+      ↓
+/wp-json/bzj/v6/messaging
+      ↓
+BP Better Messages
+```
+
+That follows the strongest recommendation from the GitHub review. 
+
+---
+
+### 3. Dedicated messaging secrets
+
+I did **not** reuse the existing connection-management secrets.
+
+The package expects:
+
+```text
+BZJ_STREAMS_MESSAGING_SECRET
+BZJ_SOCIALS_MESSAGING_SECRET
+```
+
+with different long random values.
+
+This is important because:
+
+```text
+Connection control plane
+        ≠
+Messaging control plane
+```
+
+The existing `bzj-connection-client.php` provided a useful model for signed server-to-server communication, but the messaging credentials should remain independent. 
+
+---
+
+### 4. Short-lived messaging sessions
+
+The gateway issues a **10-minute messaging session** with silent renewal.
+
+The flow is:
+
+```text
+Streams local authenticated session
+             ↓
+Streams PHP adapter
+             ↓
+signed /messaging/session request
+             ↓
+WordPress verifies external ID
+             ↓
+10-minute messaging token
+             ↓
+Streams adapter stores token server-side
+```
+
+Same for Socials.
+
+The browser does **not** receive the WordPress bearer token directly.
+
+That is an improvement over allowing the browser to directly authenticate against the WordPress gateway.
+
+---
+
+### 5. Replay/idempotency protection
+
+The package creates:
+
+```text
+wp_bzj_chat_idempotency
+```
+
+Every send operation receives a UUID.
+
+For example:
+
+```text
+Socials
+   │
+   │ request_id = 8c...
+   ▼
+WordPress
+   │
+   ├── send message
+   │
+   └── store result
+```
+
+If Socials times out and retries the same UUID, the gateway can return the existing operation rather than intentionally creating a duplicate message.
+
+This is particularly important for messaging because network timeouts commonly occur **after** the server has successfully saved the message.
+
+---
+
+# Data ownership
+
+The implementation preserves this separation:
+
+| System                       | Authority                                                            |
+| ---------------------------- | -------------------------------------------------------------------- |
+| BuddyBoss / Connections      | Connections, blocks, relationship state                              |
+| BP Better Messages           | Threads, messages, participants, read/unread                         |
+| BZJ Messaging                | Gateway, external authentication, policy, chat requests, idempotency |
+| Streams                      | UI + local authentication                                            |
+| Socials                      | UI + local authentication                                            |
+| Streams Node.js              | Future transport only                                                |
+| Old Streams/Socials chat DBs | Legacy during transition                                             |
+
+That is the architectural boundary I would protect most strongly.
+
+---
+
+# Current Phase-1 API
+
+The new private gateway is:
+
+```text
+POST /wp-json/bzj/v6/messaging/session
+
+GET  /wp-json/bzj/v6/messaging/conversations
+POST /wp-json/bzj/v6/messaging/conversations
+
+GET  /wp-json/bzj/v6/messaging/conversations/{id}
+
+GET  /wp-json/bzj/v6/messaging/conversations/{id}/messages
+POST /wp-json/bzj/v6/messaging/conversations/{id}/messages
+
+POST /wp-json/bzj/v6/messaging/conversations/{id}/read
+
+GET  /wp-json/bzj/v6/messaging/unread
+GET  /wp-json/bzj/v6/messaging/updates
+
+POST /wp-json/bzj/v6/messaging/requests
+POST /wp-json/bzj/v6/messaging/requests/{id}/accept
+POST /wp-json/bzj/v6/messaging/requests/{id}/decline
+
+GET /wp-json/bzj/v6/messaging/policy/{target}
+```
+
+The gateway calls Better Messages' own functions instead of writing directly to its tables. Better Messages explicitly exposes the functions needed for this approach. ([Better Messages][2])
+
+---
+
+# First-contact chat
+
+I made one additional correction that is important in practice.
+
+Simply creating an empty Better Messages thread isn't enough because Better Messages' conversation list can exclude empty ordinary threads. Its own `get_threads()` implementation requires a message for normal threads. 
+
+Therefore, when an unconnected user starts a first-contact conversation, the package:
+
+1. creates/resolves the Better Messages thread;
+2. creates a `bzj_chat_requests` record;
+3. creates a request notice message;
+4. prevents ordinary replies;
+5. lets the recipient accept/decline;
+6. allows conversation after acceptance.
+
+The request itself is **not** treated as Better Messages moderation state. That keeps:
+
+```text
+chat request
+≠
+content moderation
+≠
+BuddyBoss connection
+```
+
+which is much cleaner for the future H&S/Palmier system.
+
+---
+
+# Current policy
+
+For Phase 1:
+
+```text
+BLOCKED
+   ↓
+DENY
+
+CONNECTED
+   ↓
+ALLOW
+
+NOT CONNECTED
+   ↓
+FIRST-CONTACT REQUEST
+
+REQUEST ACCEPTED
+   ↓
+ALLOW CHAT
+```
+
+The important part is that this is enforced server-side.
+
+There are checks in:
+
+```text
+better_messages_before_new_thread
+better_messages_before_message_send
+better_messages_can_send_message
+```
+
+so a malicious client cannot simply remove a disabled Send button and bypass the policy. Better Messages itself uses these hooks for restrictions, and its source confirms their role in the message lifecycle. 
+
+---
+
+# Logging
+
+Logging is deliberately switchable.
+
+WordPress:
+
+```php
+define('BZJ_MESSAGING_LOG_ENABLED', true);
+```
+
+Platform clients:
+
+```php
+define('BZJ_MESSAGING_CLIENT_LOG_ENABLED', true);
+```
+
+The logs are intended for:
+
+```text
+/data/logs/bzj-messaging.log
+/data/logs/bzj-messaging-client.log
+```
+
+They record things such as:
+
+```text
+request ID
+platform
+WP user ID
+external ID
+operation
+HTTP status
+thread ID
+message ID
+policy result
+```
+
+but deliberately avoid:
+
+```text
+message bodies
+passwords
+cookies
+JWTs
+SSO secrets
+messaging secrets
+Authorization headers
+```
+
+This follows the same diagnostic philosophy you've been using with the Connections integration.
+
+---
+
+# What is deliberately NOT in Phase 1
+
+This is important because it keeps the first deployment testable.
+
+### Not yet implemented
+
+```text
+❌ Historical message migration
+❌ Native Streams groups
+❌ Native Socials groups
+❌ Media synchronization
+❌ GIF/sticker synchronization
+❌ Reactions
+❌ Voice messages
+❌ Video calls
+❌ End-to-end encryption
+❌ Push-device bridge
+❌ Palmier charging
+❌ H&S lesson gating
+❌ Chat minting
+❌ Node.js realtime
+❌ WebSockets
+```
+
+The GitHub recommendation was to stage these rather than putting them into the initial messaging kernel. 
+
+---
+
+# One deliberate deviation from the GitHub recommendation
+
+GitHub suggested immediately creating:
+
+```text
+wp_bzj_chat_identity_map
+```
+
+I would **not make that a prerequisite for Phase 1**.
+
+The current Buzzjuice system already has:
+
+```text
+wp_usermeta
+    ├── wo_user_id
+    └── qd_user_id
+```
+
+and the Connections Control Plane already relies on those mappings. ([GitHub][1])
+
+The Phase-1 gateway therefore verifies:
+
+```text
+Streams external ID
+        ↓
+wo_user_id
+        ↓
+WordPress user
+
+Socials external ID
+        ↓
+qd_user_id
+        ↓
+WordPress user
+```
+
+This avoids introducing a second identity authority before the basic system works.
+
+**Phase 2**, once account-linking requirements become more sophisticated, should add:
+
+```text
+wp_bzj_chat_identity_map
+```
+
+with conflict detection, status, verification state and audit history.
+
+That is a staged implementation of the GitHub recommendation rather than ignoring it.
+
+---
+
+# Step-by-step implementation procedure
+
+## Step 0 — Back up
+
+Before touching production:
+
+```text
+WordPress files
+WordPress database
+Streams files/database
+Socials files/database
+```
+
+Also record the current:
+
+```text
+BP Better Messages version
+WordPress version
+BuddyBoss version
+PHP version
+MySQL/MariaDB version
+```
+
+The repository currently shows Better Messages 2.15.17. 
+
+---
+
+## Step 1 — Create the messaging secrets
+
+Create two long random secrets:
+
+```text
+BZJ_STREAMS_MESSAGING_SECRET
+BZJ_SOCIALS_MESSAGING_SECRET
+```
+
+Do **not** use:
+
+```text
+BZJ_STREAMS_SYNC_SECRET
+BZJ_SOCIALS_SYNC_SECRET
+```
+
+and do not put either secret in JavaScript.
+
+---
+
+## Step 2 — Install the MU plugin
+
+Copy:
+
+```text
+wp-content/mu-plugins/bzj-messaging.php
+```
+
+to:
+
+```text
+/home/enkaby/public_html/buzzjuice.net/wp-content/mu-plugins/bzj-messaging.php
+```
+
+Do not modify the BP Better Messages plugin itself.
+
+---
+
+## Step 3 — Install the shared clients
+
+Copy:
+
+```text
+shared/bzj-messaging/
+```
+
+to:
+
+```text
+/home/enkaby/public_html/buzzjuice.net/shared/bzj-messaging/
+```
+
+The directory structure is intentionally ready for:
+
+```text
+addons/
+int/
+js/
+```
+
+as you proposed.
+
+---
+
+## Step 4 — Turn logging on temporarily
+
+For the first installation, enable:
+
+```php
+define('BZJ_MESSAGING_LOG_ENABLED', true);
+```
+
+After successful testing, turn it off.
+
+---
+
+## Step 5 — Confirm database creation
+
+The MU plugin will create:
+
+```text
+wp_bzj_chat_requests
+wp_bzj_chat_idempotency
+```
+
+It does **not** create a duplicate message database.
+
+Better Messages remains responsible for:
+
+```text
+threads
+messages
+recipients
+```
+
+---
+
+# Step 6 — Test the WordPress gateway before touching Streams/Socials
+
+This is the most important stage.
+
+Do **not** modify Streams or Socials yet.
+
+First prove:
+
+```text
+WordPress
+   ↓
+BZJ Messaging
+   ↓
+Better Messages
+```
+
+using two WordPress users.
+
+Test:
+
+```text
+A → B
+B → A
+```
+
+Then:
+
+```text
+A creates conversation
+B sees request
+B accepts
+A sends
+B receives
+B replies
+A receives
+```
+
+Then:
+
+```text
+B declines
+A attempts reply
+→ denied
+```
+
+Then test blocking.
+
+---
+
+# Step 7 — Build the Streams adapter
+
+The package contains:
+
+```text
+shared/bzj-messaging/int/streams-adapter.example.php
+```
+
+This is intentionally an adapter template rather than modifying `streams/requests.php` blindly.
+
+The adapter should obtain the authenticated WoWonder user from the **existing server-side session**.
+
+The browser must never submit:
+
+```text
+actor_external_id
+```
+
+as an authority.
+
+The server should determine it.
+
+---
+
+# Step 8 — Build the Socials adapter
+
+Do the equivalent using:
+
+```text
+shared/bzj-messaging/int/socials-adapter.example.php
+```
+
+and the existing authenticated QuickDate user.
+
+Again:
+
+```text
+browser
+  ↓
+Socials session
+  ↓
+Socials PHP
+  ↓
+BZJ Messaging client
+```
+
+not:
+
+```text
+browser
+  ↓
+"trust this user_id"
+```
+
+---
+
+# Step 9 — Add Network Messages beside the existing chat
+
+Do **not** initially replace:
+
+```text
+WoWonder chat
+QuickDate chat
+```
+
+Instead add:
+
+```text
+Network Messages
+```
+
+For example:
+
+```text
+Messages
+├── Network Messages
+└── Legacy Chat
+```
+
+This gives us an immediate rollback.
+
+The GitHub review specifically recommended retaining legacy chat during the pilot. 
+
+---
+
+# Step 10 — Enable five-second polling
+
+Initial configuration:
+
+```text
+Realtime: OFF
+Polling: 5 seconds
+```
+
+The client already contains the common polling helper.
+
+Conceptually:
+
+```text
+Streams browser
+      ↓ every 5 sec
+Streams AJAX
+      ↓
+BZJ Messaging
+      ↓
+WordPress
+      ↓
+Better Messages
+```
+
+The same applies to Socials.
+
+Better Messages itself already has an incremental update architecture based on recipient update state, so polling is a sensible first transport. 
+
+---
+
+# Step 11 — Six-direction test
+
+This should become the formal Phase-1 acceptance test:
+
+```text
+WordPress → Streams
+WordPress → Socials
+
+Streams → WordPress
+Streams → Socials
+
+Socials → WordPress
+Socials → Streams
+```
+
+For every direction verify:
+
+```text
+✓ same conversation
+✓ same message
+✓ correct sender
+✓ correct recipient
+✓ message history
+✓ unread count
+✓ read state
+✓ reply
+✓ notification
+✓ no duplicate messages
+```
+
+---
+
+# Step 12 — Only then introduce H&S gating
+
+Once basic messaging is stable, we can extend:
+
+```text
+BZJ_Unified_Chat_Policy
+```
+
+to:
+
+```text
+Block
+ ↓
+Connection
+ ↓
+First-contact request
+ ↓
+H&S eligibility
+ ↓
+Temporary access
+ ↓
+Palmier/message charge
+ ↓
+Expiry
+```
+
+Your example then becomes possible:
+
+```text
+User A
+HS1700
+
+User B
+Orientation only
+```
+
+Attempt:
+
+```text
+B → A
+```
+
+Gateway responds:
+
+```text
+status: restricted
+
+Complete HS1800
+or
+spend P5/message
+```
+
+Then the eventual policy response can contain:
+
+```json
+{
+  "status": "temporary_access_available",
+  "reason": "hs_level_required",
+  "credits_remaining": 37,
+  "cost_per_message": 5
+}
+```
+
+This is exactly where your existing Better Messages points functionality becomes useful, but I would keep the **eligibility decision in BZJ policy**, rather than allowing a points add-on to become the overall authority.
+
+---
+
+# Step 13 — Add notifications
+
+Once polling works, the next layer is:
+
+```text
+Better Messages
+       ↓
+BZJ messaging event
+       ├── WordPress notification
+       ├── Streams notification
+       └── Socials notification
+```
+
+Better Messages exposes post-send and push-related extension points, including `better_messages_message_sent` and push hooks, making this feasible without modifying the plugin itself. 
+
+---
+
+# Step 14 — Add Streams realtime
+
+Only after polling has proven reliable:
+
+```text
+Better Messages
+       ↓
+BZJ event
+       ↓
+Streams Node.js
+       ↓
+existing socket transport
+       ↓
+Streams browser
+```
+
+The Node.js layer should **never become the message database**.
+
+It should only tell Streams:
+
+```text
+Something changed.
+Fetch authoritative data.
+```
+
+Possible events:
+
+```text
+unified_chat.message
+unified_chat.thread_updated
+unified_chat.request_received
+unified_chat.read_state_changed
+```
+
+That makes your requested configuration straightforward:
+
+```text
+BZJ_UNIFIED_CHAT_REALTIME_ENABLED=false
+```
+
+initially, then:
+
+```text
+false → polling
+true  → Streams realtime
+```
+
+The existing Streams Node.js infrastructure therefore becomes an optional transport adapter rather than a dependency of the messaging architecture. 
+
+---
+
+# Step 15 — Groups
+
+I strongly recommend this order:
+
+```text
+1-to-1
+   ↓
+Better Messages groups
+   ↓
+Streams/Socials native groups
+```
+
+Do **not** attempt:
+
+```text
+WoWonder group ↔ QuickDate group ↔ BP group
+```
+
+yet.
+
+Group synchronization requires decisions about:
+
+```text
+owner
+membership authority
+moderation
+invitation
+removal
+deletion
+history
+ID mapping
+failure recovery
+```
+
+before it becomes safe. 
+
+---
+
+# Final target
+
+The system can eventually evolve into:
+
+```text
+                         BUZZJUICE
+                             │
+                             ▼
+                  ┌────────────────────┐
+                  │     WORDPRESS      │
+                  │                    │
+                  │ Better Messages    │
+                  │ BZJ Messaging      │
+                  │ BZJ Connections    │
+                  │ H&S Policy         │
+                  │ Palmier            │
+                  │ Notifications      │
+                  └─────────┬──────────┘
+                            │
+                    Signed Messaging
+                         Gateway
+                       /          \
+                      /            \
+                     ▼              ▼
+                STREAMS          SOCIALS
+                   │                │
+             Unified Chat      Unified Chat
+                   │                │
+             Polling / RT          Polling
+                   │
+             Node.js later
+```
+
+That gives Buzzjuice **one messaging system with multiple interfaces**, rather than three messaging systems that have to continuously synchronize.
+
+The biggest architectural win is that a message sent on Socials becomes the **same message**, in the **same canonical conversation**, that appears on Streams and WordPress. There is no copy to reconcile and no "which database is correct?" problem. This is the direction supported by the combined architecture review and the actual Better Messages capabilities. 
+
+**Next implementation step:** install the package only on WordPress first and run the two-user Better Messages gateway test. Do **not** modify `streams/` or `social/` chat files until that WordPress-side test passes.
+
+[1]: https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/mu-plugins/bzj-connections-sync.php "buzzjuice.net/wp-content/mu-plugins/bzj-connections-sync.php at main · cupidblack/buzzjuice.net · GitHub"
+[2]: https://www.better-messages.com/hooks/php-functions/ "Better Messages PHP Functions Reference — Better_Messages() API"
+
+
+<<STOP CHATGPT>>
