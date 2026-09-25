@@ -1,0 +1,849 @@
+<<START GITHUB>>
+
+Short summary / recommendation
+- Make WordPress (BP Better Messages) the authoritative message store & routing hub, and implement a small, secure “Buzz Messaging” MU-plugin (wp-content/mu-plugins/bzj-messaging.php) that exposes a signed REST API and event dispatcher.
+- Implement lightweight signed clients for Streams (WoWonder) and Socials (QuickDate) that call the MU-plugin when a local chat action occurs, and listen for inbound events (push via sockets or fallback polling).
+- Reuse patterns already used in the repo (signed HMAC+timestamp pattern from shared/bzj-connection-client.php and the WP-side queuing/retry patterns from wp-content/mu-plugins/bzj-connections-sync.php).
+- Provide a NodeJS bridge (optionally reuse streams/nodejs) for real-time delivery (socket.io) and/or Redis pub/sub for scale. Real-time mode is a configuration toggle.
+- Start incrementally: (A) server-side notifications only, (B) one-way message posting into WP (streams/socials → WP), (C) two-way messages with server pushes (WP → streams/socials) and socket delivery, (D) gating/credits/features layered on top.
+
+Below I give:
+1) Architecture & dataflow
+2) Security, identity & mapping
+3) Concrete implementation plan (step-by-step, prioritized)
+4) Reference code examples and file layout — copy/paste ready (mu-plugin skeleton, shared client, streams/socials client-call snippets, NodeJS bridge blueprint, JS subscribe fallback)
+5) Testing/rollback/monitoring checklist
+6) Feature extension notes (gating, credits, stickers, group chat, push notifications)
+7) Deployment considerations and caveats
+
+1) Architecture & dataflow (high level)
+- Authoritative store: BP Better Messages (WP).
+- Event router (MU-plugin): receives signed webhooks/REST calls from Streams/Socials and from internal WP hooks; stores events in a lightweight queue and writes messages using BP Better Messages plugin API (or safe DB fallback).
+- Outbound dispatcher: MU-plugin notifies other platforms about new messages (via nodejs socket, or via signed webhooks to Streams/Socials endpoints). Also publishes to NodeJS/Redis for real-time delivery.
+- Clients on Streams/Socials:
+  - On send: call MU-plugin REST endpoint (signed). MU-plugin will create the message in WP store and publish event.
+  - On receive: subscribe to NodeJS sockets, or long-poll / poll / Server-Sent Events as fallback to get new inbound messages/receipt updates.
+- Mapping: user mapping table associates user IDs between platforms (the bzj-connections-sync plugin already uses similar mapping for connections). Use or extend that ledger.
+
+Dataflow for a message:
+1. Streams user sends message -> Streams local UI calls Streams backend -> Streams backend triggers shared client which calls WP MU-plugin /message/create (signed).
+2. MU-plugin validates signature, creates message in BP Better Messages store, returns success.
+3a. If real-time enabled, MU-plugin pushes event to NodeJS (or Redis) which broadcasts to recipients (Streams/Socials socket clients). Recipients get live update.
+3b. If no real-time, recipient client polls MU-plugin for new events (periodic AJAX).
+4. Read receipts and reactions go back via the same signed flow.
+
+2) Security, identity & mapping
+- Use HMAC (sha256) signature over timestamp + JSON payload (like shared/bzj-connection-client.php). Include X-BZJ-Timestamp, X-BZJ-Signature headers. Reject if timestamp skew > configurable threshold (e.g., 120s).
+- Shared secrets stored in environment or constants:
+  - BZJ_MESSAGING_STREAMS_SECRET
+  - BZJ_MESSAGING_SOCIALS_SECRET
+  - or BUZZ_MESSAGING_SECRET (fallback).
+- Map user ids across platforms:
+  - Use existing mapping or create new meta-key usermeta like 'bzj_streams_id' and 'bzj_socials_id' for WP users.
+  - The Streams/Socials client will include the local platform id and the WP user id (if known). If the only reliable identifier is platform-local, the MU-plugin can map WP user via an admin-provisioned mapping or a background reconciliation (similar to BZJ_Connections_Sync ledger).
+- Rate-limit and validate inputs server side; sanitize content for stored HTML.
+
+3) Step-by-step implementation (prioritized, with estimated complexity and test steps)
+
+Phase 0 — prep and small audits (1–2 days)
+- Audit BP Better Messages: find server-side APIs for inserting messages & hooking into message events. Identify stable functions or WP/BP actions used on message send/receive (e.g., action like 'bp_better_messages_message_sent' — consult plugin docs). If plugin provides public PHP functions to create messages, prefer them. If not, identify DB schema and table names.
+- Audit mapping: check existing user mapping patterns in repo (shared/wwqd_bridge.php, bzj-connections-sync). Decide canonical mapping keys.
+
+Phase 1 — MU-plugin & signed REST API (2–4 days)
+- Implement wp-content/mu-plugins/bzj-messaging.php
+  - REST routes:
+    - POST /bzj-messaging/v1/message (create a message into WP)
+    - POST /bzj-messaging/v1/event (generic events: read, deleted, typing)
+    - GET /bzj-messaging/v1/poll?to_external_id=... (fallback polling)
+    - GET /bzj-messaging/v1/status (health/status)
+  - Signature verification function (HMAC + timestamp)
+  - Queuing/retry layer similar to bzj-connections-sync (insert into WP table for pending events; process with cron).
+  - Dispatch to NodeJS or webhooks to Streams/Socials (if real-time disabled, rely on polling).
+
+Deliverables: mu-plugin skeleton, database table for events (events: uuid, payload, attempts, next_attempt_at), logging.
+
+Phase 2 — WP side hooks (1–2 days)
+- Hook into BP Better Messages send/receive actions to push events to Streams/Socials:
+  - on message create by WP user (local WP client): enqueue event to dispatch to other platforms (so Streams users get WP-originated messages).
+  - on read receipts: enqueue read event.
+
+Phase 3 — Shared clients for Streams & Socials (1–2 days)
+- Implement shared client library (PHP) in shared/bzj-messaging/bzj-msg-client.php (modeled from shared/bzj-connection-client.php) that Streams & Socials call to post message events to MU-plugin.
+- Add a small safe wrapper in Streams: call client from the chat send handler (e.g., social/requests/ajax/chat.php send_message route and streams functions that create messages) so instead of storing locally only, it sends to WP.
+- Clients always sign requests and include mapping ids and platform metadata.
+
+Phase 4 — Real-time bridge (nodejs) integration (optional but recommended) (2–4 days)
+- Reuse streams/nodejs code. Have MU-plugin post events to NodeJS HTTP receiver endpoint or publish to Redis.
+- NodeJS broadcasts to connected clients (socket.io).
+- Client JS in Streams & Socials subscribes to socket and updates UI. Provide fallback AJAX poll.
+
+Phase 5 — UI integration & JS client (2–4 days)
+- Shared JS clients in shared/bzj-messaging/js that will:
+  - open socket or fallback poll
+  - display incoming messages/notifications
+  - show push notifications via browsers (ask permission)
+- Update Streams/ Socials chat JS to use the new path for send/receive events. Provide fallbacks for existing logic.
+
+Phase 6 — Gating, Credits & Features (ongoing)
+- Implement gating checks on MU-plugin before accepting message creation (call back to Streams/Socials for user completion status or check central usermeta flags).
+- Implement per-message charges and accept/decline flows. Can be enforced either server-side (MU-plugin rejects) or client-side (UI shows modal).
+
+Phase 7 — rollout, monitoring & reconciliation
+- Stepwise deployment (see testing below).
+- Monitor logs (a central file) and set up reconciliation cron (MU-plugin to reprocess pending events).
+
+4) Concrete code examples (skeletons / snippets)
+- These are minimal, safe and intended to be adapted to your codebase. Do not run without review. Use in mu-plugins or shared folder.
+
+A) MU-plugin skeleton — wp-content/mu-plugins/bzj-messaging.php
+```php
+<?php
+/**
+ * name: BZJ Messaging - MU plugin
+ * path: wp-content/mu-plugins/bzj-messaging.php
+ *
+ * Exposes signed REST endpoints for Streams/Socials to push/pull messages.
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    // Running as must-use plugin; assume WP environment available.
+}
+
+class BZJ_Messaging {
+
+    const NONCE_HEADER = 'X-BZJ-Signature';
+    const TS_HEADER = 'X-BZJ-Timestamp';
+    const HEADER_ORIGIN = 'X-BZJ-Platform';
+    const SIGNATURE_ALGO = 'sha256';
+    const MAX_SKEW = 120; // seconds
+
+    private static $instance;
+
+    public static function instance() {
+        if (!self::$instance) self::$instance = new self();
+        return self::$instance;
+    }
+
+    private function __construct() {
+        add_action('rest_api_init', [$this, 'register_routes']);
+    }
+
+    public function register_routes() {
+        register_rest_route('bzj-messaging/v1', '/message', [
+            'methods'  => 'POST',
+            'callback' => [$this, 'route_message_create'],
+            'permission_callback' => '__return_true',
+        ]);
+        register_rest_route('bzj-messaging/v1', '/event', [
+            'methods'  => 'POST',
+            'callback' => [$this, 'route_event'],
+            'permission_callback' => '__return_true',
+        ]);
+        register_rest_route('bzj-messaging/v1', '/status', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'route_status'],
+            'permission_callback' => '__return_true',
+        ]);
+        // More routes: poll, history, reconciliation endpoints
+    }
+
+    private function get_secret_for_origin($origin) {
+        // Map platform name to secret constant or env var
+        $origin = strtolower((string)$origin);
+        if ($origin === 'streams') {
+            return defined('BZJ_MESSAGING_STREAMS_SECRET') ? BZJ_MESSAGING_STREAMS_SECRET : getenv('BZJ_MESSAGING_STREAMS_SECRET');
+        } elseif ($origin === 'socials') {
+            return defined('BZJ_MESSAGING_SOCIALS_SECRET') ? BZJ_MESSAGING_SOCIALS_SECRET : getenv('BZJ_MESSAGING_SOCIALS_SECRET');
+        }
+        // fallback
+        return defined('BUZZ_MESSAGING_SECRET') ? BUZZ_MESSAGING_SECRET : getenv('BUZZ_MESSAGING_SECRET');
+    }
+
+    private function verify_request($request) {
+        $origin = $request->get_header(self::HEADER_ORIGIN) ?: '';
+        $sig = $request->get_header(self::NONCE_HEADER) ?: '';
+        $ts = $request->get_header(self::TS_HEADER) ?: '';
+
+        if ($sig === '' || $ts === '' || $origin === '') {
+            return new WP_Error('bzj_auth', 'Missing authentication headers', ['status' => 401]);
+        }
+
+        if (abs(time() - (int)$ts) > self::MAX_SKEW) {
+            return new WP_Error('bzj_auth', 'Request timestamp skewed', ['status' => 401]);
+        }
+
+        $secret = $this->get_secret_for_origin($origin);
+        if (empty($secret)) {
+            return new WP_Error('bzj_auth', 'No secret configured for origin', ['status' => 401]);
+        }
+
+        $body = $request->get_body();
+        $expected = hash_hmac(self::SIGNATURE_ALGO, $ts . '.' . $body, $secret);
+
+        if (!hash_equals($expected, $sig)) {
+            return new WP_Error('bzj_auth', 'Invalid signature', ['status' => 401]);
+        }
+        return true;
+    }
+
+    public function route_status( $request ) {
+        return rest_ensure_response(['status' => 'ok', 'version'=> 'bzj-messaging-0.1']);
+    }
+
+    public function route_message_create( $request ) {
+        $v = $this->verify_request($request);
+        if ( is_wp_error($v) ) return $v;
+
+        $payload = json_decode($request->get_body(), true);
+        if (!is_array($payload)) {
+            return new WP_Error('bad_payload', 'Invalid JSON', ['status' => 400]);
+        }
+
+        // Required fields: from_external_id, to_external_id (or to_wp_id), text, platform
+        // Validate & sanitize
+        $from = isset($payload['from_external_id']) ? intval($payload['from_external_id']) : 0;
+        $to = isset($payload['to_external_id']) ? intval($payload['to_external_id']) : 0;
+        $text = isset($payload['text']) ? wp_kses_post($payload['text']) : '';
+
+        if ($from < 1 || $to < 1 || $text === '') {
+            return new WP_Error('missing', 'Missing fields', ['status' => 400]);
+        }
+
+        // Map external ids to WP user ids if necessary (implement mapping function)
+        $from_wp_id = $this->map_external_to_wp('streams', $from) ?: $from;
+        $to_wp_id = $this->map_external_to_wp('streams', $to) ?: $to;
+
+        // Insert message using BP Better Messages plugin API if available
+        if (function_exists('bp_better_messages_insert_message')) {
+            $res = bp_better_messages_insert_message([
+                'sender_id' => $from_wp_id,
+                'recipient_id' => $to_wp_id,
+                'message' => $text,
+                'type' => 'text',
+            ]);
+        } else {
+            // fallback: trigger hook that plugin listens to, or DB insert
+            do_action('bzj_messaging_create_message_fallback', [
+                'from' => $from_wp_id,
+                'to' => $to_wp_id,
+                'text' => $text,
+                'raw_payload' => $payload
+            ]);
+            $res = true; // actual write must be implemented by hooking into above, or direct DB
+        }
+
+        if (!$res) {
+            // enqueue to local queue (to implement)
+            return new WP_Error('insert_failed','Could not create message', ['status'=>500]);
+        }
+
+        // dispatch to other platforms (e.g., nodejs/redis/webhook)
+        $this->dispatch_event('message_created', $payload);
+
+        return rest_ensure_response(['status' => 200, 'ok' => true]);
+    }
+
+    private function dispatch_event($event, $payload) {
+        // push to nodejs or webhook; keep as abstraction.
+        // Implement HTTP call to NodeJS or publish to Redis here.
+    }
+
+    private function map_external_to_wp($platform, $external_id) {
+        // Implement mapping via usermeta lookup or a dedicated table; placeholder:
+        global $wpdb;
+        $meta_key = ($platform === 'streams') ? 'bzj_streams_id' : 'bzj_socials_id';
+        return (int) $wpdb->get_var($wpdb->prepare("SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key=%s AND meta_value=%s LIMIT 1", $meta_key, (string)$external_id));
+    }
+}
+
+BZJ_Messaging::instance();
+```
+Notes:
+- Replace bp_better_messages_insert_message with the correct BP Better Messages method after plugin API audit. If plugin requires different fields call its API accordingly.
+- dispatch_event must be implemented to send events to NodeJS/Redis or to POST to Streams/Socials endpoints.
+
+B) Shared client library for Streams & Socials (shared/bzj-messaging/bzj-msg-client.php)
+```php
+<?php
+/**
+ * Minimal signed client to post events to WP MU-plugin
+ * Place in shared/bzj-messaging/bzj-msg-client.php
+ */
+
+function bzj_msg_secret($origin) {
+    $name = strtoupper('bzj_messaging_' . $origin . '_secret');
+    if (defined($name) && constant($name)) return constant($name);
+    if (getenv('BZJ_MESSAGING_SECRET')) return getenv('BZJ_MESSAGING_SECRET');
+    return '';
+}
+
+function bzj_msg_post($origin, $endpoint, $payload) {
+    $secret = bzj_msg_secret($origin);
+    if (!$secret) throw new RuntimeException('Messaging secret not configured');
+
+    $raw = json_encode($payload);
+    $ts = (string) time();
+    $sig = hash_hmac('sha256', $ts . '.' . $raw, $secret);
+
+    $base = defined('BUZZWORDPRESS_API_BASE') ? BUZZWORDPRESS_API_BASE : 'https://buzzjuice.net/wp-json';
+    $url = rtrim($base, '/') . '/bzj-messaging/v1/' . ltrim($endpoint, '/');
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $raw,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'X-BZJ-Timestamp: ' . $ts,
+            'X-BZJ-Signature: ' . $sig,
+            'X-BZJ-Platform: ' . $origin
+        ],
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($err !== '') return ['success' => false, 'error' => $err, 'http' => $http, 'raw' => $resp];
+    $decoded = json_decode($resp, true);
+    return is_array($decoded) ? $decoded : ['success' => true, 'http' => $http, 'raw' => $resp];
+}
+```
+
+C) Example Streams call to MU-plugin (in social/requests/ajax/chat.php or streams chat send handler)
+- Find where send_message is handled in social/requests/ajax/chat.php or streams endpoint and add a call to shared client after local validations but before final success. Example conceptual snippet:
+```php
+// after validating message variables: $from_local_id, $to_local_id, $text
+require_once __DIR__ . '/../../shared/bzj-messaging/bzj-msg-client.php';
+$payload = [
+    'from_external_id' => (int)$from_local_id,
+    'to_external_id' => (int)$to_local_id,
+    'text' => $text,
+    'meta' => ['source' => 'social']
+];
+$res = bzj_msg_post('socials', 'message', $payload);
+// inspect $res and handle fallback local only storage if $res indicates failure
+```
+Important: wrap this behind a feature flag (config) until stable.
+
+D) NodeJS bridge (concept example)
+- Add a small HTTP endpoint to your nodejs process that can receive POST events from MU-plugin and broadcast to socket.io channels. Or use Redis pub/sub.
+
+Example (brief):
+```js
+// nodejs/bridge.js (sketch)
+const express = require('express');
+const bodyParser = require('body-parser');
+const socketio = require('socket.io');
+const http = require('http');
+const app = express();
+app.use(bodyParser.json({limit: '1mb'}));
+const server = http.createServer(app);
+const io = socketio(server, { cors: { origin: '*' } });
+
+app.post('/_bzj/events', (req,res) => {
+  // Optional: validate a secret in header X-BZJ-Secret
+  const event = req.body;
+  // event.payload should include recipient external id and platform
+  if (event && event.recipient_external_id) {
+    const channel = `user-${event.recipient_external_id}`;
+    io.to(channel).emit('bzj_message', event);
+  }
+  res.json({ok:true});
+});
+
+io.on('connection', (socket) => {
+  // client should emit 'identify' with their external id
+  socket.on('identify', (data) => {
+    if (data && data.external_id) {
+      socket.join(`user-${data.external_id}`);
+    }
+  });
+});
+server.listen(3000);
+```
+- MU-plugin dispatch_event should POST to this /_bzj/events endpoint.
+
+E) Client JS (fallback poll + socket connect) (shared/bzj-messaging/js/bzj-messaging.js)
+```javascript
+// quick client library
+(function(window) {
+  function BZJMessaging(opts) {
+    this.origin = opts.origin || 'streams';
+    this.external_id = opts.external_id || 0; // user's external id for platform
+    this.socketUrl = opts.socketUrl || null;
+    this.pollUrl = opts.pollUrl || '/wp-json/bzj-messaging/v1/poll';
+    this.socket = null;
+    this.pollInterval = opts.pollInterval || 5000;
+    this._pollTimer = null;
+  }
+  BZJMessaging.prototype.connect = function() {
+    if (this.socketUrl && window.io) {
+      this.socket = io(this.socketUrl);
+      this.socket.on('connect', () => {
+        this.socket.emit('identify', { external_id: this.external_id });
+      });
+      this.socket.on('bzj_message', (e) => {
+        document.dispatchEvent(new CustomEvent('bzj_message', { detail: e }));
+      });
+      return;
+    }
+    this._startPolling();
+  };
+  BZJMessaging.prototype._startPolling = function() {
+    var self = this;
+    this._pollTimer = setInterval(function(){
+      fetch(self.pollUrl + '?to_external_id=' + encodeURIComponent(self.external_id))
+        .then(r => r.json())
+        .then(d => {
+          if (Array.isArray(d.messages)) {
+            d.messages.forEach(m => document.dispatchEvent(new CustomEvent('bzj_message', { detail: m })));
+          }
+        })
+        .catch(()=>{});
+    }, this.pollInterval);
+  };
+  BZJMessaging.prototype.disconnect = function() {
+    if (this.socket) this.socket.disconnect();
+    if (this._pollTimer) clearInterval(this._pollTimer);
+  };
+  window.BZJMessaging = BZJMessaging;
+})(window);
+```
+
+5) Testing, monitoring and rollout plan
+- Start local/dev environment. Create test accounts on WP, Streams, Socials and mapping rows.
+- Smoke tests:
+  - Streams -> MU-plugin message creation succeeds (signed).
+  - MU-plugin writes into BP plugin storage (verify using WP UI).
+  - WP-originated message triggers MU-plugin dispatch_event and NodeJS broadcast; Streams client receives.
+  - Read receipts flow back and propagate.
+- Integration tests:
+  - group chat messages delivered to multiple platform participants.
+  - gating rules: test message blocking & credit deduction flows.
+- Monitoring & logs:
+  - MU-plugin logs to a file (like bzj-connections-client) and to WP syslog if present.
+  - NodeJS logs.
+  - Add metrics: messages/sec, queue length, failures.
+- Rollout approach:
+  - Stage A: Deploy MU-plugin + client library on dev, but do not change Streams/Socials send path (WP-only). Wire WP->NodeJS delivery to test UI updates in Streams.
+  - Stage B: Enable Streams/Socials send via client in a small subset of traffic/tests.
+  - Stage C: Full flip with feature flag enabling across the network.
+
+6) Gating, credits, other features (how to implement)
+- Centralize gating checks in MU-plugin:
+  - MU-plugin receives payload and checks user metadata or calls Streams/Socials internal API to determine HS level and credits.
+  - If disallowed, return structured response instructing client to show purchase/complete-or-pay modal.
+- Points-per-message:
+  - On receiving message, MU-plugin can charge sender via a central payment/credits API (Streams/Socials keep credits locally or a central DB).
+- First time chats accept/decline:
+  - Use BP Better Messages request system and the MU-plugin should retain state. Show accept/decline UI on recipients in Streams/Socials, and accept/reject flows call MU-plugin endpoints which modify BP Better Messages state.
+
+7) Additional technical & operational considerations
+- Identity & mapping:
+  - You must define one consistent mapping strategy for users across platforms. The simplest path: provision WP user accounts for Streams/Socials external users (with mapping meta), or maintain mapping table and reconcile periodically as in bzj-connections-sync.
+- Avoid loading wp-load.php inside Streams/Socials by default. The MU-plugin + signed REST API removes the need for wp-load; only if some server-to-server action must run WP functions inside Streams, do that as optional and guarded include (but prefer HTTP signed API).
+- Use secure TLS (HTTPS) between all endpoints. Do not send raw session IDs or credentials in logs.
+- Use a message queue (Redis or local table + cron) if load is high; implement retry/backoff from MU-plugin on downstream failures.
+- Store minimal event logs for reconciliation and add CLI/cron reconcile jobs.
+- For group chats, rely on BP plugin's group constructs; ensure MU-plugin respects group message semantics when dispatching.
+
+8) File structure suggested (for repository only as design)
+- wp-content/mu-plugins/bzj-messaging.php (MU plugin)
+- shared/bzj-messaging/
+  - bzj-msg-client.php (PHP client)
+  - js/bzj-messaging.js (browser client)
+  - addons/ (stickers, GIF-bridge integration)
+  - int/ (integration clients for Streams/Socials)
+- streams/changes (in-code modify)
+  - small include in chat send flow to call bzj-msg-client.php only if config->use_bzj_messaging set
+- nodejs/
+  - bridge.js (NodeJS broadcast server)
+  - optionally, redis adapter and auth middleware
+
+9) Example implementation checklist (detailed steps to work through)
+- Step 1: Audit BP Better Messages plugin to find canonical functions to create messages and to hook into (server side). Document them.
+- Step 2: Create mu-plugin skeleton (bzj-messaging.php) and register REST routes. Add signature verification, logging.
+- Step 3: Implement message creation route that calls BP Better Messages API (or triggers a hook that plugin can listen on).
+- Step 4: Implement dispatch_event (initially simple HTTP POST to NodeJS).
+- Step 5: Implement shared PHP client (bzj-msg-client.php) and add to shared folder.
+- Step 6: Instrument Streams/Socials send_message handlers to call bzj_msg_post (behind config flag).
+- Step 7: Spin up NodeJS bridge for broadcasting events, add simple socket authentication via shared secret.
+- Step 8: Implement client JS in Streams & Socials pages to connect to sockets and apply incoming messages to UI.
+- Step 9: Add queueing & fallback: MU-plugin should store events to DB table if NodeJS post fails; implement cron to retry.
+- Step 10: Add health check endpoint and monitoring logs; test with load tests.
+- Step 11: Implement gating/credits by adding middleware in MU-plugin to call Streams/Socials to validate sender permissions (or centralize gating state in WP usermeta). Provide UI for pay/edit flows in Streams/Socials.
+- Step 12: Conduct staged rollout + rollback plan.
+
+10) Performance & scaling recommendations
+- Real-time: use NodeJS + socket.io + Redis for horizontal scaling. MU-plugin posts events to redis pub/sub or HTTP to NodeJS, NodeJS publishes to connected socket clusters.
+- Consider sharding events by user id mod N if very large.
+- Protect endpoints with rate limiting (WP REST plugin or custom throttling).
+- Messages should be small JSON, attachments uploaded to a central store (S3/Backblaze) and only references sent in events.
+
+11) Logging, privacy & compliance
+- Do not log raw session tokens, cookie values, or JWTs.
+- Use fingerprinting (non-reversible) in logs for PII when necessary, similar to streams/assets/init.php logging conventions.
+- If storing attachments, ensure privacy settings align across platforms.
+
+12) Next steps & deliverables I can produce here in the chat
+- A complete paste-ready MU-plugin file (bzj-messaging.php) that implements REST routes, signature verification, logging and queueing skeleton (I included a skeleton above — I can expand it into a full implementation using the BP Better Messages PHP API calls if you confirm where BP Better Messages exposes insertion functions).
+- The shared client PHP file (full ready-to-drop).
+- Example patch snippets for Streams and Socials chat send handlers (where to add require_once and a single call to bzj_msg_post).
+- NodeJS bridge example full file for you to deploy.
+- Example JS library for Streams and Socials to subscribe to socket or poll.
+- Example unit/integration test scripts to validate end-to-end.
+
+Important questions and options I need you to confirm
+1. Which platform do you want to be the authoritative store? (My recommendation: WordPress/BP Better Messages. Confirm.)
+2. Will we be allowed to modify BP Better Messages plugin files if we must (or should we prefer using the plugin's public APIs/actions/filters only)? I strongly recommend public WP hooks.
+3. Do you already have a shared secret environment variables for messaging, or should we create new ones? (BZJ_MESSAGING_STREAMS_SECRET / BZJ_MESSAGING_SOCIALS_SECRET).
+4. Is the streams/nodejs server free to accept inbound events from WP? (If not, we'll use webhooks or Redis.)
+5. For mapping user identities, do we prefer to: (A) create WP users for Streams/Socials users and store mapping in usermeta, or (B) maintain mapping table (preferred if you don't want to create WP accounts)? If B, I will add a ledger table and mapping methods.
+
+Appendix — Key hooks & places to change (where to add client calls)
+- social/requests/ajax/chat.php -> in send_message() add a call to shared/bzj-messaging/bzj-msg-client.php
+- social/endpoint/v1/models/messages.php -> when API send_* called, call mu-plugin as well
+- streams/assets/init.php -> if Streams client needs to push to MU-plugin for messages generated in Streams side, add call to shared client
+- wp-content/mu-plugins/bzj-connections-sync.php -> use as model for robust reconciling, ledger, and queuing behavior (you already have an example)
+- streams/nodejs -> add a small /_bzj/events POST receiver and broadcast to socket rooms (user external ids)
+
+Final notes & cautious recommendations
+- Do not attempt to “include wp-load.php” in Streams/Socials as the primary integration: that causes environment contamination, differing PHP versions and unexpected globals. Prefer REST API signed calls. Only use wp-load fallback for special server-to-server deep integration and wrap it in strict safety checks.
+- Aim to keep the initial integration lean: messages (text) only, attachments as references. Add stickers, GIFs, voice, video in subsequent sprints when signatures, mapping and real-time are stable.
+- Reuse and adapt existing signed-sync code (shared/bzj-connection-client.php and wp mu-plugin bzj-connections-sync.php) for message synchronization patterns: you already have good examples in codebase.
+
+Would you like me to:
+A) Generate a complete, ready-to-drop MU-plugin implementing the full REST API and queueing skeleton (expanding the skeleton above) tailored to your BP Better Messages plugin (I'll first scan the BP Better Messages plugin files to locate canonical PHP insertion function names), and
+B) Produce the shared PHP client file and exact edit patches for the Streams & Socials send handlers (with diffs you can apply)?
+
+If yes, I will:
+- Inspect the BP Better Messages plugin directory in your repo to find reliable PHP insertion functions and confirm exact field names.
+- Produce full paste-ready files: wp-content/mu-plugins/bzj-messaging.php, shared/bzj-messaging/bzj-msg-client.php, NodeJS bridge file, and the minimal JS client.
+- Provide a small test script and a recommended configuration checklist (ENV vars, cron schedule, NodeJS service).
+
+Which of the two options above do you want me to proceed with?
+
+Inspect the BP Better Messages plugin directory in the repo to find reliable PHP insertion functions and confirm exact field names.
+
+I inspected the BP Better Messages plugin directory in the repository. What I can confirm from that directory listing:
+
+- The plugin root contains a main plugin file: wp-content/plugins/bp-better-messages/bp-better-messages.php
+- There are supporting folders: inc/ (likely the plugin PHP includes), assets/, addons/, languages/, views/, and a readme.txt.
+
+I could not confirm specific insertion function names or exact database field names from the directory listing alone — to reliably integrate with BP Better Messages I need to open and read the plugin PHP files (especially the main plugin file and files inside inc/) to extract the exact public functions, actions/filters and DB schema the plugin exposes.
+
+What I will look for (and why)
+- Public PHP functions that add/insert messages: e.g., a function like bp_better_messages_insert_message(), bp_better_messages->insert_message(), or similar. This is the primary function we will call from Streams/Socials (via the MU-plugin) to create messages inside WP safely and consistently.
+- WordPress actions / filters the plugin fires when a message is created, updated, deleted, or read (e.g., actions that run after insert). These are important so the MU-plugin can:
+  - trigger outbound events when a WP-originated message is created, and
+  - avoid duplicating messages if the message originated from Streams/Socials.
+- Any REST endpoints the plugin exposes (so we can reuse them if helpful).
+- DB table names & message field names (e.g., sender_id, recipient_id, message_text/message, created_at/created_on, attachment fields, message type). Knowing the canonical columns is required to build fallback or queueing logic and for reconciliation.
+- Group chat storage details (tables/fields) and how the plugin identifies group vs private messages.
+- Attachment handling: how plugin stores attachments (file path, URL, media ID).
+- Any built-in push/real-time integrations (socket, Pusher, etc.) the plugin already has that could be re-used.
+- Hooks to add read receipts, typing indicators, and message meta (for gating or credits).
+
+Why I must read plugin files rather than assume
+- BP Better Messages may expose different function names or require structured arrays/objects to insert messages. Using the plugin’s public API (functions or actions/filters) is safer than direct DB writes.
+- DB table names and column names vary between plugins and plugin versions; relying on guesses risks breakage or duplicates.
+- There may already be a public API/rest route in the plugin that solves part of integration (reduce work).
+
+Concrete next step I will take (if you want me to continue)
+1. Open and parse wp-content/plugins/bp-better-messages/bp-better-messages.php and all PHP files inside inc/ to extract:
+   - canonical PHP insertion function(s) and their parameter formats,
+   - action/filter names fired on create/update/delete/read,
+   - DB table names and message columns,
+   - any REST endpoints or websocket/node integrations,
+   - any special handling for group messages and attachments.
+2. From those findings, produce:
+   - the exact function call(s) we should use from the WordPress MU-plugin (bzj-messaging.php) to create messages safely,
+   - a paste-ready MU-plugin implementation that calls those functions, verifies signed requests and dispatches events to Node/Streams/Socials,
+   - a shared PHP client (for Streams/Socials) that signs requests and calls the MU-plugin endpoint using the exact payload format required,
+   - patches/snippets for the Streams and Socials send_message handlers showing exactly where to call the shared client,
+   - a brief test plan and rollback steps.
+
+If you want me to proceed I will open and scan:
+- wp-content/plugins/bp-better-messages/bp-better-messages.php
+- all PHP files under wp-content/plugins/bp-better-messages/inc/
+- any files under addons/ that affect message insertion or real-time behavior
+
+Deliverable after scan
+- Exact function(s) and parameter names to create messages in BP Better Messages.
+- Exact DB table names and primary message field names (sender, recipient, body, created_at, attachments, type).
+- A complete, paste-ready mu-plugin (bzj-messaging.php) that uses the correct WP functions to create messages and dispatch events, plus the shared client code and Streams/Socials integration snippets.
+
+One short note about assumptions I’ll avoid: I will not assume a function name or a table/field name and I will not produce final integration code until I confirm the exact functions and schema from the plugin files.
+
+Do you want me to proceed and read the plugin files now to extract the exact insertion functions and field names? If yes, I’ll scan the main plugin file and the inc/ folder, then return the exact names and the paste-ready integration code.
+
+proceed with the scan
+
+The most feasible and lowest-risk way to unify chat across Buzzjuice is to treat BP Better Messages as the canonical message layer on the WordPress side, and treat Streams and Socials as clients that push and pull into that layer through a signed bridge. This matches the actual code in the plugin and avoids trying to make three different chat engines talk directly to each other.
+
+What the plugin code confirms
+
+The reliable insertion point in the BP Better Messages plugin is not a custom “insert message” function hidden somewhere else; it is the public messaging API in the plugin itself.
+
+Confirmed message creation API:
+- Better_Messages()->functions->new_message($args)
+
+Confirmed message object API:
+- BM_Messages_Message
+- $message->thread_id
+- $message->sender_id
+- $message->subject
+- $message->message
+- $message->recipients
+- $message->date_sent
+- $message->created_at / $this->updated_at
+- send() method on the message object
+
+This is hard-coded in the plugin files:
+- wp-content/plugins/bp-better-messages/inc/functions.php
+- wp-content/plugins/bp-better-messages/inc/classes/message.php
+
+The real message insert path is:
+- create a thread if needed in bm_get_table('threads')
+- insert row into bm_get_table('messages')
+- insert recipient rows into bm_get_table('recipients')
+
+From the plugin:
+- threads table key: subject
+- messages table insert fields: thread_id, sender_id, message, date_sent, created_at, updated_at, temp_id, is_pending
+- recipients table insert fields: user_id, thread_id, unread_count, last_update
+
+This means the canonical DB shape is:
+
+- bm_get_table('threads')
+  - id
+  - subject
+
+- bm_get_table('messages')
+  - id
+  - thread_id
+  - sender_id
+  - message
+  - date_sent
+  - created_at
+  - updated_at
+  - temp_id
+  - is_pending
+
+- bm_get_table('recipients')
+  - id
+  - user_id
+  - thread_id
+  - unread_count
+  - last_update
+  - is_deleted
+
+The plugin also exposes hooks to enforce message gating and validation:
+
+- better_messages_can_send_message
+- bp_better_messages_can_send_message
+- better_messages_before_message_send
+- bp_better_messages_before_message_send
+- better_messages_message_before_save
+- better_messages_message_after_save
+- better_messages_message_content_before_save
+- better_messages_message_sender_id_before_save
+- better_messages_message_thread_id_before_save
+
+Those hooks are exactly where health/safety gating, connection checks, message costs, and role-based restrictions can be enforced without rewriting the entire chat system.
+
+The correct model for Buzzjuice
+
+The correct architecture is not “three chat systems with one shared app logic.” The right design is:
+
+1. WordPress + BP Better Messages is the canonical message store.
+2. Streams and Socials are clients that send and receive through a shared signed bridge.
+3. A lightweight sync layer publishes message events from one platform to the others.
+4. Real-time delivery can be layered on top using the Streams Node transport or the plugin’s real-time option, but not as the primary source of truth.
+
+This is the best fit for the platform because:
+- WordPress is the central user and social graph layer.
+- BP Better Messages already has a real threaded chat model and a proper recipient table.
+- Streams and Socials are already isolated and do not currently load WordPress, so direct WP calls from those apps are not available at runtime.
+- The files in Streams and Socials are already custom message implementations, but they are not the authoritative network-wide store.
+
+The best feasible integration pattern
+
+Use a bridge with three layers:
+
+A. Canonical message creation layer
+- WordPress/BP Better Messages owns all actual chat messages.
+- Message creation goes through:
+  - Better_Messages()->functions->new_message($args)
+  - or BM_Messages_Message and send()
+
+Example payload shape:
+```php
+$args = array(
+    'sender_id'  => 123,
+    'thread_id'  => 456,
+    'content'    => 'Hello',
+    'recipients' => array(789),
+    'return'     => 'message_id',
+    'error_type' => 'wp_error',
+);
+$message_id = Better_Messages()->functions->new_message($args);
+```
+
+Important detail:
+- The public API uses content
+- The storage layer uses message internally
+
+That is the exact public contract reflected in the plugin code.
+
+B. Bridge event layer
+- When a message is created in WordPress, trigger a signed outbound event to Streams and Socials.
+- When a message is created in Streams or Socials, call the same WordPress-backed bridge so the message lands in BP Better Messages and then fans out back to the other platforms.
+- This makes all platforms converge on the same underlying conversation data.
+
+C. Platform-local mirror layer
+- Streams and Socials can keep minimal mirroring tables or cache records for:
+  - unread count
+  - last message preview
+  - message status
+  - notification badges
+- These mirrors are not the canonical store; they are UI fast paths.
+
+That gives you the correct separation of concerns:
+- WP = source of truth
+- Streams/Socials = local UI shims
+
+The right handling for the original proposal
+
+The function and hook structure supports the business rules you described:
+
+1. Chat gating and health/safety checks
+- This fits naturally in the WP plugin hooks:
+  - better_messages_before_message_send
+  - bp_better_messages_before_message_send
+  - better_messages_message_before_save
+  - better_messages_can_send_message
+- You can enforce:
+  - HS1700 requirement
+  - minimum lesson threshold
+  - block state
+  - connection required
+  - cost/points per message
+
+2. Private chat vs group chat
+- The plugin supports both thread types and handles recipients differently.
+- It distinguishes new threads and existing threads, which is enough for:
+  - one-to-one chats
+  - group chats
+  - connection-only direct chats
+  - group chats without direct connection restrictions
+
+3. First-time chat accept/decline pattern
+- That is a business rule layer, not a message-store issue.
+- The bridge can surface a “pending connection request” state when a thread has only two users and there is no accepted relationship yet.
+- Once accepted, the thread becomes normal conversation.
+
+4. Push notifications
+- The plugin already contains push-related logic and real-time plumbing.
+- This should be layered behind the canonical message event, not in the application-specific chat UIs.
+- Streams can still emit its own push notifications for its local app, but they should not become the primary message source.
+
+5. Real-time transport
+- The plugin exposes a real-time mode and script variables for socket/websocket integration.
+- The Streams Node transport is a good fit as the real-time backbone for cross-platform notification propagation, but it should sit on top of the canonical BP Better Messages layer, not replace it.
+- A real-time flag can remain configuration-driven and off by default to avoid unstable behavior until fully tested.
+
+How to implement the unified design
+
+Use the following model:
+
+1. Canonical WP bridge layer
+- A must-use plugin that acts as the coordination point between WP and non-WP platforms.
+- It exposes signed endpoints or internal PHP functions for:
+  - create message
+  - fetch thread
+  - mark message seen
+  - send notification
+  - sync connection status
+
+2. Signed cross-platform requests
+- Every Streams or Socials message event should be signed with a secret shared with WordPress.
+- Message payload should include:
+  - platform
+  - actor_user_id
+  - target_user_id or thread_id
+  - message content
+  - timestamp
+  - event type
+  - external event id
+- This protects against spoofing and prevents loops.
+
+3. Message fan-out
+- On WP create:
+  - create or reuse the BP thread
+  - write message
+  - fire outbound sync event to Streams and Socials
+- On Streams/Socials create:
+  - send signed event to WP
+  - WP creates canonical message
+  - WP fans back to all listeners
+
+4. Deduplication
+- Every outbound event must carry a stable event_id.
+- WP should reject duplicate events.
+- Streams/Socials should ignore already-observed event ids.
+- This prevents endless loops between the two app runtimes.
+
+5. Read state handling
+- The plugin stores unread counts in recipients.
+- Use the plugin’s built-in recipient and thread states as the authoritative read/unread metadata.
+- Local platform caches should only mirror that state, not own it.
+
+6. Message-level gating and points
+- This should be enforced in the WP bridge using the plugin’s filters before message save.
+- Example rules:
+  - only let messages send if connected or if in group chat
+  - deduct points for private message
+  - block bad words / moderation settings
+  - require lesson completion before private chat
+
+This is the right place to perform those restrictions, because the plugin already has a message send filter and validation flow.
+
+The important constraint: WordPress is not loaded in Streams or Socials
+
+This is a critical factor, and it means:
+- Streams and Socials cannot call BP Better Messages directly at runtime.
+- They need a network bridge: WordPress endpoint or signed service call.
+- That bridge is the real integration point.
+- It is not a good idea to embed WP code directly in Streams or Socials or to rely on them loading wp-load.php for every message action.
+
+The network should therefore be:
+- local app -> signed request -> WordPress bridge -> BP Better Messages
+- WordPress -> fan-out -> Streams or Socials
+
+This is the correct architecture for your environment.
+
+Bottom line
+
+The strongest, most practical unified-chat model for Buzzjuice is:
+
+- Use BP Better Messages as the authoritative message engine on the WordPress side.
+- Use Streams and Socials as client interfaces that submit and consume messages through a signed bridge.
+- Keep the source of truth in the WordPress message tables:
+  - bm_threads
+  - bm_message_messages
+  - bm_message_recipients
+- Use the plugin’s real public insertion API:
+  - Better_Messages()->functions->new_message($args)
+- Use the plugin’s hooks for validation and business rules:
+  - better_messages_can_send_message
+  - better_messages_before_message_send
+  - better_messages_message_before_save
+- Use the Streams Node layer only as a real-time transport or notification bus, not as the primary message store.
+- Keep all business gating and moderation logic at the WP layer so one consistent policy applies across the network.
+
+That is the most feasible, least fragile, and most extensible approach that matches the plugin’s actual code and the architecture constraints in the network.
+
+<<STOP GITHUB>>
