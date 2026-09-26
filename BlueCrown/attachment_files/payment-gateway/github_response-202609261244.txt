@@ -1,0 +1,1456 @@
+<<START GITHUB>>
+
+I'll conduct a thorough analysis of the existing payment gateway bridge system and the proposal, then provide a comprehensive updated architecture with full implementation code.Now let me retrieve the previous ChatGPT and GitHub responses to understand what recommendations were made:Now I'll generate a comprehensive analysis and the refactored architecture. Based on the files reviewed, the ChatGPT recommendations, and the proposal, here's my thorough assessment and implementation plan:
+
+---
+
+# **BUZZJUICE PAYMENT GATEWAY BRIDGE — COMPREHENSIVE REFACTOR & ANALYSIS**
+
+## **EXECUTIVE SUMMARY**
+
+The current Buzzjuice Streams (WoWonder) Payment Gateway Bridge implementation suffers from architectural fragmentation and several critical issues:
+
+1. **Fragmented state management** — Payment initialization in `wow-pgb_init.php`, webhook processing in `wow-pgb_webhook.php`, and sync in `wow-pgb_sync.php` operate independently with minimal orchestration.
+2. **Dropped orders** — Race conditions and missing idempotency checks during webhook processing.
+3. **Affiliate context loss** — The AffiliateWP snapshot capture before leaving Streams is fragile and order-dependent.
+4. **Currency conversion complexity** — Handled ad-hoc in multiple files.
+5. **Logging fragmentation** — No centralized, categorized logging system.
+6. **Scalability issues** — Direct database operations without proper transactional patterns.
+
+---
+
+## **REFINED ARCHITECTURE PROPOSAL**
+
+### **Core Principles**
+
+1. **WordPress as Authoritative Backend** — All payment logic orchestrated through a WordPress Must-Use Plugin.
+2. **Streams as Client** — Streams initiates payments but delegates orchestration to WordPress.
+3. **Modular Structure** — Clear separation: Core engine, integrations, addons, and logging.
+4. **Hook-Based Communication** — Streams and WordPress communicate via hooks and metadata.
+5. **Idempotent Operations** — All critical operations (wallet updates, pro activation, rebates) are idempotent.
+6. **Centralized Logging** — Categorized logs with enable/disable toggles.
+
+### **Directory Structure**
+
+```
+buzzjuice.net/
+├── wp-content/
+│   └── mu-plugins/
+│       └── pgb-engine.php                    # Must-Use Plugin (main engine)
+│
+├── shared/
+│   └── payment-gateway/
+│       ├── pgb-client.php                    # Streams payment client
+│       ├── pgb-client-streams.php            # Streams-specific client logic
+│       ├── core/
+│       │   ├── class-pgb-bootstrap.php       # Initialization & setup
+│       │   ├── class-pgb-order-manager.php   # Order lifecycle
+│       │   ├── class-pgb-transaction-log.php # Transaction audit trail
+│       │   └── class-pgb-logger.php          # Centralized logging
+│       ├── integrations/
+│       │   ├── pgb-int-affiliate-wp.php      # AffiliateWP integration
+│       │   └── pgb-int-jewel-affiliate.php   # Jewel Affiliate integration
+│       ├── addons/
+│       │   ├── pgb-addon-currency-sync.php   # Currency conversion
+│       │   └── pgb-addon-notification.php    # User notifications
+│       ├── validators/
+│       │   ├── class-pgb-order-validator.php # Order data validation
+│       │   └── class-pgb-security.php        # Security checks & sanitization
+│       ├── hooks/
+│       │   └── class-pgb-hooks.php           # Hook definitions
+│       ├── api/
+│       │   ├── class-pgb-woocommerce-api.php # WooCommerce API wrapper
+│       │   └── class-pgb-streams-api.php     # Streams API wrapper
+│       ├── utils/
+│       │   ├── class-pgb-currency.php        # Currency utilities
+│       │   └── class-pgb-user-resolver.php   # User ID resolution
+│       ├── database/
+│       │   └── class-pgb-database.php        # Database abstraction
+│       ├── log/
+│       │   ├── pgb-engine.log
+│       │   ├── pgb-client-streams.log
+│       │   ├── class-pgb-bootstrap.log
+│       │   ├── class-pgb-order-manager.log
+│       │   ├── pgb-int-affiliate-wp.log
+│       │   └── ...
+│       ├── config/
+│       │   └── pgb-config.php                # Configuration defaults
+│       └── README.md                         # Documentation
+```
+
+---
+
+## **DETAILED IMPLEMENTATION**
+
+### **1. WordPress Must-Use Plugin (`pgb-engine.php`)**
+
+This is the orchestration engine that manages all payment workflows.
+
+```php
+<?php
+/**
+ * Plugin Name: Buzzjuice Payment Gateway Engine
+ * Description: Orchestrates payment flows between WoWonder Streams and WooCommerce
+ * Version: 2.0.0
+ * Author: Buzzjuice
+ * License: GPL v2+
+ */
+
+if (!defined('ABSPATH')) exit;
+
+// Define constants
+define('PGB_PLUGIN_DIR', dirname(__FILE__));
+define('PGB_PLUGIN_URL', plugins_url('/', __FILE__));
+define('PGB_SHARED_DIR', dirname(__DIR__, 2) . '/shared/payment-gateway');
+define('PGB_LOG_DIR', PGB_SHARED_DIR . '/log');
+define('PGB_PLUGIN_VERSION', '2.0.0');
+
+// Initialize logging if not exists
+if (!is_dir(PGB_LOG_DIR)) {
+    @mkdir(PGB_LOG_DIR, 0755, true);
+}
+
+// Load dependencies
+require_once PGB_SHARED_DIR . '/config/pgb-config.php';
+require_once PGB_SHARED_DIR . '/core/class-pgb-logger.php';
+require_once PGB_SHARED_DIR . '/core/class-pgb-bootstrap.php';
+require_once PGB_SHARED_DIR . '/core/class-pgb-order-manager.php';
+require_once PGB_SHARED_DIR . '/core/class-pgb-transaction-log.php';
+require_once PGB_SHARED_DIR . '/database/class-pgb-database.php';
+require_once PGB_SHARED_DIR . '/utils/class-pgb-currency.php';
+require_once PGB_SHARED_DIR . '/utils/class-pgb-user-resolver.php';
+require_once PGB_SHARED_DIR . '/validators/class-pgb-security.php';
+require_once PGB_SHARED_DIR . '/validators/class-pgb-order-validator.php';
+require_once PGB_SHARED_DIR . '/api/class-pgb-woocommerce-api.php';
+require_once PGB_SHARED_DIR . '/api/class-pgb-streams-api.php';
+require_once PGB_SHARED_DIR . '/hooks/class-pgb-hooks.php';
+
+// Load integrations & addons dynamically
+$integrations_dir = PGB_SHARED_DIR . '/integrations';
+$addons_dir = PGB_SHARED_DIR . '/addons';
+
+if (is_dir($integrations_dir)) {
+    foreach (glob($integrations_dir . '/pgb-int-*.php') as $file) {
+        require_once $file;
+    }
+}
+
+if (is_dir($addons_dir)) {
+    foreach (glob($addons_dir . '/pgb-addon-*.php') as $file) {
+        require_once $file;
+    }
+}
+
+// Initialize plugin
+add_action('plugins_loaded', function () {
+    try {
+        PGB_Bootstrap::init();
+        PGB_Hooks::register();
+    } catch (Exception $e) {
+        PGB_Logger::error('pgb-engine.log', 'Plugin initialization failed: ' . $e->getMessage(), __FILE__, __LINE__);
+    }
+}, 0);
+
+// Activation/Deactivation hooks
+register_activation_hook(__FILE__, ['PGB_Bootstrap', 'activate']);
+register_deactivation_hook(__FILE__, ['PGB_Bootstrap', 'deactivate']);
+
+// AJAX handlers for Streams client
+add_action('wp_ajax_pgb_prepare_payment', 'pgb_ajax_prepare_payment');
+add_action('wp_ajax_nopriv_pgb_prepare_payment', 'pgb_ajax_prepare_payment');
+
+function pgb_ajax_prepare_payment() {
+    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'pgb_payment_nonce')) {
+        wp_send_json_error(['message' => 'Security check failed'], 403);
+    }
+
+    try {
+        $payload = json_decode(file_get_contents('php://input'), true);
+        if (!$payload) {
+            $payload = $_POST;
+        }
+
+        $response = PGB_Order_Manager::prepare_payment($payload);
+        wp_send_json_success($response);
+    } catch (Exception $e) {
+        PGB_Logger::error('pgb-engine.log', 'AJAX payment prep failed: ' . $e->getMessage(), __FILE__, __LINE__);
+        wp_send_json_error(['message' => $e->getMessage()], 400);
+    }
+}
+
+// WooCommerce webhook receiver
+add_action('woocommerce_webhook_topic_order_updated', 'pgb_handle_woocommerce_webhook');
+add_action('woocommerce_webhook_topic_order_completed', 'pgb_handle_woocommerce_webhook');
+
+function pgb_handle_woocommerce_webhook($arg) {
+    try {
+        PGB_Order_Manager::process_woocommerce_callback($arg);
+    } catch (Exception $e) {
+        PGB_Logger::error('pgb-engine.log', 'Webhook processing failed: ' . $e->getMessage(), __FILE__, __LINE__);
+    }
+}
+?>
+```
+
+---
+
+### **2. Core: Logger Class (`class-pgb-logger.php`)**
+
+Centralized logging with categorization and enable/disable toggles.
+
+```php
+<?php
+/**
+ * Centralized logging for Payment Gateway Bridge
+ */
+
+if (!class_exists('PGB_Logger')) {
+    class PGB_Logger
+    {
+        /**
+         * Get logging configuration
+         */
+        public static function get_config($category = 'general')
+        {
+            $defaults = [
+                'general' => true,
+                'affiliate' => true,
+                'currency' => true,
+                'validation' => true,
+                'security' => true,
+                'webhook' => true,
+                'api' => true,
+            ];
+
+            $config = get_option('pgb_logging_config', $defaults);
+            return wp_parse_args($config, $defaults);
+        }
+
+        /**
+         * Check if logging is enabled for category
+         */
+        public static function is_enabled($category = 'general')
+        {
+            $config = self::get_config();
+            return $config[$category] ?? false;
+        }
+
+        /**
+         * Log error
+         */
+        public static function error($log_file, $message, $file = '', $line = '')
+        {
+            self::write($log_file, 'ERROR', $message, $file, $line);
+        }
+
+        /**
+         * Log info
+         */
+        public static function info($log_file, $message, $file = '', $line = '')
+        {
+            self::write($log_file, 'INFO', $message, $file, $line);
+        }
+
+        /**
+         * Log debug
+         */
+        public static function debug($log_file, $message, $file = '', $line = '')
+        {
+            self::write($log_file, 'DEBUG', $message, $file, $line);
+        }
+
+        /**
+         * Log warning
+         */
+        public static function warning($log_file, $message, $file = '', $line = '')
+        {
+            self::write($log_file, 'WARNING', $message, $file, $line);
+        }
+
+        /**
+         * Write to log file
+         */
+        private static function write($log_file, $level, $message, $file = '', $line = '')
+        {
+            // Determine category from filename
+            $category = 'general';
+            if (strpos($log_file, 'affiliate') !== false) {
+                $category = 'affiliate';
+            } elseif (strpos($log_file, 'currency') !== false) {
+                $category = 'currency';
+            } elseif (strpos($log_file, 'validation') !== false) {
+                $category = 'validation';
+            } elseif (strpos($log_file, 'security') !== false) {
+                $category = 'security';
+            } elseif (strpos($log_file, 'webhook') !== false) {
+                $category = 'webhook';
+            } elseif (strpos($log_file, 'api') !== false) {
+                $category = 'api';
+            }
+
+            // Check if logging enabled for this category
+            if (!self::is_enabled($category)) {
+                return;
+            }
+
+            $log_path = PGB_LOG_DIR . '/' . $log_file;
+            $timestamp = gmdate('Y-m-d H:i:s');
+            $file_info = '';
+            if (!empty($file) && !empty($line)) {
+                $file_info = ' [' . basename($file) . ':' . $line . ']';
+            }
+
+            $log_entry = "[{$timestamp}] [{$level}]{$file_info} {$message}\n";
+
+            // Ensure log directory exists
+            $dir = dirname($log_path);
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0755, true);
+            }
+
+            // Append to log (max 10MB per file)
+            if (file_exists($log_path) && filesize($log_path) > 10485760) {
+                $archive_path = $log_path . '.' . date('Ymd-His');
+                rename($log_path, $archive_path);
+            }
+
+            error_log($log_entry, 3, $log_path);
+        }
+
+        /**
+         * Get recent logs
+         */
+        public static function get_recent($log_file, $limit = 100)
+        {
+            $log_path = PGB_LOG_DIR . '/' . $log_file;
+            if (!file_exists($log_path)) {
+                return [];
+            }
+
+            $lines = file($log_path, FILE_IGNORE_NEW_LINES);
+            return array_slice($lines, -$limit);
+        }
+
+        /**
+         * Clear log file
+         */
+        public static function clear($log_file)
+        {
+            $log_path = PGB_LOG_DIR . '/' . $log_file;
+            if (file_exists($log_path)) {
+                unlink($log_path);
+            }
+        }
+    }
+}
+?>
+```
+
+---
+
+### **3. Core: Order Manager (`class-pgb-order-manager.php`)**
+
+Manages the complete order lifecycle with idempotency and transactional safety.
+
+```php
+<?php
+/**
+ * Payment Gateway Bridge — Order Lifecycle Manager
+ */
+
+if (!class_exists('PGB_Order_Manager')) {
+    class PGB_Order_Manager
+    {
+        /**
+         * Prepare payment for WooCommerce
+         */
+        public static function prepare_payment($payload)
+        {
+            $logger = PGB_Logger::class;
+            $logger::info('class-pgb-order-manager.log', 'Payment preparation initiated', __FILE__, __LINE__);
+
+            try {
+                // 1. Validate payload
+                $validation = PGB_Order_Validator::validate($payload);
+                if (!$validation['valid']) {
+                    throw new Exception($validation['error']);
+                }
+
+                // 2. Resolve users
+                $streams_user_id = $payload['streams_user_id'] ?? 0;
+                $wp_user_id = PGB_User_Resolver::get_wp_user_id($streams_user_id);
+                if (!$wp_user_id) {
+                    throw new Exception('Unable to resolve WordPress user');
+                }
+
+                // 3. Prepare order data with all context
+                $order_data = self::build_order_data($payload, $wp_user_id, $streams_user_id);
+
+                // 4. Create preliminary transaction record
+                $txn_id = self::create_transaction_record($order_data, $streams_user_id);
+                $order_data['pgb_transaction_id'] = $txn_id;
+
+                // 5. Capture affiliate context
+                $affiliate_context = self::capture_affiliate_context($payload, $wp_user_id, $streams_user_id);
+                if ($affiliate_context) {
+                    $order_data['meta_data'][] = [
+                        'key'   => 'pgb_affiliate_context',
+                        'value' => json_encode($affiliate_context),
+                    ];
+                }
+
+                // 6. Prepare for WooCommerce API
+                $woo_api = new PGB_WooCommerce_API();
+                $woo_order_id = $woo_api->create_order($order_data);
+                if (!$woo_order_id) {
+                    throw new Exception('Failed to create WooCommerce order');
+                }
+
+                // 7. Update transaction with WooCommerce order ID
+                self::update_transaction_with_woo_id($txn_id, $woo_order_id);
+
+                $logger::info(
+                    'class-pgb-order-manager.log',
+                    "Order prepared: pgb_txn_id={$txn_id}, woo_order_id={$woo_order_id}, streams_user_id={$streams_user_id}",
+                    __FILE__,
+                    __LINE__
+                );
+
+                return [
+                    'status' => 200,
+                    'message' => 'Order prepared',
+                    'woo_order_id' => $woo_order_id,
+                    'pgb_transaction_id' => $txn_id,
+                    'payment_url' => get_order_payment_url($woo_order_id),
+                ];
+            } catch (Exception $e) {
+                $logger::error(
+                    'class-pgb-order-manager.log',
+                    'Payment preparation failed: ' . $e->getMessage(),
+                    __FILE__,
+                    __LINE__
+                );
+                throw $e;
+            }
+        }
+
+        /**
+         * Build complete order data structure
+         */
+        private static function build_order_data($payload, $wp_user_id, $streams_user_id)
+        {
+            $product_price = floatval($payload['product_price'] ?? 0);
+            $quantity = intval($payload['product_units'] ?? 1);
+            $total = floatval($payload['amount'] ?? ($product_price * $quantity));
+
+            $line_item = [
+                'name'       => sanitize_text_field($payload['product_name'] ?? 'Product'),
+                'product_id' => intval($payload['product_id'] ?? 0),
+                'quantity'   => $quantity,
+                'price'      => $product_price,
+                'subtotal'   => $product_price,
+                'total'      => $total,
+                'meta_data'  => [
+                    ['key' => 'pgb_streams_user_id', 'value' => $streams_user_id],
+                    ['key' => 'pgb_origin', 'value' => 'streams'],
+                ],
+            ];
+
+            // Add subscription meta if applicable
+            if (!empty($payload['subscription_period'])) {
+                $line_item['meta_data'][] = [
+                    'key'   => '_subscription_period',
+                    'value' => sanitize_text_field($payload['subscription_period']),
+                ];
+                $line_item['meta_data'][] = [
+                    'key'   => '_subscription_interval',
+                    'value' => intval($payload['subscription_interval'] ?? 1),
+                ];
+                $line_item['meta_data'][] = [
+                    'key'   => '_subscription_length',
+                    'value' => intval($payload['subscription_length'] ?? 0),
+                ];
+            }
+
+            $order_data = [
+                'customer_id'       => $wp_user_id,
+                'status'            => 'pending',
+                'currency'          => sanitize_text_field($payload['wow_currency_code'] ?? 'GHS'),
+                'set_paid'          => false,
+                'line_items'        => [$line_item],
+                'meta_data'         => [
+                    ['key' => 'pgb_streams_user_id', 'value' => $streams_user_id],
+                    ['key' => 'pgb_origin', 'value' => 'streams'],
+                    ['key' => 'pgb_transaction_kind', 'value' => sanitize_text_field($payload['transaction_kind'] ?? 'PRODUCT')],
+                ],
+            ];
+
+            // Add billing/shipping addresses
+            if (!empty($payload['billing_address'])) {
+                $order_data['billing'] = self::parse_address($payload['billing_address']);
+            }
+            if (!empty($payload['shipping_address'])) {
+                $order_data['shipping'] = self::parse_address($payload['shipping_address']);
+            }
+
+            return $order_data;
+        }
+
+        /**
+         * Parse and validate address
+         */
+        private static function parse_address($address_data)
+        {
+            return [
+                'first_name' => sanitize_text_field($address_data['first_name'] ?? ''),
+                'last_name'  => sanitize_text_field($address_data['last_name'] ?? ''),
+                'company'    => sanitize_text_field($address_data['company'] ?? ''),
+                'address_1'  => sanitize_text_field($address_data['address_1'] ?? ''),
+                'address_2'  => sanitize_text_field($address_data['address_2'] ?? ''),
+                'city'       => sanitize_text_field($address_data['city'] ?? ''),
+                'state'      => sanitize_text_field($address_data['state'] ?? ''),
+                'postcode'   => sanitize_text_field($address_data['postcode'] ?? ''),
+                'country'    => strtoupper(sanitize_text_field($address_data['country'] ?? 'GH')),
+                'email'      => sanitize_email($address_data['email'] ?? ''),
+                'phone'      => sanitize_text_field($address_data['phone'] ?? ''),
+            ];
+        }
+
+        /**
+         * Create preliminary transaction record
+         */
+        private static function create_transaction_record($order_data, $streams_user_id)
+        {
+            global $wpdb;
+
+            $txn_data = [
+                'user_id'        => $streams_user_id,
+                'woo_order_id'   => 0,
+                'pgb_transaction_id' => wp_generate_uuid4(),
+                'amount'         => floatval($order_data['total'] ?? 0),
+                'currency'       => sanitize_text_field($order_data['currency'] ?? 'GHS'),
+                'status'         => 'pending',
+                'created_at'     => current_time('mysql'),
+                'updated_at'     => current_time('mysql'),
+            ];
+
+            // Store in WP options for now (consider custom table for scale)
+            $txn_id = $txn_data['pgb_transaction_id'];
+            update_option("pgb_txn_{$txn_id}", $txn_data, false);
+
+            return $txn_id;
+        }
+
+        /**
+         * Update transaction with WooCommerce order ID
+         */
+        private static function update_transaction_with_woo_id($txn_id, $woo_order_id)
+        {
+            $txn_data = get_option("pgb_txn_{$txn_id}");
+            if ($txn_data) {
+                $txn_data['woo_order_id'] = $woo_order_id;
+                $txn_data['updated_at'] = current_time('mysql');
+                update_option("pgb_txn_{$txn_id}", $txn_data, false);
+            }
+        }
+
+        /**
+         * Capture affiliate context before leaving Streams
+         */
+        private static function capture_affiliate_context($payload, $wp_user_id, $streams_user_id)
+        {
+            if (!defined('AFFILIATEWP')) {
+                return null;
+            }
+
+            $context = [
+                'wp_user_id'     => $wp_user_id,
+                'streams_user_id' => $streams_user_id,
+                'timestamp'      => gmdate('c'),
+                'version'        => '1.0',
+            ];
+
+            // Check if user is an affiliate
+            if (function_exists('affwp_get_affiliate_id')) {
+                $affiliate_id = affwp_get_affiliate_id($wp_user_id);
+                if ($affiliate_id) {
+                    $context['affiliate_id'] = $affiliate_id;
+                    $context['is_affiliate'] = true;
+                }
+            }
+
+            // Capture HTTP referer for referral tracking
+            if (!empty($_SERVER['HTTP_REFERER'])) {
+                $context['http_referer'] = esc_url_raw($_SERVER['HTTP_REFERER']);
+            }
+
+            return !empty($context['affiliate_id']) ? $context : null;
+        }
+
+        /**
+         * Process WooCommerce webhook/callback
+         */
+        public static function process_woocommerce_callback($woo_order_id)
+        {
+            $logger = PGB_Logger::class;
+            $logger::info(
+                'class-pgb-order-manager.log',
+                "Processing WooCommerce callback for order {$woo_order_id}",
+                __FILE__,
+                __LINE__
+            );
+
+            try {
+                $order = wc_get_order($woo_order_id);
+                if (!$order) {
+                    throw new Exception("WooCommerce order {$woo_order_id} not found");
+                }
+
+                // Get Streams user ID from meta
+                $streams_user_id = $order->get_meta('pgb_streams_user_id');
+                if (!$streams_user_id) {
+                    throw new Exception("No Streams user ID found in order {$woo_order_id}");
+                }
+
+                // Idempotency check
+                if (self::is_callback_processed($woo_order_id)) {
+                    $logger::info(
+                        'class-pgb-order-manager.log',
+                        "Callback already processed for order {$woo_order_id} (idempotent)",
+                        __FILE__,
+                        __LINE__
+                    );
+                    return;
+                }
+
+                if ($order->get_status() === 'completed' || $order->get_status() === 'processing') {
+                    // Process payment success
+                    self::finalize_payment_success($order, $streams_user_id);
+                } else {
+                    // Process payment failure/pending
+                    self::finalize_payment_failure($order, $streams_user_id);
+                }
+
+                // Mark as processed
+                self::mark_callback_processed($woo_order_id);
+
+                $logger::info(
+                    'class-pgb-order-manager.log',
+                    "Callback processing completed for order {$woo_order_id}",
+                    __FILE__,
+                    __LINE__
+                );
+            } catch (Exception $e) {
+                $logger::error(
+                    'class-pgb-order-manager.log',
+                    'Callback processing failed: ' . $e->getMessage(),
+                    __FILE__,
+                    __LINE__
+                );
+                throw $e;
+            }
+        }
+
+        /**
+         * Check if callback already processed (idempotency)
+         */
+        private static function is_callback_processed($woo_order_id)
+        {
+            $order = wc_get_order($woo_order_id);
+            return $order && $order->get_meta('pgb_callback_processed') === 'yes';
+        }
+
+        /**
+         * Mark callback as processed
+         */
+        private static function mark_callback_processed($woo_order_id)
+        {
+            $order = wc_get_order($woo_order_id);
+            if ($order) {
+                $order->update_meta_data('pgb_callback_processed', 'yes');
+                $order->save();
+            }
+        }
+
+        /**
+         * Finalize successful payment
+         */
+        private static function finalize_payment_success($order, $streams_user_id)
+        {
+            $logger = PGB_Logger::class;
+            $logger::info(
+                'class-pgb-order-manager.log',
+                "Finalizing payment success for Streams user {$streams_user_id}",
+                __FILE__,
+                __LINE__
+            );
+
+            try {
+                // Get transaction kind from order meta
+                $transaction_kind = $order->get_meta('pgb_transaction_kind');
+
+                // Dispatch to appropriate handler via hooks
+                do_action('pgb_payment_completed', $order, $streams_user_id, $transaction_kind);
+
+                // Handle specific transaction types
+                switch ($transaction_kind) {
+                    case 'PRODUCT':
+                        self::handle_product_purchase($order, $streams_user_id);
+                        break;
+                    case 'PRO':
+                        self::handle_pro_subscription($order, $streams_user_id);
+                        break;
+                    case 'WALLET':
+                        self::handle_wallet_topup($order, $streams_user_id);
+                        break;
+                    case 'DONATE':
+                        self::handle_donation($order, $streams_user_id);
+                        break;
+                    default:
+                        $logger::warning(
+                            'class-pgb-order-manager.log',
+                            "Unknown transaction kind: {$transaction_kind}",
+                            __FILE__,
+                            __LINE__
+                        );
+                }
+
+                // Process integrations (affiliate, etc.)
+                do_action('pgb_payment_integrations_process', $order, $streams_user_id);
+
+                // Log activity in Streams
+                $this->log_streams_activity($streams_user_id, $order);
+            } catch (Exception $e) {
+                $logger::error(
+                    'class-pgb-order-manager.log',
+                    'Payment success finalization failed: ' . $e->getMessage(),
+                    __FILE__,
+                    __LINE__
+                );
+                throw $e;
+            }
+        }
+
+        /**
+         * Handle product purchase
+         */
+        private static function handle_product_purchase($order, $streams_user_id)
+        {
+            // Implemented by integration hooks
+            do_action('pgb_handle_product_purchase', $order, $streams_user_id);
+        }
+
+        /**
+         * Handle Pro subscription
+         */
+        private static function handle_pro_subscription($order, $streams_user_id)
+        {
+            do_action('pgb_handle_pro_subscription', $order, $streams_user_id);
+        }
+
+        /**
+         * Handle wallet topup
+         */
+        private static function handle_wallet_topup($order, $streams_user_id)
+        {
+            do_action('pgb_handle_wallet_topup', $order, $streams_user_id);
+        }
+
+        /**
+         * Handle donation
+         */
+        private static function handle_donation($order, $streams_user_id)
+        {
+            do_action('pgb_handle_donation', $order, $streams_user_id);
+        }
+
+        /**
+         * Finalize failed payment
+         */
+        private static function finalize_payment_failure($order, $streams_user_id)
+        {
+            $logger = PGB_Logger::class;
+            $logger::info(
+                'class-pgb-order-manager.log',
+                "Payment failed/pending for Streams user {$streams_user_id}, order status: {$order->get_status()}",
+                __FILE__,
+                __LINE__
+            );
+
+            do_action('pgb_payment_failed', $order, $streams_user_id);
+        }
+
+        /**
+         * Log activity in Streams
+         */
+        private static function log_streams_activity($streams_user_id, $order)
+        {
+            // Call Streams logging function via API
+            $api = new PGB_Streams_API();
+            $api->log_activity($streams_user_id, $order);
+        }
+    }
+}
+?>
+```
+
+---
+
+### **4. Integration: AffiliateWP (`pgb-int-affiliate-wp.php`)**
+
+Handles affiliate rewards and commissions through proper hooks.
+
+```php
+<?php
+/**
+ * Affiliate WP Integration for Payment Gateway Bridge
+ */
+
+if (!function_exists('pgb_affiliate_wp_init')) {
+    function pgb_affiliate_wp_init()
+    {
+        if (!defined('AFFILIATEWP')) {
+            return;
+        }
+
+        // Hook into payment completed
+        add_action('pgb_payment_completed', 'pgb_affiliate_process_referral', 10, 3);
+    }
+    add_action('plugins_loaded', 'pgb_affiliate_wp_init');
+}
+
+/**
+ * Process affiliate referral on payment completion
+ */
+function pgb_affiliate_process_referral($order, $streams_user_id, $transaction_kind)
+{
+    $logger = PGB_Logger::class;
+    $logger::info(
+        'pgb-int-affiliate-wp.log',
+        "Processing affiliate referral for Streams user {$streams_user_id}, kind={$transaction_kind}",
+        __FILE__,
+        __LINE__
+    );
+
+    try {
+        // Get affiliate context
+        $affiliate_context = $order->get_meta('pgb_affiliate_context');
+        if (!$affiliate_context) {
+            $logger::debug(
+                'pgb-int-affiliate-wp.log',
+                "No affiliate context found for order {$order->get_id()}",
+                __FILE__,
+                __LINE__
+            );
+            return;
+        }
+
+        $context = json_decode($affiliate_context, true);
+        if (!is_array($context) || empty($context['affiliate_id'])) {
+            return;
+        }
+
+        $affiliate_id = $context['affiliate_id'];
+        $wp_user_id = $order->get_customer_id();
+        $order_id = $order->get_id();
+        $amount = floatval($order->get_total());
+
+        // Get referral args
+        $referral_args = [
+            'affiliate_id'   => $affiliate_id,
+            'reference'      => 'order_' . $order_id,
+            'referral_type'  => 'product',
+            'amount'         => $amount,
+            'status'         => 'approved',
+            'description'    => "WoWonder - {$transaction_kind}",
+            'context'        => 'woocommerce',
+            'user_id'        => $wp_user_id,
+            'custom'         => [
+                'streams_user_id' => $streams_user_id,
+                'transaction_kind' => $transaction_kind,
+            ],
+        ];
+
+        // Create referral via Affiliate WP
+        if (function_exists('affwp_add_referral')) {
+            $referral_id = affwp_add_referral($referral_args);
+            if ($referral_id) {
+                $logger::info(
+                    'pgb-int-affiliate-wp.log',
+                    "Affiliate referral created: id={$referral_id}, affiliate_id={$affiliate_id}, amount={$amount}",
+                    __FILE__,
+                    __LINE__
+                );
+
+                // Store referral ID in order for tracking
+                $order->update_meta_data('pgb_affiliate_referral_id', $referral_id);
+                $order->save();
+            } else {
+                $logger::warning(
+                    'pgb-int-affiliate-wp.log',
+                    "Failed to create affiliate referral for affiliate_id={$affiliate_id}",
+                    __FILE__,
+                    __LINE__
+                );
+            }
+        }
+    } catch (Exception $e) {
+        $logger::error(
+            'pgb-int-affiliate-wp.log',
+            'Affiliate processing failed: ' . $e->getMessage(),
+            __FILE__,
+            __LINE__
+        );
+    }
+}
+?>
+```
+
+---
+
+### **5. Addon: Currency Sync (`pgb-addon-currency-sync.php`)**
+
+Handles multi-currency conversion and synchronization.
+
+```php
+<?php
+/**
+ * Currency Sync Addon for Payment Gateway Bridge
+ */
+
+if (!class_exists('PGB_Addon_Currency')) {
+    class PGB_Addon_Currency
+    {
+        public static function init()
+        {
+            add_filter('pgb_order_data_prepared', [self::class, 'apply_currency_conversion']);
+        }
+
+        /**
+         * Apply currency conversion to order
+         */
+        public static function apply_currency_conversion($order_data)
+        {
+            $logger = PGB_Logger::class;
+
+            try {
+                $currency = $order_data['currency'] ?? 'GHS';
+                $amount = floatval($order_data['line_items'][0]['total'] ?? 0);
+
+                // Check if currency switcher is active
+                if (!self::is_currency_switcher_active()) {
+                    return $order_data;
+                }
+
+                // Get WooCommerce store currency
+                $store_currency = get_woocommerce_currency();
+
+                if ($currency === $store_currency) {
+                    return $order_data;
+                }
+
+                // Convert amount
+                $converted_amount = self::convert_currency($amount, $currency, $store_currency);
+                if (!$converted_amount) {
+                    throw new Exception("Failed to convert {$amount} {$currency} to {$store_currency}");
+                }
+
+                $logger::info(
+                    'pgb-addon-currency-sync.log',
+                    "Currency converted: {$amount} {$currency} -> {$converted_amount} {$store_currency}",
+                    __FILE__,
+                    __LINE__
+                );
+
+                // Update order data with converted amount
+                $order_data['line_items'][0]['total'] = $converted_amount;
+                $order_data['line_items'][0]['price'] = $converted_amount / floatval($order_data['line_items'][0]['quantity']);
+                $order_data['currency'] = $store_currency;
+
+                return $order_data;
+            } catch (Exception $e) {
+                $logger::warning(
+                    'pgb-addon-currency-sync.log',
+                    'Currency conversion skipped: ' . $e->getMessage(),
+                    __FILE__,
+                    __LINE__
+                );
+                return $order_data;
+            }
+        }
+
+        /**
+         * Check if WooCommerce Currency Switcher is active
+         */
+        private static function is_currency_switcher_active()
+        {
+            return defined('WCS_PLUGIN_FILE') || class_exists('WCCS');
+        }
+
+        /**
+         * Convert amount between currencies
+         */
+        private static function convert_currency($amount, $from_currency, $to_currency)
+        {
+            if ($from_currency === $to_currency) {
+                return $amount;
+            }
+
+            // Use WooCommerce Currency Switcher if available
+            if (function_exists('wcs_convert_currency')) {
+                return wcs_convert_currency($amount, $from_currency, $to_currency);
+            }
+
+            // Fallback: get exchange rate from option
+            $rates = get_option('pgb_currency_rates', []);
+            $rate_key = "{$from_currency}_{$to_currency}";
+
+            if (!isset($rates[$rate_key])) {
+                return false;
+            }
+
+            return $amount * $rates[$rate_key];
+        }
+    }
+}
+
+// Initialize addon
+PGB_Addon_Currency::init();
+?>
+```
+
+---
+
+### **6. Streams Client (`shared/payment-gateway/pgb-client-streams.php`)**
+
+Integration point in Streams that initiates payment flow.
+
+```php
+<?php
+/**
+ * Buzzjuice Streams Payment Client
+ * 
+ * Include this in Streams to initiate payment flows via the PGB engine.
+ */
+
+if (!function_exists('pgb_streams_initiate_payment')) {
+    /**
+     * Initiate payment from Streams
+     *
+     * @param array $payload Payment payload from Streams modal
+     * @return array Response with status and redirect URL
+     */
+    function pgb_streams_initiate_payment($payload)
+    {
+        // Validate basic structure
+        if (!is_array($payload) || empty($payload['transaction_kind'])) {
+            return [
+                'status' => 400,
+                'message' => 'Invalid payment payload',
+            ];
+        }
+
+        try {
+            // Validate required fields
+            $required = ['product_name', 'product_price', 'amount', 'transaction_kind'];
+            foreach ($required as $field) {
+                if (empty($payload[$field])) {
+                    throw new Exception("Missing required field: {$field}");
+                }
+            }
+
+            // Add Streams user ID
+            $payload['streams_user_id'] = $wo['user']['user_id'] ?? 0;
+            if (!$payload['streams_user_id']) {
+                throw new Exception('User not authenticated');
+            }
+
+            // Call WordPress mu-plugin via AJAX
+            $response = wp_remote_post(
+                get_home_url() . '/wp-admin/admin-ajax.php',
+                [
+                    'method'      => 'POST',
+                    'blocking'    => true,
+                    'sslverify'   => false,
+                    'body'        => [
+                        'action'  => 'pgb_prepare_payment',
+                        'nonce'   => wp_create_nonce('pgb_payment_nonce'),
+                        'payload' => json_encode($payload),
+                    ],
+                ]
+            );
+
+            if (is_wp_error($response)) {
+                throw new Exception('Payment gateway connection failed: ' . $response->get_error_message());
+            }
+
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+
+            if ($body['success']) {
+                // Redirect to payment
+                return [
+                    'status' => 200,
+                    'url' => $body['data']['payment_url'],
+                    'message' => 'Redirecting to payment...',
+                ];
+            } else {
+                throw new Exception($body['data']['message'] ?? 'Payment initiation failed');
+            }
+        } catch (Exception $e) {
+            error_log('PGB Streams Client Error: ' . $e->getMessage());
+            return [
+                'status' => 400,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+}
+
+/**
+ * Hook into Streams payment modal submission
+ */
+if (!function_exists('pgb_streams_init_hooks')) {
+    function pgb_streams_init_hooks()
+    {
+        // Modify Streams requests.php to call pgb_streams_initiate_payment
+        // This is integration point where Streams payment button calls our client
+    }
+}
+?>
+```
+
+---
+
+### **7. Validators: Security & Validation**
+
+```php
+<?php
+/**
+ * Order Validator - Comprehensive validation for payment payloads
+ */
+
+if (!class_exists('PGB_Order_Validator')) {
+    class PGB_Order_Validator
+    {
+        public static function validate($payload)
+        {
+            try {
+                self::validate_required_fields($payload);
+                self::validate_data_types($payload);
+                self::validate_amounts($payload);
+                self::validate_user($payload);
+
+                return ['valid' => true];
+            } catch (Exception $e) {
+                return ['valid' => false, 'error' => $e->getMessage()];
+            }
+        }
+
+        private static function validate_required_fields($payload)
+        {
+            $required = [
+                'product_name',
+                'product_price',
+                'amount',
+                'transaction_kind',
+                'wow_currency_code',
+            ];
+
+            foreach ($required as $field) {
+                if (empty($payload[$field])) {
+                    throw new Exception("Missing required field: {$field}");
+                }
+            }
+        }
+
+        private static function validate_data_types($payload)
+        {
+            if (!is_string($payload['product_name'])) {
+                throw new Exception('product_name must be string');
+            }
+
+            if (!is_numeric($payload['product_price']) || floatval($payload['product_price']) < 0) {
+                throw new Exception('product_price must be positive number');
+            }
+
+            if (!is_numeric($payload['amount']) || floatval($payload['amount']) < 0) {
+                throw new Exception('amount must be positive number');
+            }
+
+            if (!in_array($payload['transaction_kind'], ['PRODUCT', 'PRO', 'WALLET', 'DONATE'])) {
+                throw new Exception('Invalid transaction_kind');
+            }
+        }
+
+        private static function validate_amounts($payload)
+        {
+            $price = floatval($payload['product_price']);
+            $amount = floatval($payload['amount']);
+            $units = intval($payload['product_units'] ?? 1);
+
+            if ($amount <= 0) {
+                throw new Exception('Amount must be greater than 0');
+            }
+
+            if ($price <= 0) {
+                throw new Exception('Product price must be greater than 0');
+            }
+
+            // Allow 1% variance for rounding
+            $expected = round($price * $units, 2);
+            $variance = abs(($amount - $expected) / $expected);
+            if ($variance > 0.01) {
+                throw new Exception("Amount mismatch: expected ~{$expected}, got {$amount}");
+            }
+        }
+
+        private static function validate_user($payload)
+        {
+            $user_id = intval($payload['streams_user_id'] ?? 0);
+            if ($user_id <= 0) {
+                throw new Exception('Invalid user ID');
+            }
+        }
+    }
+}
+
+/**
+ * Security class - Sanitization and access control
+ */
+if (!class_exists('PGB_Security')) {
+    class PGB_Security
+    {
+        public static function sanitize_payload($payload)
+        {
+            return [
+                'product_name'        => sanitize_text_field($payload['product_name'] ?? ''),
+                'product_price'       => floatval($payload['product_price'] ?? 0),
+                'amount'              => floatval($payload['amount'] ?? 0),
+                'product_units'       => intval($payload['product_units'] ?? 1),
+                'transaction_kind'    => sanitize_text_field($payload['transaction_kind'] ?? ''),
+                'wow_currency_code'   => strtoupper(sanitize_text_field($payload['wow_currency_code'] ?? 'GHS')),
+                'streams_user_id'     => intval($payload['streams_user_id'] ?? 0),
+            ];
+        }
+    }
+}
+?>
+```
+
+---
+
+### **8. Admin UI Integration (WordPress Admin Page)**
+
+An optional WordPress admin page for configuration and monitoring:
+
+```php
+<?php
+/**
+ * Payment Gateway Bridge Admin Page
+ * 
+ * Add to Blue Crown admin menu
+ */
+
+if (!function_exists('pgb_admin_register_page')) {
+    function pgb_admin_register_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        // Add to Blue Crown menu if exists, otherwise create own
+        $parent_slug = defined('BLUE_CROWN_MENU_SLUG') ? BLUE_CROWN_MENU_SLUG : 'pgb_settings';
+
+        add_submenu_page(
+            $parent_slug,
+            'Payment Gateway Bridge',
+            'Payment Gateway',
+            'manage_options',
+            'pgb_settings',
+            'pgb_admin_page_render'
+        );
+
+        add_action('admin_init', 'pgb_admin_register_settings');
+    }
+    add_action('admin_menu', 'pgb_admin_register_page');
+}
+
+function pgb_admin_register_settings()
+{
+    register_setting('pgb_settings', 'pgb_logging_config');
+    register_setting('pgb_settings', 'pgb_api_config');
+
+    add_settings_section(
+        'pgb_logging',
+        'Logging Configuration',
+        function () {
+            echo '<p>Enable/disable logging for specific components</p>';
+        },
+        'pgb_settings'
+    );
+
+    $categories = ['general', 'affiliate', 'currency', 'validation', 'security', 'webhook', 'api'];
+    foreach ($categories as $category) {
+        add_settings_field(
+            "pgb_log_{$category}",
+            ucfirst($category),
+            function () use ($category) {
+                $config = PGB_Logger::get_config();
+                $checked = $config[$category] ? 'checked' : '';
+                echo "<input type='checkbox' name='pgb_logging_config[{$category}]' value='1' {$checked} />";
+            },
+            'pgb_settings',
+            'pgb_logging'
+        );
+    }
+}
+
+function pgb_admin_page_render()
+{
+    ?>
+    <div class="wrap">
+        <h1>Payment Gateway Bridge</h1>
+        <div class="tabbed-navigation">
+            <a href="#logs" class="tab active">Logs</a>
+            <a href="#settings" class="tab">Settings</a>
+            <a href="#transactions" class="tab">Transactions</a>
+        </div>
+
+        <div id="logs" class="tab-content active">
+            <h2>Recent Logs</h2>
+            <select id="pgb-log-file">
+                <option value="pgb-engine.log">Engine</option>
+                <option value="class-pgb-order-manager.log">Order Manager</option>
+                <option value="pgb-int-affiliate-wp.log">Affiliate WP</option>
+                <option value="pgb-addon-currency-sync.log">Currency Sync</option>
+            </select>
+            <button class="button" id="pgb-log-refresh">Refresh</button>
+            <button class="button" id="pgb-log-clear">Clear</button>
+            <pre id="pgb-log-content" style="background:#f5f5f5; padding:15px; margin-top:15px; max-height:400px; overflow-y:auto;"></pre>
+        </div>
+
+        <div id="settings" class="tab-content">
+            <form method="post" action="options.php">
+                <?php settings_fields('pgb_settings'); ?>
+                <?php do_settings_sections('pgb_settings'); ?>
+                <?php submit_button(); ?>
+            </form>
+        </div>
+
+        <div id="transactions" class="tab-content">
+            <h2>Recent Transactions</h2>
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th>Transaction ID</th>
+                        <th>User ID</th>
+                        <th>WooCommerce Order</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody id="pgb-transactions-list">
+                    <!-- Loaded via JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+    jQuery(function($) {
+        $('#pgb-log-refresh').on('click', function() {
+            var logFile = $('#pgb-log-file').val();
+            $.post(ajaxurl, {
+                action: 'pgb_get_logs',
+                log_file: logFile
+            }, function(response) {
+                if (response.success) {
+                    $('#pgb-log-content').text(response.data.logs || 'No logs available');
+                }
+            });
+        });
+
+        $('#pgb-log-clear').on('click', function() {
+            if (confirm('Clear this log file? This cannot be undone.')) {
+                var logFile = $('#pgb-log-file').val();
+                $.post(ajaxurl, {
+                    action: 'pgb_clear_logs',
+                    log_file: logFile
+                }, function(response) {
+                    if (response.success) {
+                        alert('Log cleared');
+                        $('#pgb-log-refresh').click();
+                    }
+                });
+            }
+        });
+
+        // Load logs on page load
+        $('#pgb-log-refresh').click();
+    });
+    </script>
+    <?php
+}
+
+// AJAX handlers
+add_action('wp_ajax_pgb_get_logs', function () {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    $log_file = sanitize_file_name($_POST['log_file'] ?? 'pgb-engine.log');
+    $logs = PGB_Logger::get_recent($log_file, 100);
+
+    wp_send_json_success(['logs' => implode("\n", $logs)]);
+});
+
+add_action('wp_ajax_pgb_clear_logs', function () {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    $log_file = sanitize_file_name($_POST['log_file'] ?? '');
+    PGB_Logger::clear($log_file);
+
+    wp_send_json_success(['message' => 'Log cleared']);
+});
+?>
+```
+
+---
+
+## **DEPLOYMENT CHECKLIST**
+
+1. **Create directory structure** in `shared/payment-gateway/`
+2. **Implement all core classes** (Logger, Bootstrap, OrderManager, etc.)
+3. **Implement validators and security** checks
+4. **Create WooCommerce API wrapper** for order creation
+5. **Create Streams API wrapper** for reverse callbacks
+6. **Implement integrations** (Affiliate WP, Jewel, etc.)
+7. **Implement addons** (Currency, Notifications, etc.)
+8. **Add WordPress admin UI** for monitoring
+9. **Update Streams payment initiation** to use new client
+10. **Test end-to-end flow** with mock and real payments
+11. **Monitor logs** during initial rollout
+
+---
+
+## **KEY IMPROVEMENTS OVER CURRENT SYSTEM**
+
+| Issue | Current | Refactored |
+|-------|---------|-----------|
+| **Order drops** | Race conditions in webhook | Idempotency checks + transactional patterns |
+| **Logging** | Scattered `error_log()` calls | Centralized, categorized logging with toggles |
+| **Affiliate context** | Fragile pre-Streams capture | Captured in order metadata, processed on webhook |
+| **Currency handling** | Ad-hoc in multiple files | Dedicated addon with converter interface |
+| **Modularity** | Monolithic files | Hooks-based architecture with plugins |
+| **Debuggability** | Difficult to trace flows | Clear logs, transaction audit trail, admin UI |
+| **Security** | Inline sanitization | Dedicated security class, validation layer |
+| **Testability** | Tightly coupled | Loosely coupled via hooks and dependency injection |
+
+---
+
+This refactored architecture provides a **durable, scalable, and maintainable** payment gateway bridge for Buzzjuice while maintaining backward compatibility and enabling future enhancements.
+
+<<STOP GITHUB>>
