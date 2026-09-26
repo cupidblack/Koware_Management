@@ -1,0 +1,2227 @@
+<<START CHATGPT>>
+
+# Buzzjuice Payment Gateway Bridge — Updated Architecture & Implementation Proposal
+
+I reviewed the current repository implementation, the supplied proposal, the previous ChatGPT design, and the GitHub review. The GitHub review is directionally strong, but I would make several architectural corrections before implementation.
+
+The key conclusion is:
+
+> **The upgrade should not simply move `wow-pgb_init.php` and `wow-pgb_sync.php` into new folders. The payment bridge should become a persistent, idempotent transaction coordinator owned by WordPress, with Streams acting as a thin payment client.**
+
+That directly addresses the dropped-order problem rather than merely reorganizing the existing code.
+
+---
+
+# 1. What is actually wrong with the current bridge
+
+The repository exposes several structural problems.
+
+### 1.1 There are effectively multiple payment paths
+
+The current system has payment logic in:
+
+* `streams/assets/wow-pgb/wow-pgb_init.php`
+* `streams/sources/checkout.php`
+* `streams/wow-pgb_webhook.php`
+* `wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php`
+* payment-related JavaScript/modal code.
+
+For example, `requests.php` directly includes `wow-pgb_init.php` when `payment_type=wow_payment`. 
+
+Meanwhile, `checkout.php` contains another WooCommerce payment initialization path and even generates its own `wow_order_id`. 
+
+That is exactly the type of fragmentation that makes a payment system difficult to recover when one HTTP request disappears.
+
+---
+
+## 1.2 The browser currently supplies financial information
+
+The current initializer accepts:
+
+* `amount`
+* `product_price`
+* `product_units`
+* `product_owner_id`
+* `transaction_kind`
+* product information
+
+directly from the request. 
+
+Those values can be useful as **intent**, but they cannot be authoritative payment values.
+
+The new architecture should therefore distinguish:
+
+```text
+Browser/Streams request
+        ↓
+"User wants product X"
+        ↓
+WordPress verifies product X
+        ↓
+WordPress determines price/currency
+        ↓
+WooCommerce order
+```
+
+not:
+
+```text
+Browser says amount = 27
+        ↓
+WooCommerce receives 27
+```
+
+---
+
+# 2. The current WooCommerce REST architecture should be removed
+
+The current Streams client obtains:
+
+```text
+wow_api_url
+wow_api_key
+wow_api_secret
+```
+
+and sends authenticated REST requests directly to WooCommerce. 
+
+That is unnecessary because WooCommerce is installed inside the authoritative WordPress environment.
+
+The new architecture should be:
+
+```text
+Buzzjuice Streams
+       │
+       │ signed PGB request
+       ▼
+WordPress PGB MU Plugin
+       │
+       │ native PHP
+       ▼
+WooCommerce
+```
+
+rather than:
+
+```text
+Streams
+   │
+   │ WooCommerce REST credentials
+   ▼
+WooCommerce
+```
+
+This eliminates a significant source of:
+
+* credential failures
+* REST authentication problems
+* HTTP timeouts
+* SSL problems
+* duplicate order creation
+* synchronization problems.
+
+WooCommerce itself provides native order/payment APIs, including `payment_complete()`, which is preferable to independently manipulating payment state. ([The WooCommerce Developer Blog][1])
+
+---
+
+# 3. The most important change: PGB transaction coordinator
+
+The new bridge should introduce a persistent PGB transaction.
+
+Conceptually:
+
+```text
+PGB transaction
+│
+├── transaction_id
+├── idempotency_key
+├── request_id
+├── wow_order_id
+├── woo_order_id
+│
+├── wp_user_id
+├── streams_user_id
+│
+├── transaction_kind
+├── product_id
+├── variation_id
+├── quantity
+│
+├── requested_currency
+├── approved_currency
+├── base_amount
+├── conversion_rate
+├── converted_amount
+│
+├── payment_status
+├── fulfilment_status
+├── affiliate_status
+├── addon_status
+│
+├── retry_count
+├── last_error
+├── next_retry_at
+│
+└── timestamps
+```
+
+This is the central improvement.
+
+---
+
+# 4. Do NOT use `wp_options` as the transaction database
+
+The GitHub response suggested temporarily storing transactions as:
+
+```php
+update_option("pgb_txn_{$txn_id}", $txn_data, false);
+```
+
+I would **not implement that**.
+
+It is acceptable for a prototype, but not for the durable bridge you are trying to build.
+
+A dedicated table is much better:
+
+```text
+wp_bzj_pgb_transactions
+```
+
+with indexes on:
+
+```text
+transaction_id
+idempotency_key
+request_id
+wow_order_id
+woo_order_id
+wp_user_id
+streams_user_id
+payment_status
+fulfilment_status
+created_at
+updated_at
+```
+
+WordPress's `dbDelta()` is specifically intended for creating/updating plugin tables and allows the schema to evolve through versions. ([WordPress Developer Resources][2])
+
+---
+
+# 5. Final directory structure
+
+I recommend this exact structure.
+
+```text
+buzzjuice.net/
+│
+├── wp-content/
+│   └── mu-plugins/
+│       └── bzj-payment-gateway.php
+│
+└── shared/
+    └── payment-gateway/
+        │
+        ├── pgb-client.php
+        ├── pgb-client-streams.php
+        │
+        ├── core/
+        │   ├── class-pgb-bootstrap.php
+        │   ├── class-pgb-config.php
+        │   ├── class-pgb-logger.php
+        │   ├── class-pgb-security.php
+        │   ├── class-pgb-schema.php
+        │   ├── class-pgb-repository.php
+        │   ├── class-pgb-transaction.php
+        │   ├── class-pgb-lock.php
+        │   ├── class-pgb-state.php
+        │   ├── class-pgb-validator.php
+        │   ├── class-pgb-processor.php
+        │   ├── class-pgb-retry.php
+        │   └── class-pgb-redirect.php
+        │
+        ├── handlers/
+        │   ├── class-pgb-handler-pro.php
+        │   ├── class-pgb-handler-wallet.php
+        │   ├── class-pgb-handler-donation.php
+        │   └── class-pgb-handler-market.php
+        │
+        ├── integrations/
+        │   ├── pgb-int-woocommerce.php
+        │   ├── pgb-int-streams.php
+        │   ├── pgb-int-currency-switcher.php
+        │   └── pgb-int-jewel-affiliate.php
+        │
+        ├── addons/
+        │   ├── pgb-addon-affiliate-wp.php
+        │   └── pgb-addon-*.php
+        │
+        ├── api/
+        │   ├── class-pgb-rest.php
+        │   ├── class-pgb-rest-intent.php
+        │   ├── class-pgb-rest-status.php
+        │   └── class-pgb-rest-return.php
+        │
+        ├── admin/
+        │   └── class-pgb-admin.php
+        │
+        ├── js/
+        │   └── pgb-js-streams.js
+        │
+        └── log/
+            ├── pgb-client.log
+            ├── pgb-client-streams.log
+            ├── bzj-payment-gateway.log
+            ├── class-pgb-bootstrap.log
+            ├── class-pgb-processor.log
+            ├── pgb-int-streams.log
+            ├── pgb-int-woocommerce.log
+            ├── pgb-int-jewel-affiliate.log
+            ├── pgb-addon-affiliate-wp.log
+            └── ...
+```
+
+There remains **exactly one file in `mu-plugins`**.
+
+No:
+
+```text
+mu-plugins/payment-gateway/
+```
+
+and no nested MU-plugin directories.
+
+The MU plugin is the **bootstrap/engine**, not the place where all payment logic lives.
+
+---
+
+# 6. The MU plugin becomes the engine
+
+`bzj-payment-gateway.php` should do approximately this:
+
+```text
+WordPress loads MU plugin
+        ↓
+load shared/db_helpers.php
+        ↓
+load PGB bootstrap
+        ↓
+bootstrap configuration
+        ↓
+bootstrap logger
+        ↓
+bootstrap schema
+        ↓
+register WooCommerce hooks
+        ↓
+register REST endpoints
+        ↓
+scan integrations
+        ↓
+scan addons
+        ↓
+register Action Scheduler jobs
+        ↓
+ready
+```
+
+The MU plugin should **not** contain:
+
+* AffiliateWP business logic
+* Jewel logic
+* Streams SQL
+* wallet logic
+* product logic
+* currency calculations
+* WooCommerce order construction.
+
+Those belong in their respective components.
+
+---
+
+# 7. Addon and integration scanning
+
+Your idea of automatically loading:
+
+```text
+addons/
+integrations/
+```
+
+is good.
+
+I would implement deterministic scanning:
+
+```text
+integrations/
+    pgb-int-*.php
+
+addons/
+    pgb-addon-*.php
+```
+
+but with two safeguards:
+
+### 7.1 Only PHP files
+
+No arbitrary executable files.
+
+### 7.2 Deterministic load order
+
+For example:
+
+```text
+core
+↓
+WooCommerce integration
+↓
+Streams integration
+↓
+currency integration
+↓
+Jewel integration
+↓
+addons
+```
+
+This avoids random filesystem ordering producing unpredictable hooks.
+
+---
+
+# 8. New payment lifecycle
+
+The complete lifecycle should become:
+
+```text
+┌──────────────────────────────┐
+│ Streams Payment UI           │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ PGB Streams Client           │
+│ - validate session           │
+│ - construct intent           │
+│ - HMAC sign                  │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ WordPress PGB /intent        │
+│                              │
+│ - authenticate request       │
+│ - validate nonce             │
+│ - validate user              │
+│ - validate product           │
+│ - calculate authoritative    │
+│   amount                     │
+│ - idempotency lookup         │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ PGB Transaction              │
+│ status = initialized         │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ WooCommerce Integration      │
+│                              │
+│ wc_create_order()            │
+│ add product                  │
+│ metadata                     │
+│ calculate totals             │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ WooCommerce Order            │
+└──────────────┬───────────────┘
+               │
+               ▼
+        Payment Gateway
+               │
+       ┌───────┴────────┐
+       │                │
+       ▼                ▼
+payment_complete    webhook
+       │                │
+       └───────┬────────┘
+               ▼
+┌──────────────────────────────┐
+│ PGB Processor                │
+│                              │
+│ verify payment               │
+│ lock transaction             │
+│ fulfil Streams               │
+│ process AffiliateWP          │
+│ process Jewel                │
+│ process other addons         │
+└──────────────┬───────────────┘
+               │
+               ▼
+        transaction complete
+               │
+               ▼
+       signed return token
+               │
+               ▼
+           Streams
+```
+
+The webhook and WooCommerce completion hook therefore become **two signals into the same processor**, rather than two independent processors.
+
+---
+
+# 9. Idempotency solves the dropped-order problem
+
+This is the central mechanism.
+
+Suppose:
+
+```text
+Streams request
+
+idempotency_key = abc123
+```
+
+WordPress creates:
+
+```text
+PGB transaction = pgb_1001
+Woo order       = 5001
+```
+
+but the response gets lost.
+
+Streams retries:
+
+```text
+idempotency_key = abc123
+```
+
+The PGB finds:
+
+```text
+abc123
+   ↓
+pgb_1001
+   ↓
+Woo order 5001
+```
+
+and returns the existing payment URL.
+
+It **does not create Woo order 5002**.
+
+This is much more important than merely adding retry loops.
+
+---
+
+# 10. Request authentication
+
+The Streams client should use HMAC.
+
+Headers:
+
+```text
+X-BZJ-PGB-Key
+X-BZJ-PGB-Timestamp
+X-BZJ-PGB-Nonce
+X-BZJ-PGB-Signature
+X-BZJ-PGB-Request-ID
+```
+
+Signature payload:
+
+```text
+timestamp
+nonce
+request_id
+raw_body
+```
+
+joined deterministically.
+
+WordPress verifies:
+
+```text
+HTTPS
+timestamp tolerance
+nonce
+request ID
+signature
+request body
+origin
+authenticated user
+transaction intent
+```
+
+The nonce/request ID should be persisted so a captured request cannot simply be replayed.
+
+---
+
+# 11. Streams should no longer possess WooCommerce credentials
+
+These existing settings:
+
+```text
+wow_api_url
+wow_api_key
+wow_api_secret
+```
+
+should eventually disappear from the Streams payment gateway configuration.
+
+The Streams side should only need something equivalent to:
+
+```text
+PGB endpoint
+PGB key identifier
+PGB signing secret
+```
+
+The actual secret should preferably be stored through the existing server environment rather than exposed through normal Streams administration.
+
+---
+
+# 12. Existing payment settings should be simplified
+
+The current Streams payment settings contain:
+
+* WooCommerce store URL
+* market product
+* four PRO product IDs
+* wallet product
+* crowdfund product
+* WooCommerce API URL
+* WooCommerce consumer key
+* WooCommerce consumer secret
+* webhook secret. ([GitHub][3])
+
+The new Streams configuration should retain only values that genuinely belong to Streams.
+
+For example:
+
+```text
+WooCommerce Payment
+    Enabled
+
+PGB Endpoint
+    https://buzzjuice.net/wp-json/bzj/pgb/v1/intent
+
+PGB Key
+    ...
+
+Transaction mappings
+    PRO 1 → ...
+    PRO 2 → ...
+    PRO 3 → ...
+    PRO 4 → ...
+
+Wallet handler
+    ...
+
+Crowdfund handler
+    ...
+
+PGB diagnostics
+    Enabled / Disabled
+```
+
+However, **WooCommerce product IDs should ultimately be authoritative in WordPress/PGB**, not trusted merely because Streams says they are.
+
+---
+
+# 13. Blue Crown admin page
+
+I agree with the proposal to place the administration interface under:
+
+```text
+Blue Crown
+    └── Payment Gateway
+```
+
+Rather than WordPress:
+
+```text
+Settings → General
+```
+
+The current `wow-pgb_sync.php` has started putting integration settings into General Settings, which is no longer appropriate for the new architecture. 
+
+The new page should contain:
+
+### General
+
+```text
+PGB enabled
+PGB environment
+Streams endpoint
+```
+
+### Security
+
+```text
+Key ID
+Signing secret
+Timestamp tolerance
+Webhook secret
+```
+
+Secrets should be masked.
+
+### Logging
+
+```text
+Master logging
+Client logging
+Processor logging
+WooCommerce logging
+Streams logging
+AffiliateWP logging
+Jewel logging
+Currency logging
+Security logging
+```
+
+### Transaction processing
+
+```text
+Retry enabled
+Maximum attempts
+Reconciliation enabled
+Reconciliation interval
+```
+
+### Diagnostics
+
+```text
+Database connection
+WooCommerce
+Streams
+AffiliateWP
+Jewel
+Action Scheduler
+```
+
+---
+
+# 14. Logging design
+
+The logging idea in the GitHub response should be retained, but improved.
+
+Each component gets its own log.
+
+For example:
+
+```text
+class-pgb-bootstrap.log
+class-pgb-processor.log
+class-pgb-repository.log
+pgb-int-streams.log
+pgb-int-woocommerce.log
+pgb-int-jewel-affiliate.log
+pgb-addon-affiliate-wp.log
+pgb-client.log
+pgb-client-streams.log
+```
+
+The logger should automatically identify:
+
+```text
+filename
+line
+event
+transaction_id
+request_id
+woo_order_id
+wow_order_id
+```
+
+but **never** log:
+
+```text
+passwords
+API secrets
+HMAC secrets
+JWTs
+session IDs
+authentication cookies
+raw credit-card data
+```
+
+The existing GitHub logging approach of categorizing and rotating log files is useful. 
+
+I would additionally implement:
+
+```text
+10 MB → rotate
+```
+
+and optionally:
+
+```text
+retain last 10 rotations
+```
+
+---
+
+# 15. Logging must be independently toggleable
+
+A master switch:
+
+```text
+PGB logging = ON/OFF
+```
+
+and component switches:
+
+```text
+Client
+Streams
+WooCommerce
+Processor
+AffiliateWP
+Jewel
+Currency
+Security
+Reconciliation
+```
+
+This is much more useful than hard-coded `error_log()` calls scattered throughout the system.
+
+---
+
+# 16. WooCommerce order creation
+
+The PGB should use native WooCommerce PHP APIs.
+
+Conceptually:
+
+```php
+$order = wc_create_order();
+
+$order->set_customer_id($wp_user_id);
+
+$item_id = $order->add_product(
+    $product,
+    $quantity,
+    array(
+        'subtotal' => $subtotal,
+        'total'    => $total,
+    )
+);
+
+$order->update_meta_data(
+    'bzj_pgb_transaction_id',
+    $transaction_id
+);
+
+$order->update_meta_data(
+    'wow_order_id',
+    $wow_order_id
+);
+
+$order->update_meta_data(
+    'wow_user_id',
+    $streams_user_id
+);
+
+$order->update_meta_data(
+    '_buzzjuice_origin',
+    'streams'
+);
+
+$order->calculate_totals();
+$order->save();
+```
+
+Then:
+
+```php
+$order->get_checkout_payment_url(true);
+```
+
+becomes the payment destination.
+
+WooCommerce's own APIs are designed around order/payment state, and its documentation specifically recommends `payment_complete()` for completing paid orders. ([The WooCommerce Developer Blog][1])
+
+---
+
+# 17. Existing `wow-pgb_init.php` should become a thin adapter
+
+The current file is doing far too much.
+
+For example, it currently:
+
+* authenticates Streams users
+* validates fields
+* inserts payment transactions
+* handles product transactions
+* builds addresses
+* determines subscription information
+* builds WooCommerce REST payloads
+* handles AffiliateWP snapshots
+* calls WooCommerce REST
+* performs redirects.
+
+That is too much responsibility for a single endpoint. 
+
+The replacement should essentially become:
+
+```text
+Streams request
+     ↓
+PGB client
+     ↓
+signed request
+     ↓
+WordPress
+```
+
+It should not be a payment processor.
+
+---
+
+# 18. The existing `checkout.php` payment block should be removed
+
+This block is a second payment engine:
+
+```php
+if ($payment_type === 'wow_payment') {
+    ...
+}
+```
+
+and creates its own transaction and checkout URL. 
+
+It should be replaced by a call to the same PGB client used by the other payment flows.
+
+There should be **one payment initialization pathway**.
+
+---
+
+# 19. Browser price validation
+
+The new validator should treat:
+
+```text
+amount
+product_price
+currency
+```
+
+from Streams as advisory.
+
+For each transaction type:
+
+### PRO
+
+Authority:
+
+```text
+WooCommerce variation/product
++
+Streams membership mapping
+```
+
+### MARKET
+
+Authority:
+
+```text
+Streams product record
+```
+
+with server-side validation of:
+
+```text
+owner
+price
+currency
+quantity
+availability
+```
+
+### WALLET
+
+Authority:
+
+```text
+approved wallet top-up amount
+```
+
+### DONATION
+
+Authority:
+
+```text
+validated donation/fund record
+```
+
+---
+
+# 20. Currency conversion must become transactional data
+
+The existing currency-switcher logic in `wow-pgb_sync.php` should be extracted, not discarded.
+
+The transaction should preserve:
+
+```text
+requested_currency
+approved_currency
+base_amount
+conversion_rate
+converted_amount
+```
+
+For example:
+
+```text
+Requested:
+GHS 37.00
+
+Approved:
+USD
+
+Rate:
+X
+
+Converted:
+Y
+```
+
+If the transaction is retried later, it uses the **stored conversion rate**, rather than silently recalculating at a new rate.
+
+This is particularly important for payment integrity. The previous review correctly identified this issue. 
+
+---
+
+# 21. WooCommerce webhook
+
+The existing webhook has a serious problem:
+
+```php
+$stmt->execute();
+
+if (!$stmt->execute()) {
+```
+
+It executes the same statement twice. 
+
+That must disappear.
+
+More importantly, the webhook currently performs business processing itself:
+
+```text
+webhook
+ ↓
+Streams DB
+ ↓
+wallet
+ ↓
+membership
+ ↓
+funding
+```
+
+The new webhook should instead do:
+
+```text
+Webhook
+ ↓
+verify signature
+ ↓
+identify Woo order
+ ↓
+identify PGB transaction
+ ↓
+record payment signal
+ ↓
+queue processor
+ ↓
+HTTP 200
+```
+
+WooCommerce webhook functionality is intended as an event notification mechanism, so keeping the HTTP handler lightweight is appropriate. ([The WooCommerce Developer Blog][4])
+
+---
+
+# 22. The hard-coded webhook secret must be removed and rotated
+
+The repository currently contains a literal WooCommerce webhook secret in:
+
+```text
+streams/wow-pgb_webhook.php
+```
+
+
+
+Because it has existed in source control, I would treat that secret as compromised.
+
+The implementation should:
+
+1. generate a new secret;
+2. update WooCommerce;
+3. store it in the WordPress/environment configuration;
+4. remove the old secret from source;
+5. never commit the replacement.
+
+---
+
+# 23. `streams/wow-pgb_webhook.php` should eventually become unnecessary
+
+Once WordPress owns the payment lifecycle, Streams does not need to be the receiver of the WooCommerce webhook.
+
+Instead:
+
+```text
+WooCommerce
+     ↓
+WordPress PGB
+     ↓
+Streams integration
+     ↓
+Streams DB
+```
+
+The existing endpoint can temporarily remain during migration, but should become a compatibility layer only.
+
+Eventually:
+
+```text
+streams/wow-pgb_webhook.php
+```
+
+can be retired.
+
+---
+
+# 24. Streams integration owns Streams SQL
+
+This is an important separation.
+
+The PGB processor should never contain:
+
+```sql
+UPDATE Wo_Users ...
+```
+
+or:
+
+```sql
+INSERT INTO Wo_Purchases ...
+```
+
+Instead:
+
+```php
+$streams->fulfil($transaction);
+```
+
+and:
+
+```text
+pgb-int-streams.php
+```
+
+owns all Streams SQL.
+
+This is especially appropriate because `shared/db_helpers.php` already provides the cross-system database configuration. 
+
+---
+
+# 25. PRO fulfilment
+
+The existing PRO logic should be preserved.
+
+Current successful-payment processing updates:
+
+```text
+Wo_Users.is_pro
+Wo_Users.pro_type
+Wo_Users.pro_time
+```
+
+and maps:
+
+```text
+1 → Classic
+2 → Silver
+3 → Rockstar
+4 → Premium
+```
+
+The existing webhook demonstrates this behaviour. 
+
+The new version should make it idempotent:
+
+```text
+payment confirmed
+       ↓
+already fulfilled?
+       ├── yes → return success
+       │
+       └── no
+            ↓
+       update membership
+            ↓
+       record fulfilment reference
+```
+
+The fulfilment reference should be the PGB transaction ID.
+
+---
+
+# 26. WALLET fulfilment
+
+Current wallet processing directly increments:
+
+```text
+Wo_Users.wallet
+```
+
+based on the WooCommerce amount. 
+
+The new implementation should:
+
+```text
+lock transaction
+ ↓
+check wallet fulfilment reference
+ ↓
+credit wallet
+ ↓
+update Wo_Payment_Transactions
+ ↓
+record PGB fulfilment
+```
+
+and never credit twice.
+
+---
+
+# 27. MARKET fulfilment
+
+The existing `wow-pgb_init.php` already creates:
+
+```text
+Wo_Purchases
+Wo_UserOrders
+Wo_Payment_Transactions
+Wo_Notifications
+```
+
+for market purchases. 
+
+Those operations should move to:
+
+```text
+handlers/class-pgb-handler-market.php
+```
+
+and execute only after verified payment.
+
+This is also an area where a database transaction should be used where the existing table engine permits it.
+
+---
+
+# 28. DONATION/funding fulfilment
+
+The current webhook writes to:
+
+```text
+Wo_Funding_Raise
+```
+
+when the configured crowdfund product is paid. 
+
+That should become:
+
+```text
+class-pgb-handler-donation.php
+```
+
+with:
+
+```text
+payment verified
+ ↓
+funding target verified
+ ↓
+duplicate check
+ ↓
+contribution inserted
+ ↓
+fulfilment marked
+```
+
+---
+
+# 29. Jewel Affiliate integration
+
+The existing:
+
+```text
+streams/jewel-affiliate-webhook.php
+```
+
+contains useful logic and should be moved behind:
+
+```text
+integrations/pgb-int-jewel-affiliate.php
+```
+
+The current implementation already attempts idempotent rebate processing and role/subscription synchronization. 
+
+That logic should only execute after:
+
+```text
+PGB payment verified
+```
+
+not merely because a webhook was received.
+
+---
+
+# 30. AffiliateWP: preserve the existing successful implementation
+
+This is one area where I strongly agree with both previous reviews.
+
+The current AffiliateWP implementation is already substantial.
+
+It has:
+
+```text
+customer resolution
+        ↓
+affiliate resolution
+        ↓
+lifetime customer
+        ↓
+commission calculation
+        ↓
+duplicate referral check
+        ↓
+referral creation
+        ↓
+accounting verification
+```
+
+
+
+That should be extracted into:
+
+```text
+addons/pgb-addon-affiliate-wp.php
+```
+
+rather than rewritten from scratch.
+
+---
+
+# 31. But remove AffiliateWP's dependency on the Streams snapshot
+
+This is where your note is correct.
+
+The current Streams initializer captures:
+
+```text
+affwp_ref
+affwp_visit
+affwp_visit_id
+affwp_affiliate_id
+...
+```
+
+and stores them as:
+
+```text
+_buzzjuice_affwp_context_snapshot
+```
+
+
+
+That should **not** be required for AffiliateWP processing.
+
+The authoritative resolution should be:
+
+```text
+WooCommerce order
+       ↓
+WordPress user
+       ↓
+AffiliateWP customer
+       ↓
+AffiliateWP lifetime customer
+       ↓
+affiliate
+       ↓
+commission
+```
+
+The snapshot may remain as optional audit information during migration, but it must not be a prerequisite.
+
+The existing AffiliateWP implementation already has multiple resolution sources, which is much more robust. 
+
+---
+
+# 32. AffiliateWP failure must not reverse payment
+
+This is critical.
+
+The transaction needs independent component states:
+
+```text
+payment_status
+streams_status
+affiliate_status
+jewel_status
+```
+
+For example:
+
+```text
+payment_status   = paid
+streams_status   = completed
+affiliate_status = pending
+jewel_status     = completed
+```
+
+If AffiliateWP fails:
+
+```text
+payment remains paid
+Streams remains completed
+```
+
+Only AffiliateWP is retried.
+
+Therefore a retry cannot:
+
+```text
+credit wallet twice
+activate PRO twice
+create market purchase twice
+```
+
+This is one of the strongest recommendations in the previous architecture review. 
+
+---
+
+# 33. Action Scheduler should be used
+
+This is an appropriate place to use WooCommerce's existing Action Scheduler.
+
+Jobs:
+
+```text
+bzj_pgb_process_transaction
+bzj_pgb_retry_transaction
+bzj_pgb_reconcile_transaction
+bzj_pgb_cleanup_nonces
+bzj_pgb_cleanup_logs
+```
+
+Action Scheduler supports single, recurring, asynchronous and grouped actions, and is designed specifically as a traceable background job queue for WordPress/WooCommerce environments. ([Action Scheduler][5])
+
+Recommended retry progression:
+
+```text
+1 minute
+5 minutes
+15 minutes
+1 hour
+6 hours
+24 hours
+```
+
+After that:
+
+```text
+manual_review
+```
+
+---
+
+# 34. Every retry must use the same processor
+
+Do not create:
+
+```text
+normal processor
+retry processor
+webhook processor
+recovery processor
+```
+
+Instead:
+
+```text
+PGB Processor
+```
+
+is the only processor.
+
+All signals enter it:
+
+```text
+normal completion
+webhook
+retry
+manual retry
+reconciliation
+```
+
+This dramatically reduces state divergence.
+
+---
+
+# 35. Add reconciliation
+
+This is an important improvement beyond the original proposal.
+
+Every few minutes:
+
+```text
+Find stale PGB transactions
+        ↓
+Inspect WooCommerce order
+        ↓
+Inspect PGB component states
+        ↓
+Determine missing component
+        ↓
+Resume only missing component
+```
+
+Examples:
+
+```text
+Woo = paid
+PGB = awaiting_payment
+```
+
+→ reconcile.
+
+Or:
+
+```text
+PGB = paid
+Streams = pending
+```
+
+→ retry Streams.
+
+Or:
+
+```text
+Streams = completed
+AffiliateWP = pending
+```
+
+→ retry AffiliateWP only.
+
+This turns the bridge into a **recoverable system**, rather than a chain of HTTP callbacks.
+
+---
+
+# 36. Browser redirects must not perform payment processing
+
+The current system has redirect processing embedded in the WordPress sync/thank-you path. 
+
+That should change.
+
+The browser should only ask:
+
+```text
+What happened to transaction PGB-123?
+```
+
+The answer can be:
+
+```text
+completed
+pending
+failed
+manual_review
+```
+
+Then redirect appropriately.
+
+A browser disappearing should have **zero effect on payment fulfilment**.
+
+---
+
+# 37. Signed return token
+
+The return URL should contain a signed PGB token rather than something like:
+
+```text
+?wow_order_id=123
+```
+
+The token should identify:
+
+```text
+transaction
+expiry
+destination
+signature
+```
+
+Streams verifies it before displaying the final state.
+
+The previous review correctly identified this as necessary. 
+
+---
+
+# 38. The current `wp_footer` redirect mechanism should be removed
+
+The existing plugin waits for a WooCommerce thank-you page and then fires:
+
+```text
+wowonder_order_redirect
+```
+
+from `wp_footer`. 
+
+That is not durable.
+
+Consider:
+
+```text
+User pays
+ ↓
+payment succeeds
+ ↓
+browser closes
+```
+
+No thank-you page means the process may never run.
+
+The new system processes payment from the WooCommerce/PGB server-side lifecycle, not from page rendering.
+
+---
+
+# 39. The payment state model
+
+I recommend:
+
+### Transaction state
+
+```text
+created
+intent_validated
+order_created
+awaiting_payment
+payment_received
+processing
+completed
+failed
+cancelled
+manual_review
+```
+
+### Component state
+
+Each component independently:
+
+```text
+pending
+processing
+completed
+failed
+skipped
+```
+
+So one transaction can have:
+
+```text
+Transaction:
+completed
+
+Streams:
+completed
+
+AffiliateWP:
+completed
+
+Jewel:
+completed
+```
+
+or:
+
+```text
+Transaction:
+processing
+
+Streams:
+completed
+
+AffiliateWP:
+failed
+
+Jewel:
+completed
+```
+
+That is much more useful than one generic `payment_status`.
+
+---
+
+# 40. Database relationship
+
+The PGB transaction should link all systems:
+
+```text
+PGB transaction
+       │
+       ├── Streams wow_order_id
+       ├── WooCommerce order_id
+       ├── WP user ID
+       ├── Streams user ID
+       ├── transaction kind
+       ├── product
+       └── component statuses
+```
+
+That gives us one correlation chain:
+
+```text
+PGB-abc
+  ↓
+wow_123
+  ↓
+Woo #456
+  ↓
+Streams user #789
+  ↓
+WP user #10
+```
+
+This is extremely valuable for debugging.
+
+---
+
+# 41. One particularly serious existing issue
+
+The current `wow-pgb_init.php` contains a branch where `PRODUCT` is converted into `PURCHASE`, creates Streams-side purchase records, and then returns a Streams redirect before continuing through the WooCommerce order path. 
+
+That is an example of why the current implementation has become difficult to reason about.
+
+The new architecture should never make the transaction path depend on a giant `switch` that can terminate execution midway.
+
+Instead:
+
+```text
+transaction_kind
+       ↓
+handler registry
+       ↓
+appropriate handler
+```
+
+For example:
+
+```text
+PRO
+ ↓
+PGB Handler PRO
+
+WALLET
+ ↓
+PGB Handler Wallet
+
+DONATE
+ ↓
+PGB Handler Donation
+
+MARKET
+ ↓
+PGB Handler Market
+```
+
+---
+
+# 42. Payment handlers should not know about HTTP
+
+For example:
+
+```text
+class-pgb-handler-wallet.php
+```
+
+should not know:
+
+```text
+$_POST
+header()
+wp_redirect()
+echo json
+```
+
+It should receive a transaction object and perform fulfilment.
+
+That keeps payment processing testable.
+
+---
+
+# 43. Recommended integration boundaries
+
+### Core
+
+Responsible for:
+
+```text
+state
+transactions
+locking
+validation
+logging
+security
+retry
+orchestration
+```
+
+### WooCommerce integration
+
+Responsible for:
+
+```text
+products
+orders
+payments
+Woo metadata
+order verification
+```
+
+### Streams integration
+
+Responsible for:
+
+```text
+Wo_Users
+Wo_Payment_Transactions
+Wo_Purchases
+Wo_UserOrders
+Wo_Funding_Raise
+Wo_Notifications
+```
+
+### Currency integration
+
+Responsible for:
+
+```text
+currency lookup
+conversion
+rate snapshot
+```
+
+### Jewel integration
+
+Responsible for:
+
+```text
+Jewel-specific post-payment operations
+```
+
+### AffiliateWP addon
+
+Responsible for:
+
+```text
+affiliate resolution
+commission
+referral
+accounting verification
+retry
+```
+
+---
+
+# 44. Security corrections
+
+The current implementation also has a serious SSL issue:
+
+```php
+CURLOPT_SSL_VERIFYHOST => 0
+CURLOPT_SSL_VERIFYPEER => 0
+```
+
+in the Streams WooCommerce client. 
+
+That must disappear completely.
+
+Production should use normal certificate verification.
+
+---
+
+# 45. Payment verification before fulfilment
+
+Before the PGB marks a transaction paid:
+
+```text
+Woo order exists
+AND
+Woo order belongs to PGB
+AND
+Woo order belongs to transaction
+AND
+order is actually paid
+AND
+amount matches
+AND
+currency matches
+AND
+product matches
+AND
+variation matches
+AND
+Streams user matches
+AND
+transaction kind matches
+```
+
+Only then:
+
+```text
+payment_status = paid
+```
+
+and fulfilment starts.
+
+---
+
+# 46. Compatibility metadata
+
+Every WooCommerce PGB order should receive metadata such as:
+
+```text
+bzj_pgb_transaction_id
+bzj_pgb_version
+_buzzjuice_origin
+wow_order_id
+wow_user_id
+wp_user_id
+wow_post_id
+transaction_kind
+qdw_order_id
+```
+
+This makes future recovery possible even if the original PGB transaction record is damaged.
+
+---
+
+# 47. Existing WoWonder transaction records remain useful
+
+I would **not eliminate**:
+
+```text
+Wo_Payment_Transactions
+```
+
+because existing Buzzjuice Streams functionality may depend on it.
+
+Instead:
+
+```text
+PGB transaction
+        │
+        └── Wo_Payment_Transactions
+```
+
+The PGB table becomes the authoritative orchestration state.
+
+The WoWonder transaction becomes the Streams financial/application record.
+
+---
+
+# 48. Migration strategy
+
+I would not replace everything in one deployment.
+
+### Phase 1 — Foundation
+
+Create:
+
+```text
+bzj-payment-gateway.php
+shared/payment-gateway/
+```
+
+Implement:
+
+```text
+logger
+config
+schema
+transaction repository
+security
+idempotency
+```
+
+No live payment changes yet.
+
+---
+
+### Phase 2 — WooCommerce
+
+Implement:
+
+```text
+pgb-int-woocommerce.php
+```
+
+with native WooCommerce order creation.
+
+Test:
+
+```text
+intent
+→ PGB transaction
+→ Woo order
+→ payment URL
+```
+
+---
+
+### Phase 3 — Streams client
+
+Replace:
+
+```text
+wow-pgb_init.php
+```
+
+with a thin adapter.
+
+Remove direct WooCommerce credentials from Streams.
+
+---
+
+### Phase 4 — Payment completion
+
+Implement:
+
+```text
+woocommerce_payment_complete
+woocommerce_order_status_processing
+woocommerce_order_status_completed
+```
+
+feeding the same PGB processor.
+
+---
+
+### Phase 5 — Streams fulfilment
+
+Move:
+
+```text
+PRO
+WALLET
+DONATE
+MARKET
+```
+
+into handlers/integration.
+
+---
+
+### Phase 6 — AffiliateWP
+
+Move the **existing proven AffiliateWP logic**, rather than rewriting its accounting algorithm.
+
+Change only its entry point and dependency model.
+
+---
+
+### Phase 7 — Jewel
+
+Move:
+
+```text
+jewel-affiliate-webhook.php
+```
+
+logic into the PGB Jewel integration.
+
+---
+
+### Phase 8 — Reconciliation
+
+Enable Action Scheduler.
+
+---
+
+### Phase 9 — Compatibility mode
+
+Temporarily retain:
+
+```text
+wow-pgb_webhook.php
+```
+
+as a compatibility endpoint that forwards the event into PGB.
+
+---
+
+### Phase 10 — Remove legacy bridge
+
+After successful production observation:
+
+```text
+wow-pgb_init.php
+wow-pgb_webhook.php
+wow-pgb_sync.php
+```
+
+can be retired or reduced to compatibility shims.
+
+---
+
+# 49. Testing matrix
+
+Before production, every transaction type should be tested against:
+
+| Scenario                  | Expected result              |
+| ------------------------- | ---------------------------- |
+| Normal payment            | One Woo order                |
+| Browser refresh           | No duplicate order           |
+| Double-click payment      | One transaction              |
+| Lost HTTP response        | Retry returns existing order |
+| Woo webhook repeated      | No duplicate fulfilment      |
+| Woo completion + webhook  | One fulfilment               |
+| Wallet retry              | One wallet credit            |
+| PRO retry                 | One membership activation    |
+| Market retry              | One purchase                 |
+| Donation retry            | One contribution             |
+| AffiliateWP failure       | Payment remains successful   |
+| AffiliateWP retry         | One referral                 |
+| Jewel failure             | Payment remains successful   |
+| Currency rate changes     | Original rate retained       |
+| Invalid amount            | Rejected                     |
+| Invalid product           | Rejected                     |
+| Invalid user mapping      | Rejected                     |
+| Invalid HMAC              | Rejected                     |
+| Expired HMAC              | Rejected                     |
+| Replay nonce              | Rejected                     |
+| Woo amount mismatch       | Manual review                |
+| Woo currency mismatch     | Manual review                |
+| Woo product mismatch      | Manual review                |
+| Woo order missing         | Retry/reconciliation         |
+| Streams DB unavailable    | Retry Streams component      |
+| WordPress request timeout | Action Scheduler recovery    |
+
+---
+
+# 50. Final recommended architecture
+
+The final system should therefore be:
+
+```text
+                         BUZZJUICE NETWORK
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Streams Payment UI  │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ PGB Streams Client  │
+                    │ HMAC / Intent       │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                 ┌────────────────────────────┐
+                 │ WordPress PGB MU Plugin    │
+                 │                            │
+                 │ bzj-payment-gateway.php    │
+                 └────────────┬───────────────┘
+                              │
+              ┌───────────────┼────────────────┐
+              ▼               ▼                ▼
+        Security         Transaction       Repository
+                              │
+                              ▼
+                       PGB Transaction
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+             WooCommerce           Action Scheduler
+                    │                   │
+                    ▼                   ▼
+              Payment event       Retry/Reconcile
+                    │                   │
+                    └─────────┬─────────┘
+                              ▼
+                       PGB Processor
+                              │
+          ┌───────────────────┼────────────────────┐
+          ▼                   ▼                    ▼
+      Streams            AffiliateWP            Jewel
+    Integration             Addon              Integration
+          │                   │                    │
+          ▼                   ▼                    ▼
+    WoWonder DB          AffiliateWP DB       Streams/WP
+```
+
+---
+
+# 51. The important corrections to the previous reviews
+
+I would therefore make these final decisions:
+
+| Previous recommendation                 | Final decision                                   |
+| --------------------------------------- | ------------------------------------------------ |
+| One MU plugin                           | **Keep**                                         |
+| Shared `payment-gateway` folder         | **Keep**                                         |
+| Core/integration/addon separation       | **Keep**                                         |
+| HMAC Streams → WP                       | **Keep**                                         |
+| Native WooCommerce PHP API              | **Keep**                                         |
+| Idempotency                             | **Make central requirement**                     |
+| Action Scheduler                        | **Keep**                                         |
+| Reconciliation                          | **Add**                                          |
+| Dedicated PGB transaction table         | **Add; reject `wp_options` transaction storage** |
+| AffiliateWP refactor                    | **Keep existing proven logic**                   |
+| AffiliateWP Streams snapshot            | **Do not depend on it**                          |
+| Jewel integration                       | **Keep/refactor**                                |
+| Central logger                          | **Keep**                                         |
+| Signed return token                     | **Keep**                                         |
+| Browser-driven fulfilment               | **Remove**                                       |
+| WooCommerce REST credentials in Streams | **Remove**                                       |
+| Hard-coded webhook secret               | **Remove and rotate**                            |
+| SSL verification disabled               | **Remove**                                       |
+| `wp_footer` payment processing          | **Remove**                                       |
+| Multiple payment initialization paths   | **Consolidate**                                  |
+| Direct Streams SQL in processor         | **Remove**                                       |
+
+---
+
+# 52. Bottom line
+
+The updated proposal should **not** be treated as a file-reorganization exercise.
+
+The durable architecture is:
+
+> **Streams creates an authenticated payment intent → WordPress creates and owns the PGB transaction → WordPress creates the WooCommerce order natively → WooCommerce payment signals enter one idempotent PGB processor → the processor independently fulfils Streams, AffiliateWP, Jewel and other addons → Action Scheduler repairs anything that fails → reconciliation catches anything that falls through.**
+
+That architecture directly addresses the current dropped-order problem while preserving the parts of the existing implementation that are already working, particularly the AffiliateWP accounting logic and Jewel processing.
+
+The current repository also gives us a clean migration boundary: `requests.php` already has a single `wow_payment` entry point, so that can become the thin Streams adapter rather than requiring broad changes throughout WoWonder. 
+
+The next implementation step should therefore be **the actual production code package built against this architecture**, rather than another conceptual rewrite: one MU bootstrap plus the complete `shared/payment-gateway` tree, followed by the precise patches to `requests.php`, `wow-pgb_init.php`, the payment settings page, and the relevant Streams JavaScript/templates.
+
+[1]: https://developer.woocommerce.com/docs/features/payments/payment-gateway-api?utm_source=chatgpt.com "WooCommerce Payment Gateway API | WooCommerce developer docs"
+[2]: https://developer.wordpress.org/reference/functions/dbdelta/?utm_source=chatgpt.com "dbDelta() – Function | Developer.WordPress.org"
+[3]: https://github.com/cupidblack/buzzjuice.net/blob/main/streams/admin-panel/pages/payment-settings/content.phtml "buzzjuice.net/streams/admin-panel/pages/payment-settings/content.phtml at main · cupidblack/buzzjuice.net · GitHub"
+[4]: https://developer.woocommerce.com/docs/best-practices/urls-and-routing/webhooks?utm_source=chatgpt.com "Working with webhooks in WooCommerce | WooCommerce developer docs"
+[5]: https://actionscheduler.org/api/?utm_source=chatgpt.com "API Reference | Action Scheduler - Job Queue for WordPress"
+
+
+<<STOP CHATGPT>>
