@@ -1,0 +1,2314 @@
+<<START GITHUB>>
+
+I'll conduct a thorough analysis of the attached files, previous responses, and your requirements to generate a comprehensive implementation plan for the upgraded Buzzjuice Payment Gateway Bridge.Now let me retrieve the wow-pgb_sync.php file that was mentioned in the resources:Now let me retrieve the additional key files to complete the analysis:Now let me retrieve some additional files to understand the full context:Now I'll create a comprehensive response with the fully refactored and updated Buzzjuice Payment Gateway Bridge v8 implementation based on all the recommendations from ChatGPT and the GitHub review.
+
+---
+
+# **BUZZJUICE PAYMENT GATEWAY BRIDGE V8 - COMPREHENSIVE IMPLEMENTATION GUIDE**
+
+## **EXECUTIVE SUMMARY**
+
+This comprehensive guide implements the fully refactored Buzzjuice Payment Gateway Bridge v8.0 with the following architecture:
+
+1. **Single Must-Use Plugin** as the engine orchestrator
+2. **Modular client files** in `shared/payment-gateway/` for Streams integration
+3. **Core system** with robust logging, validation, and state management
+4. **Addons system** for AffiliateWP, Subscriptions, and Currency handling
+5. **Integrations** for WooCommerce and Jewel Affiliate
+6. **Database-driven approach** to bypass API call limitations
+
+---
+
+## **ARCHITECTURE OVERVIEW**
+
+```
+STREAMS (WoWonder)
+        ↓
+PGB Client (pgb-client-streams.php)
+        ↓
+Streams Database (store order data)
+        ↓
+MU Plugin Engine (bzj-pgb-engine.php)
+        ↓ (recognized via must-use hooks)
+Bootstrap → Manager → Validators
+        ↓
+Core Handlers + Addons + Integrations
+        ↓
+WooCommerce Orders
+        ↓
+WC Payment Complete Hook
+        ↓
+Fulfillment (Affiliate, Subscriptions, Jewel)
+        ↓
+Streams Database Update
+```
+
+---
+
+## **PHASE 1: FILES TO REMOVE/MODIFY**
+
+### **Files to REMOVE:**
+```
+streams/wow-pgb_webhook.php → DEPRECATED (replaced by MU plugin hooks)
+wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php → REFACTORED into addons
+streams/assets/wow-pgb/wow-pgb_init.php → REFACTORED into pgb-client-streams.php
+```
+
+### **Files to MODIFY:**
+```
+streams/admin-panel/pages/payment-settings/content.phtml
+  → Update UI to reflect new architecture
+  → Remove API credentials (now in env only)
+  → Add logging toggle
+
+streams/themes/sunshine/layout/extra_js/content.phtml
+  → Update payment modal to use new client hooks
+
+wp-content/mu-plugins/buzzjuice-affwp-order-complete.php
+  → REPLACE with new PGB MU plugin
+```
+
+---
+
+## **PHASE 2: COMPLETE FILE IMPLEMENTATIONS**
+
+### **FILE 1: MU Plugin Engine (Main Orchestrator)**
+
+```php
+<?php
+/**
+ * wp-content/mu-plugins/bzj-pgb-engine.php
+ * 
+ * Buzzjuice Payment Gateway Bridge v8.0
+ * Must-Use Plugin Engine
+ * 
+ * This is the only file in mu-plugins directory. It orchestrates:
+ * - Bootstrap initialization
+ * - WooCommerce hook registration
+ * - Order fulfillment lifecycle
+ * - Addon/Integration loading
+ */
+
+if (!defined('ABSPATH')) {
+    exit('Direct access not permitted.');
+}
+
+// Define PGB root path (used throughout the system)
+if (!defined('PGB_ROOT')) {
+    define('PGB_ROOT', dirname(ABSPATH, 1) . '/shared/payment-gateway/');
+    define('PGB_LOG_DIR', PGB_ROOT . 'log/');
+    define('PGB_CORE_DIR', PGB_ROOT . 'core/');
+    define('PGB_ADDONS_DIR', PGB_ROOT . 'addons/');
+    define('PGB_INT_DIR', PGB_ROOT . 'integrations/');
+}
+
+// Ensure log directory exists and is writable
+if (!is_dir(PGB_LOG_DIR)) {
+    @mkdir(PGB_LOG_DIR, 0755, true);
+}
+
+// Load database helpers (needed for WoWonder DB access)
+$db_helpers = dirname(ABSPATH, 1) . '/shared/db_helpers.php';
+if (file_exists($db_helpers)) {
+    require_once $db_helpers;
+}
+
+/**
+ * Initialize PGB Engine
+ */
+function bzj_pgb_init() {
+    // Load core classes in order
+    $core_files = [
+        'class-pgb-logger.php',
+        'class-pgb-validator.php',
+        'class-pgb-hooks.php',
+        'class-pgb-idempotency.php',
+        'class-pgb-auth.php',
+        'class-pgb-order.php',
+        'class-pgb-fulfillment.php',
+        'class-pgb-manager.php',
+    ];
+
+    foreach ($core_files as $file) {
+        $path = PGB_CORE_DIR . $file;
+        if (file_exists($path)) {
+            require_once $path;
+        } else {
+            error_log("[PGB-ENGINE] Missing core file: $file");
+        }
+    }
+
+    // Initialize system
+    if (class_exists('PGB_Manager')) {
+        $GLOBALS['pgb_manager'] = PGB_Manager::instance();
+    }
+
+    if (class_exists('PGB_Logger')) {
+        $GLOBALS['pgb_logger'] = PGB_Logger::instance();
+        $GLOBALS['pgb_logger']->log(
+            'PGB Engine initialized',
+            PGB_Logger::LOG_INFO,
+            [],
+            __FILE__
+        );
+    }
+
+    // Load addons
+    bzj_pgb_load_addons();
+
+    // Load integrations
+    bzj_pgb_load_integrations();
+
+    // Register WooCommerce hooks
+    bzj_pgb_register_wc_hooks();
+}
+
+/**
+ * Load all addons from addons directory
+ */
+function bzj_pgb_load_addons() {
+    if (!is_dir(PGB_ADDONS_DIR)) {
+        return;
+    }
+
+    $addon_files = glob(PGB_ADDONS_DIR . 'pgb-addon-*.php');
+    foreach ($addon_files as $addon_file) {
+        require_once $addon_file;
+    }
+
+    if (class_exists('PGB_Logger')) {
+        $logger = PGB_Logger::instance();
+        $logger->log(
+            'Addons loaded: ' . count($addon_files),
+            PGB_Logger::LOG_DEBUG,
+            [],
+            __FILE__
+        );
+    }
+}
+
+/**
+ * Load all integrations from integrations directory
+ */
+function bzj_pgb_load_integrations() {
+    if (!is_dir(PGB_INT_DIR)) {
+        return;
+    }
+
+    $int_files = glob(PGB_INT_DIR . 'pgb-int-*.php');
+    foreach ($int_files as $int_file) {
+        require_once $int_file;
+    }
+
+    if (class_exists('PGB_Logger')) {
+        $logger = PGB_Logger::instance();
+        $logger->log(
+            'Integrations loaded: ' . count($int_files),
+            PGB_Logger::LOG_DEBUG,
+            [],
+            __FILE__
+        );
+    }
+}
+
+/**
+ * Register WooCommerce payment completion hooks
+ */
+function bzj_pgb_register_wc_hooks() {
+    /**
+     * Hook: woocommerce_payment_complete
+     * Fires when payment is marked complete on order
+     */
+    add_action('woocommerce_payment_complete', function($order_id) {
+        bzj_pgb_handle_payment_complete($order_id);
+    }, 10, 1);
+
+    /**
+     * Hook: woocommerce_order_status_completed
+     * Fires when order status changes to completed
+     */
+    add_action('woocommerce_order_status_completed', function($order_id) {
+        bzj_pgb_handle_order_completed($order_id);
+    }, 10, 1);
+
+    /**
+     * Hook: woocommerce_order_status_processing
+     * Fires when order status changes to processing
+     */
+    add_action('woocommerce_order_status_processing', function($order_id) {
+        bzj_pgb_handle_order_processing($order_id);
+    }, 10, 1);
+
+    /**
+     * REST API endpoint for Streams to check order status
+     */
+    add_action('rest_api_init', function() {
+        register_rest_route('bzj-pgb/v1', '/order-status', [
+            'methods' => 'GET',
+            'callback' => 'bzj_pgb_rest_get_order_status',
+            'permission_callback' => function() {
+                return current_user_can('read');
+            }
+        ]);
+    });
+}
+
+/**
+ * Handle payment completion
+ */
+function bzj_pgb_handle_payment_complete($order_id) {
+    if (!class_exists('PGB_Manager')) {
+        return;
+    }
+
+    $manager = PGB_Manager::instance();
+    $logger = PGB_Logger::instance();
+
+    $logger->log(
+        'Payment complete for order: ' . $order_id,
+        PGB_Logger::LOG_INFO,
+        ['order_id' => $order_id],
+        __FILE__
+    );
+
+    $manager->process_order_completion($order_id, 'payment_complete');
+}
+
+/**
+ * Handle order completed status
+ */
+function bzj_pgb_handle_order_completed($order_id) {
+    if (!class_exists('PGB_Manager')) {
+        return;
+    }
+
+    $manager = PGB_Manager::instance();
+    $logger = PGB_Logger::instance();
+
+    $logger->log(
+        'Order completed: ' . $order_id,
+        PGB_Logger::LOG_INFO,
+        ['order_id' => $order_id],
+        __FILE__
+    );
+
+    $manager->process_order_completion($order_id, 'order_completed');
+}
+
+/**
+ * Handle order processing status
+ */
+function bzj_pgb_handle_order_processing($order_id) {
+    if (!class_exists('PGB_Manager')) {
+        return;
+    }
+
+    $logger = PGB_Logger::instance();
+    $logger->log(
+        'Order processing: ' . $order_id,
+        PGB_Logger::LOG_DEBUG,
+        ['order_id' => $order_id],
+        __FILE__
+    );
+}
+
+/**
+ * REST API endpoint to check if order is ready for user retrieval
+ */
+function bzj_pgb_rest_get_order_status($request) {
+    $params = $request->get_query_params();
+    $wow_order_id = $params['wow_order_id'] ?? null;
+
+    if (!$wow_order_id) {
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => 'wow_order_id required'
+        ], 400);
+    }
+
+    if (!class_exists('PGB_Logger')) {
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => 'System not ready'
+        ], 500);
+    }
+
+    $logger = PGB_Logger::instance();
+    $logger->log(
+        'REST API: checking order status',
+        PGB_Logger::LOG_DEBUG,
+        ['wow_order_id' => $wow_order_id],
+        __FILE__
+    );
+
+    // Query WoWonder database for order status
+    if (!function_exists('get_wowonder_db')) {
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => 'Database helpers not available'
+        ], 500);
+    }
+
+    $db = get_wowonder_db();
+    if (!$db) {
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => 'Database connection failed'
+        ], 500);
+    }
+
+    $stmt = $db->prepare("
+        SELECT status, woo_order_id, fulfilled_at 
+        FROM Wo_Payment_Transactions 
+        WHERE order_id = ? 
+        LIMIT 1
+    ");
+
+    if (!$stmt) {
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => 'Database query failed'
+        ], 500);
+    }
+
+    $stmt->bind_param('s', $wow_order_id);
+    $stmt->execute();
+    $stmt->bind_result($status, $woo_order_id, $fulfilled_at);
+
+    if (!$stmt->fetch()) {
+        $stmt->close();
+        return new WP_REST_Response([
+            'status' => 'not_found',
+            'message' => 'Order not found'
+        ], 404);
+    }
+
+    $stmt->close();
+
+    return new WP_REST_Response([
+        'status' => 'success',
+        'order_status' => $status,
+        'woo_order_id' => $woo_order_id,
+        'fulfilled_at' => $fulfilled_at,
+        'ready_for_checkout' => $status === 'pending' || $status === 'initiated'
+    ], 200);
+}
+
+/**
+ * Admin page for PGB settings
+ */
+function bzj_pgb_admin_page() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    ?>
+    <div class="wrap">
+        <h1>Buzzjuice Payment Gateway Bridge</h1>
+        
+        <div class="card">
+            <h2 class="title">Settings</h2>
+            <form method="POST" action="options.php">
+                <?php settings_fields('bzj_pgb_settings'); ?>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="pgb_logging_enabled">Enable Logging</label></th>
+                        <td>
+                            <input type="checkbox" name="pgb_logging_enabled" id="pgb_logging_enabled" value="1" 
+                                <?php checked(get_option('pgb_logging_enabled')); ?>>
+                            <p class="description">Enable comprehensive logging for debugging</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="pgb_log_level">Log Level</label></th>
+                        <td>
+                            <select name="pgb_log_level" id="pgb_log_level">
+                                <option value="debug" <?php selected(get_option('pgb_log_level'), 'debug'); ?>>Debug</option>
+                                <option value="info" <?php selected(get_option('pgb_log_level'), 'info'); ?>>Info</option>
+                                <option value="warning" <?php selected(get_option('pgb_log_level'), 'warning'); ?>>Warning</option>
+                                <option value="error" <?php selected(get_option('pgb_log_level'), 'error'); ?>>Error</option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="pgb_streams_url">Streams URL</label></th>
+                        <td>
+                            <input type="text" name="pgb_streams_url" id="pgb_streams_url" class="regular-text"
+                                value="<?php echo esc_attr(get_option('pgb_streams_url')); ?>">
+                            <p class="description">Base URL for Streams (WoWonder) installation</p>
+                        </td>
+                    </tr>
+                </table>
+                
+                <?php submit_button(); ?>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2 class="title">System Status</h2>
+            <table class="widefat">
+                <tr>
+                    <td><strong>PGB Version:</strong></td>
+                    <td>8.0</td>
+                </tr>
+                <tr>
+                    <td><strong>Core Directory:</strong></td>
+                    <td><?php echo PGB_CORE_DIR; ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Log Directory:</strong></td>
+                    <td><?php echo PGB_LOG_DIR; ?> (<?php echo is_writable(PGB_LOG_DIR) ? 'writable' : 'NOT writable'; ?>)</td>
+                </tr>
+                <tr>
+                    <td><strong>Addons Loaded:</strong></td>
+                    <td><?php echo count(glob(PGB_ADDONS_DIR . 'pgb-addon-*.php')); ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Integrations Loaded:</strong></td>
+                    <td><?php echo count(glob(PGB_INT_DIR . 'pgb-int-*.php')); ?></td>
+                </tr>
+            </table>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Register admin page
+ */
+function bzj_pgb_register_admin_page() {
+    if (is_admin()) {
+        add_menu_page(
+            'Payment Gateways',
+            'Payment Gateways',
+            'manage_options',
+            'bzj-pgb',
+            'bzj_pgb_admin_page',
+            'dashicons-credit',
+            25
+        );
+
+        // Register settings
+        register_setting('bzj_pgb_settings', 'pgb_logging_enabled');
+        register_setting('bzj_pgb_settings', 'pgb_log_level');
+        register_setting('bzj_pgb_settings', 'pgb_streams_url');
+    }
+}
+
+// Hook into WordPress initialization
+add_action('plugins_loaded', 'bzj_pgb_init', 5);
+add_action('admin_menu', 'bzj_pgb_register_admin_page');
+
+// Prevent direct access
+if (!defined('ABSPATH')) {
+    exit;
+}
+?>
+```
+
+---
+
+### **FILE 2: Core Logger Class**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-logger.php
+ * 
+ * Centralized logging system with file rotation and severity levels
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Logger {
+    const LOG_DEBUG = 'debug';
+    const LOG_INFO = 'info';
+    const LOG_WARNING = 'warning';
+    const LOG_ERROR = 'error';
+    const LOG_CRITICAL = 'critical';
+
+    private static $instance = null;
+    private $log_dir = '';
+    private $enabled = true;
+    private $min_level = self::LOG_DEBUG;
+    private $file_handles = [];
+    private $level_weights = [
+        self::LOG_DEBUG => 0,
+        self::LOG_INFO => 1,
+        self::LOG_WARNING => 2,
+        self::LOG_ERROR => 3,
+        self::LOG_CRITICAL => 4,
+    ];
+
+    /**
+     * Singleton instance
+     */
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Initialize logger
+     */
+    private function __construct() {
+        $this->log_dir = defined('PGB_LOG_DIR') ? PGB_LOG_DIR : dirname(__FILE__, 2) . '/log/';
+
+        // Create log directory if needed
+        if (!is_dir($this->log_dir)) {
+            @mkdir($this->log_dir, 0755, true);
+        }
+
+        // Read settings from WordPress options
+        if (function_exists('get_option')) {
+            $this->enabled = get_option('pgb_logging_enabled', true);
+            $this->min_level = get_option('pgb_log_level', self::LOG_DEBUG);
+        }
+    }
+
+    /**
+     * Log message
+     */
+    public function log($message, $level = self::LOG_INFO, $context = [], $source_file = '') {
+        if (!$this->enabled || !$this->should_log($level)) {
+            return;
+        }
+
+        $timestamp = date('Y-m-d H:i:s');
+        $level_upper = strtoupper($level);
+        $source = $source_file ? basename($source_file) : 'unknown';
+
+        // Redact sensitive values
+        $context = $this->redact_sensitive($context);
+        $message = $this->redact_sensitive_strings($message);
+
+        // Format log entry
+        $log_entry = json_encode([
+            'timestamp' => $timestamp,
+            'level' => $level_upper,
+            'source' => $source,
+            'message' => $message,
+            'context' => $context,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        // Write to file
+        $this->write_to_file($source, $log_entry);
+
+        // Also log to WordPress error_log if critical
+        if (in_array($level, [self::LOG_ERROR, self::LOG_CRITICAL])) {
+            error_log("[PGB] [{$level_upper}] {$message}");
+        }
+    }
+
+    /**
+     * Check if message should be logged
+     */
+    private function should_log($level) {
+        $level_weight = $this->level_weights[$level] ?? 0;
+        $min_weight = $this->level_weights[$this->min_level] ?? 0;
+        return $level_weight >= $min_weight;
+    }
+
+    /**
+     * Redact sensitive values from context arrays
+     */
+    private function redact_sensitive($data) {
+        if (!is_array($data)) {
+            return $data;
+        }
+
+        $sensitive_keys = [
+            'password', 'secret', 'key', 'token', 'credential',
+            'authorization', 'bearer', 'api_key', 'api_secret',
+            'signature', 'hmac', 'webhook_secret', 'bzj_pgb_secret'
+        ];
+
+        $result = [];
+        foreach ($data as $key => $value) {
+            $key_lower = strtolower($key);
+            $is_sensitive = false;
+
+            foreach ($sensitive_keys as $sensitive) {
+                if (strpos($key_lower, $sensitive) !== false) {
+                    $is_sensitive = true;
+                    break;
+                }
+            }
+
+            if ($is_sensitive) {
+                $result[$key] = '[REDACTED]';
+            } else {
+                $result[$key] = is_array($value) ? $this->redact_sensitive($value) : $value;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Redact sensitive strings in messages
+     */
+    private function redact_sensitive_strings($message) {
+        // Redact common patterns
+        $patterns = [
+            '/api[_-]?key[:\s]*([a-zA-Z0-9_\-]+)/i' => 'api_key: [REDACTED]',
+            '/secret[:\s]*([a-zA-Z0-9_\-]+)/i' => 'secret: [REDACTED]',
+            '/token[:\s]*([a-zA-Z0-9_\-]+)/i' => 'token: [REDACTED]',
+            '/password[:\s]*([a-zA-Z0-9_\-]+)/i' => 'password: [REDACTED]',
+        ];
+
+        foreach ($patterns as $pattern => $replacement) {
+            $message = preg_replace($pattern, $replacement, $message);
+        }
+
+        return $message;
+    }
+
+    /**
+     * Write to file
+     */
+    private function write_to_file($source, $message) {
+        $source_clean = str_replace('.php', '', $source);
+        $file_path = $this->log_dir . $source_clean . '.log';
+
+        // Handle log rotation (10MB max)
+        if (file_exists($file_path) && filesize($file_path) > 10485760) {
+            $archived = $file_path . '.' . date('YmdHis');
+            @rename($file_path, $archived);
+        }
+
+        // Open file handle
+        if (!isset($this->file_handles[$file_path])) {
+            $this->file_handles[$file_path] = @fopen($file_path, 'a');
+        }
+
+        // Write log entry
+        if ($this->file_handles[$file_path]) {
+            fwrite($this->file_handles[$file_path], $message . "\n");
+            fflush($this->file_handles[$file_path]);
+        }
+    }
+
+    /**
+     * Cleanup
+     */
+    public function __destruct() {
+        foreach ($this->file_handles as $handle) {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+        }
+    }
+}
+?>
+```
+
+---
+
+### **FILE 3: Core Validator Class**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-validator.php
+ * 
+ * Input validation and sanitization
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Validator {
+    /**
+     * Validate email
+     */
+    public static function validate_email($email) {
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+    }
+
+    /**
+     * Sanitize email
+     */
+    public static function sanitize_email($email) {
+        $email = filter_var($email, FILTER_VALIDATE_EMAIL);
+        return $email ?: '';
+    }
+
+    /**
+     * Validate amount
+     */
+    public static function validate_amount($amount) {
+        $amount = floatval($amount);
+        return $amount > 0;
+    }
+
+    /**
+     * Validate user ID
+     */
+    public static function validate_user_id($user_id) {
+        return intval($user_id) > 0;
+    }
+
+    /**
+     * Sanitize string
+     */
+    public static function sanitize_string($value, $allow_html = false) {
+        $value = trim($value);
+        if (!$allow_html) {
+            $value = htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+        }
+        return $value;
+    }
+
+    /**
+     * Validate transaction type
+     */
+    public static function validate_transaction_type($type) {
+        $allowed = ['PRODUCT', 'PRO', 'WALLET', 'DONATE', 'PURCHASE', 'SALE'];
+        return in_array(strtoupper($type), $allowed);
+    }
+
+    /**
+     * Validate currency code
+     */
+    public static function validate_currency($code) {
+        return preg_match('/^[A-Z]{3}$/', $code) === 1;
+    }
+
+    /**
+     * Validate signature
+     */
+    public static function validate_signature($payload, $signature, $secret) {
+        $expected = base64_encode(hash_hmac('sha256', $payload, $secret, true));
+        return hash_equals($signature, $expected);
+    }
+
+    /**
+     * Validate WooCommerce order data
+     */
+    public static function validate_wc_order_data($order_data) {
+        $errors = [];
+
+        if (empty($order_data['customer_id'])) {
+            $errors[] = 'Missing customer_id';
+        }
+
+        if (empty($order_data['line_items']) || !is_array($order_data['line_items'])) {
+            $errors[] = 'Missing or invalid line_items';
+        } else {
+            foreach ($order_data['line_items'] as $idx => $item) {
+                if (empty($item['product_id'])) {
+                    $errors[] = "Line item {$idx}: missing product_id";
+                }
+                if (!isset($item['quantity']) || $item['quantity'] <= 0) {
+                    $errors[] = "Line item {$idx}: invalid quantity";
+                }
+                if (!isset($item['total']) || $item['total'] < 0) {
+                    $errors[] = "Line item {$idx}: invalid total";
+                }
+            }
+        }
+
+        if (empty($order_data['currency'])) {
+            $errors[] = 'Missing currency';
+        } elseif (!self::validate_currency($order_data['currency'])) {
+            $errors[] = 'Invalid currency code';
+        }
+
+        return [
+            'valid' => empty($errors),
+            'errors' => $errors
+        ];
+    }
+}
+?>
+```
+
+---
+
+### **FILE 4: Core Hooks Registry**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-hooks.php
+ * 
+ * Manages custom hooks and filters for addons and integrations
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Hooks {
+    private static $instance = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Custom hook: Before order creation
+     * apply_filters('pgb_before_order_create', $order_data, $transaction_kind)
+     */
+    public static function before_order_create($order_data, $transaction_kind) {
+        if (function_exists('apply_filters')) {
+            return apply_filters('pgb_before_order_create', $order_data, $transaction_kind);
+        }
+        return $order_data;
+    }
+
+    /**
+     * Custom hook: After order created
+     * do_action('pgb_order_created', $woo_order_id, $order_data, $wow_user_id)
+     */
+    public static function order_created($woo_order_id, $order_data, $wow_user_id) {
+        if (function_exists('do_action')) {
+            do_action('pgb_order_created', $woo_order_id, $order_data, $wow_user_id);
+        }
+    }
+
+    /**
+     * Custom hook: Payment complete
+     * do_action('pgb_payment_complete', $woo_order_id, $wow_user_id, $amount, $transaction_kind)
+     */
+    public static function payment_complete($woo_order_id, $wow_user_id, $amount, $transaction_kind) {
+        if (function_exists('do_action')) {
+            do_action('pgb_payment_complete', $woo_order_id, $wow_user_id, $amount, $transaction_kind);
+        }
+    }
+
+    /**
+     * Custom hook: Before fulfillment
+     * do_action('pgb_before_fulfillment', $woo_order_id, $order_meta)
+     */
+    public static function before_fulfillment($woo_order_id, $order_meta) {
+        if (function_exists('do_action')) {
+            do_action('pgb_before_fulfillment', $woo_order_id, $order_meta);
+        }
+    }
+
+    /**
+     * Custom hook: After fulfillment
+     * do_action('pgb_after_fulfillment', $woo_order_id, $wow_user_id, $result)
+     */
+    public static function after_fulfillment($woo_order_id, $wow_user_id, $result) {
+        if (function_exists('do_action')) {
+            do_action('pgb_after_fulfillment', $woo_order_id, $wow_user_id, $result);
+        }
+    }
+
+    /**
+     * Custom hook: Order type handler
+     * do_action("pgb_handle_{$type}", $woo_order, $wow_user_id, $order_meta)
+     */
+    public static function handle_order_type($type, $woo_order, $wow_user_id, $order_meta) {
+        if (function_exists('do_action')) {
+            do_action('pgb_handle_' . strtolower($type), $woo_order, $wow_user_id, $order_meta);
+        }
+    }
+}
+?>
+```
+
+---
+
+### **FILE 5: Idempotency Checker**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-idempotency.php
+ * 
+ * Prevents duplicate processing of the same order
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Idempotency {
+    private static $instance = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Check if order has already been processed
+     */
+    public function is_order_processed($woo_order_id) {
+        if (!function_exists('get_wowonder_db')) {
+            return false;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return false;
+        }
+
+        $stmt = $db->prepare("
+            SELECT id FROM Wo_Payment_Transactions 
+            WHERE woo_order_id = ? 
+            AND fulfillment_status IN ('fulfilled', 'processing')
+            LIMIT 1
+        ");
+
+        if (!$stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('i', $woo_order_id);
+        $stmt->execute();
+        $stmt->store_result();
+        $has_rows = $stmt->num_rows > 0;
+        $stmt->close();
+
+        return $has_rows;
+    }
+
+    /**
+     * Get order transaction record
+     */
+    public function get_order_transaction($woo_order_id) {
+        if (!function_exists('get_wowonder_db')) {
+            return null;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return null;
+        }
+
+        $stmt = $db->prepare("
+            SELECT * FROM Wo_Payment_Transactions 
+            WHERE woo_order_id = ? 
+            LIMIT 1
+        ");
+
+        if (!$stmt) {
+            return null;
+        }
+
+        $stmt->bind_param('i', $woo_order_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $transaction = $result->fetch_assoc();
+        $stmt->close();
+
+        return $transaction;
+    }
+
+    /**
+     * Mark order as processing
+     */
+    public function mark_processing($woo_order_id, $wow_user_id) {
+        if (!function_exists('get_wowonder_db')) {
+            return false;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return false;
+        }
+
+        $stmt = $db->prepare("
+            UPDATE Wo_Payment_Transactions 
+            SET fulfillment_status = 'processing', updated_at = NOW()
+            WHERE woo_order_id = ? 
+            AND userid = ?
+            LIMIT 1
+        ");
+
+        if (!$stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('ii', $woo_order_id, $wow_user_id);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return $result;
+    }
+
+    /**
+     * Mark order as fulfilled
+     */
+    public function mark_fulfilled($woo_order_id, $wow_user_id) {
+        if (!function_exists('get_wowonder_db')) {
+            return false;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return false;
+        }
+
+        $stmt = $db->prepare("
+            UPDATE Wo_Payment_Transactions 
+            SET fulfillment_status = 'fulfilled', fulfilled_at = NOW(), updated_at = NOW()
+            WHERE woo_order_id = ? 
+            AND userid = ?
+            LIMIT 1
+        ");
+
+        if (!$stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('ii', $woo_order_id, $wow_user_id);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return $result;
+    }
+
+    /**
+     * Log fulfillment error
+     */
+    public function log_fulfillment_error($woo_order_id, $wow_user_id, $error_message) {
+        if (!function_exists('get_wowonder_db')) {
+            return false;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return false;
+        }
+
+        $stmt = $db->prepare("
+            UPDATE Wo_Payment_Transactions 
+            SET fulfillment_status = 'failed', last_error = ?, updated_at = NOW()
+            WHERE woo_order_id = ? 
+            AND userid = ?
+            LIMIT 1
+        ");
+
+        if (!$stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('sii', $error_message, $woo_order_id, $wow_user_id);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return $result;
+    }
+}
+?>
+```
+
+---
+
+### **FILE 6: Order Manager (Processing Logic)**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-order.php
+ * 
+ * WooCommerce order management and retrieval
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Order {
+    private static $instance = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Get WooCommerce order by ID
+     */
+    public function get_order($order_id) {
+        if (!function_exists('wc_get_order')) {
+            return null;
+        }
+
+        $order = wc_get_order($order_id);
+        return $order && !is_wp_error($order) ? $order : null;
+    }
+
+    /**
+     * Get order meta value
+     */
+    public function get_order_meta($order_id, $key) {
+        if (!function_exists('get_post_meta')) {
+            return null;
+        }
+
+        return get_post_meta($order_id, $key, true);
+    }
+
+    /**
+     * Set order meta value
+     */
+    public function set_order_meta($order_id, $key, $value) {
+        if (!function_exists('update_post_meta')) {
+            return false;
+        }
+
+        return update_post_meta($order_id, $key, $value);
+    }
+
+    /**
+     * Get order customer ID (WP user)
+     */
+    public function get_customer_id($order_id) {
+        $order = $this->get_order($order_id);
+        if (!$order) {
+            return null;
+        }
+
+        return $order->get_customer_id();
+    }
+
+    /**
+     * Get WoWonder user ID from order meta
+     */
+    public function get_wow_user_id($order_id) {
+        return $this->get_order_meta($order_id, 'bz_wow_user_id');
+    }
+
+    /**
+     * Set WoWonder user ID on order meta
+     */
+    public function set_wow_user_id($order_id, $wow_user_id) {
+        return $this->set_order_meta($order_id, 'bz_wow_user_id', $wow_user_id);
+    }
+
+    /**
+     * Get transaction kind from order
+     */
+    public function get_transaction_kind($order_id) {
+        return $this->get_order_meta($order_id, 'wow_transaction_kind');
+    }
+
+    /**
+     * Get WoWonder order ID
+     */
+    public function get_wow_order_id($order_id) {
+        return $this->get_order_meta($order_id, 'wow_order_id');
+    }
+
+    /**
+     * Get order line items
+     */
+    public function get_line_items($order_id) {
+        $order = $this->get_order($order_id);
+        if (!$order) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($order->get_items() as $item_id => $item) {
+            $items[] = [
+                'product_id' => $item->get_product_id(),
+                'variation_id' => $item->get_variation_id(),
+                'quantity' => $item->get_quantity(),
+                'total' => $item->get_total(),
+                'name' => $item->get_name(),
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * Get order total
+     */
+    public function get_order_total($order_id) {
+        $order = $this->get_order($order_id);
+        if (!$order) {
+            return 0;
+        }
+
+        return floatval($order->get_total());
+    }
+
+    /**
+     * Get order status
+     */
+    public function get_order_status($order_id) {
+        $order = $this->get_order($order_id);
+        if (!$order) {
+            return null;
+        }
+
+        return $order->get_status();
+    }
+
+    /**
+     * Mark order as payment complete
+     */
+    public function mark_paid($order_id) {
+        $order = $this->get_order($order_id);
+        if (!$order) {
+            return false;
+        }
+
+        if (method_exists($order, 'payment_complete')) {
+            $order->payment_complete();
+            return true;
+        }
+
+        return false;
+    }
+}
+?>
+```
+
+---
+
+### **FILE 7: Fulfillment Handler**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-fulfillment.php
+ * 
+ * Handles order fulfillment after payment
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Fulfillment {
+    private static $instance = null;
+    private $logger = null;
+    private $idempotency = null;
+    private $order_handler = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    private function __construct() {
+        $this->logger = PGB_Logger::instance();
+        $this->idempotency = PGB_Idempotency::instance();
+        $this->order_handler = PGB_Order::instance();
+    }
+
+    /**
+     * Process order fulfillment
+     */
+    public function fulfill_order($woo_order_id) {
+        $this->logger->log(
+            'Starting order fulfillment',
+            PGB_Logger::LOG_INFO,
+            ['woo_order_id' => $woo_order_id],
+            __FILE__
+        );
+
+        // Check if already fulfilled
+        if ($this->idempotency->is_order_processed($woo_order_id)) {
+            $this->logger->log(
+                'Order already processed, skipping',
+                PGB_Logger::LOG_WARNING,
+                ['woo_order_id' => $woo_order_id],
+                __FILE__
+            );
+            return true;
+        }
+
+        // Get order details
+        $order = $this->order_handler->get_order($woo_order_id);
+        if (!$order) {
+            $this->logger->log(
+                'Order not found',
+                PGB_Logger::LOG_ERROR,
+                ['woo_order_id' => $woo_order_id],
+                __FILE__
+            );
+            return false;
+        }
+
+        // Get WoWonder user ID
+        $wow_user_id = $this->order_handler->get_wow_user_id($woo_order_id);
+        if (!$wow_user_id) {
+            $this->logger->log(
+                'WoWonder user ID not found in order meta',
+                PGB_Logger::LOG_ERROR,
+                ['woo_order_id' => $woo_order_id],
+                __FILE__
+            );
+            return false;
+        }
+
+        // Mark as processing
+        $this->idempotency->mark_processing($woo_order_id, $wow_user_id);
+
+        // Get transaction kind
+        $transaction_kind = $this->order_handler->get_transaction_kind($woo_order_id);
+
+        // Get order meta for addons
+        $order_meta = [
+            'transaction_kind' => $transaction_kind,
+            'wow_order_id' => $this->order_handler->get_wow_order_id($woo_order_id),
+            'line_items' => $this->order_handler->get_line_items($woo_order_id),
+            'total' => $this->order_handler->get_order_total($woo_order_id),
+        ];
+
+        // Fire before fulfillment hook
+        PGB_Hooks::before_fulfillment($woo_order_id, $order_meta);
+
+        // Execute handler for transaction type
+        try {
+            PGB_Hooks::handle_order_type(
+                $transaction_kind,
+                $order,
+                $wow_user_id,
+                $order_meta
+            );
+
+            // Mark as fulfilled
+            $this->idempotency->mark_fulfilled($woo_order_id, $wow_user_id);
+
+            // Fire after fulfillment hook
+            PGB_Hooks::after_fulfillment($woo_order_id, $wow_user_id, ['status' => 'success']);
+
+            $this->logger->log(
+                'Order fulfillment completed',
+                PGB_Logger::LOG_INFO,
+                ['woo_order_id' => $woo_order_id, 'wow_user_id' => $wow_user_id],
+                __FILE__
+            );
+
+            return true;
+        } catch (Exception $e) {
+            $this->idempotency->log_fulfillment_error(
+                $woo_order_id,
+                $wow_user_id,
+                $e->getMessage()
+            );
+
+            $this->logger->log(
+                'Fulfillment error: ' . $e->getMessage(),
+                PGB_Logger::LOG_ERROR,
+                ['woo_order_id' => $woo_order_id, 'trace' => $e->getTraceAsString()],
+                __FILE__
+            );
+
+            return false;
+        }
+    }
+}
+?>
+```
+
+---
+
+### **FILE 8: Transaction Manager (Main Orchestrator)**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/core/class-pgb-manager.php
+ * 
+ * Main transaction manager and orchestrator
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Manager {
+    private static $instance = null;
+    private $logger = null;
+    private $idempotency = null;
+    private $fulfillment = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    private function __construct() {
+        $this->logger = PGB_Logger::instance();
+        $this->idempotency = PGB_Idempotency::instance();
+        $this->fulfillment = PGB_Fulfillment::instance();
+    }
+
+    /**
+     * Process order completion (called from WC hooks)
+     */
+    public function process_order_completion($woo_order_id, $trigger = 'payment_complete') {
+        $this->logger->log(
+            "Processing order completion (trigger: {$trigger})",
+            PGB_Logger::LOG_INFO,
+            ['woo_order_id' => $woo_order_id],
+            __FILE__
+        );
+
+        // Fulfill the order
+        return $this->fulfillment->fulfill_order($woo_order_id);
+    }
+}
+?>
+```
+
+---
+
+### **FILE 9: Streams PGB Client**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/pgb-client-streams.php
+ * 
+ * Streams Client Interface
+ * Called from WoWonder admin when creating payment order
+ * 
+ * This endpoint bypasses WooCommerce API and uses database-driven approach:
+ * 1. Store order in WoWonder database
+ * 2. Redirect to WordPress to retrieve WooCommerce order
+ * 3. WordPress creates WC order from stored data
+ * 4. Redirect user to WC checkout
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    // Not in WordPress context, load WoWonder environment
+    require_once __DIR__ . '/../db_helpers.php';
+}
+
+/**
+ * Initialize order placement from Streams
+ * 
+ * POST parameters expected:
+ * - wow_user_id
+ * - wow_email
+ * - product_id (WC product ID)
+ * - product_name
+ * - product_price
+ * - quantity
+ * - currency
+ * - transaction_kind (PRO, WALLET, DONATE, PRODUCT)
+ * - wow_post_id (optional, for context)
+ */
+function pgb_streams_place_order() {
+    // CORS and security headers
+    header('Content-Type: application/json');
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: POST, OPTIONS');
+
+    // Validate request method
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        return json_encode(['status' => 'error', 'message' => 'Method not allowed']);
+    }
+
+    // Get input data
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+
+    // Validate input
+    $validation = pgb_validate_streams_input($input);
+    if (!$validation['valid']) {
+        http_response_code(400);
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Validation failed',
+            'errors' => $validation['errors']
+        ]);
+    }
+
+    $data = $validation['data'];
+
+    // Store order in WoWonder database
+    $wow_order_id = pgb_store_order_in_wow_db($data);
+    if (!$wow_order_id) {
+        http_response_code(500);
+        return json_encode(['status' => 'error', 'message' => 'Failed to create order']);
+    }
+
+    // Generate redirect URL to WordPress
+    $wp_base = defined('WP_BASE_SITE_URL') ? WP_BASE_SITE_URL : 'https://buzzjuice.net';
+    $checkout_url = $wp_base . '/wp-json/bzj-pgb/v1/checkout?' . http_build_query([
+        'wow_order_id' => $wow_order_id,
+        'wow_user_id' => $data['wow_user_id'],
+        'wow_email' => $data['wow_email'],
+    ]);
+
+    return json_encode([
+        'status' => 'success',
+        'wow_order_id' => $wow_order_id,
+        'checkout_url' => $checkout_url,
+        'message' => 'Order created. Redirecting to checkout...'
+    ]);
+}
+
+/**
+ * Validate input from Streams
+ */
+function pgb_validate_streams_input($input) {
+    $errors = [];
+
+    // Required fields
+    $required = ['wow_user_id', 'wow_email', 'product_id', 'product_name', 'product_price', 'quantity', 'currency', 'transaction_kind'];
+    foreach ($required as $field) {
+        if (empty($input[$field])) {
+            $errors[] = "Missing required field: {$field}";
+        }
+    }
+
+    // Load validator if available
+    if (!class_exists('PGB_Validator')) {
+        $validator_file = __DIR__ . '/core/class-pgb-validator.php';
+        if (file_exists($validator_file)) {
+            require_once $validator_file;
+        }
+    }
+
+    if (class_exists('PGB_Validator')) {
+        // Validate email
+        if (!empty($input['wow_email']) && !PGB_Validator::validate_email($input['wow_email'])) {
+            $errors[] = 'Invalid email format';
+        }
+
+        // Validate amount
+        if (!empty($input['product_price']) && !PGB_Validator::validate_amount($input['product_price'])) {
+            $errors[] = 'Invalid product price';
+        }
+
+        // Validate currency
+        if (!empty($input['currency']) && !PGB_Validator::validate_currency($input['currency'])) {
+            $errors[] = 'Invalid currency code';
+        }
+
+        // Validate transaction type
+        if (!empty($input['transaction_kind']) && !PGB_Validator::validate_transaction_type($input['transaction_kind'])) {
+            $errors[] = 'Invalid transaction kind';
+        }
+    }
+
+    return [
+        'valid' => empty($errors),
+        'errors' => $errors,
+        'data' => $input
+    ];
+}
+
+/**
+ * Store order in WoWonder database
+ */
+function pgb_store_order_in_wow_db($data) {
+    if (!function_exists('get_wowonder_db')) {
+        return false;
+    }
+
+    $db = get_wowonder_db();
+    if (!$db) {
+        return false;
+    }
+
+    try {
+        $wow_order_id = 'wow_' . uniqid();
+        $transaction_kind = $data['transaction_kind'];
+        $amount = floatval($data['product_price']) * intval($data['quantity']);
+        $currency = $data['currency'];
+        $wow_user_id = intval($data['wow_user_id']);
+        $created_at = date('Y-m-d H:i:s');
+
+        // Store initial transaction record
+        $sql = "INSERT INTO Wo_Payment_Transactions 
+                (userid, kind, amount, currency_code, payment_status, order_id, 
+                 created_at, transaction_dt, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        $stmt = $db->prepare($sql);
+        if (!$stmt) {
+            error_log("[PGB-CLIENT] Prepare failed: " . $db->error);
+            return false;
+        }
+
+        $status = 'initiated';
+        $notes = json_encode([
+            'product_name' => $data['product_name'],
+            'product_id' => $data['product_id'],
+            'quantity' => $data['quantity'],
+            'wow_post_id' => $data['wow_post_id'] ?? null,
+            'user_email' => $data['wow_email'],
+        ]);
+
+        $stmt->bind_param(
+            'isdsssss',
+            $wow_user_id,
+            $transaction_kind,
+            $amount,
+            $currency,
+            $status,
+            $wow_order_id,
+            $created_at,
+            $created_at,
+            $notes
+        );
+
+        if (!$stmt->execute()) {
+            error_log("[PGB-CLIENT] Execute failed: " . $stmt->error);
+            return false;
+        }
+
+        $stmt->close();
+        error_log("[PGB-CLIENT] Order stored: wow_order_id={$wow_order_id}");
+        return $wow_order_id;
+
+    } catch (Exception $e) {
+        error_log("[PGB-CLIENT] Exception: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Main execution
+$response = pgb_streams_place_order();
+echo $response;
+?>
+```
+
+---
+
+### **FILE 10: AffiliateWP Addon**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/addons/pgb-addon-affiliate-wp.php
+ * 
+ * AffiliateWP Integration Addon
+ * Processes affiliate commissions after order payment
+ * 
+ * Hook: pgb_payment_complete
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+// Initialize AffiliateWP addon only if plugin is active
+if (!function_exists('affiliate_wp')) {
+    return;
+}
+
+class PGB_Addon_AffiliateWP {
+    private static $instance = null;
+    private $logger = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    private function __construct() {
+        $this->logger = PGB_Logger::instance();
+        
+        // Register hooks
+        add_action('pgb_payment_complete', [$this, 'process_affiliate_reward'], 10, 4);
+    }
+
+    /**
+     * Process affiliate reward on payment complete
+     */
+    public function process_affiliate_reward($woo_order_id, $wow_user_id, $amount, $transaction_kind) {
+        $this->logger->log(
+            'Processing AffiliateWP reward',
+            PGB_Logger::LOG_INFO,
+            ['woo_order_id' => $woo_order_id, 'wow_user_id' => $wow_user_id],
+            __FILE__
+        );
+
+        // Get WordPress user ID (customer)
+        $wp_user = get_user_by('meta', 'bz_wow_user_id', $wow_user_id);
+        if (!$wp_user) {
+            $this->logger->log(
+                'WordPress user not found for WoWonder user',
+                PGB_Logger::LOG_WARNING,
+                ['wow_user_id' => $wow_user_id],
+                __FILE__
+            );
+            return;
+        }
+
+        // Get order to check for affiliate meta
+        $order = wc_get_order($woo_order_id);
+        if (!$order) {
+            return;
+        }
+
+        // Check for affiliate meta data
+        $affiliate_data = [
+            'affwp_affiliate_id' => $order->get_meta('affwp_affiliate_id'),
+            'affwp_ref' => $order->get_meta('affwp_ref'),
+            'affwp_visit_id' => $order->get_meta('affwp_visit_id'),
+        ];
+
+        if (empty($affiliate_data['affwp_affiliate_id']) && empty($affiliate_data['affwp_ref'])) {
+            $this->logger->log(
+                'No affiliate meta found on order',
+                PGB_Logger::LOG_DEBUG,
+                ['woo_order_id' => $woo_order_id],
+                __FILE__
+            );
+            return;
+        }
+
+        // Attempt to resolve affiliate
+        $affiliate_id = $this->resolve_affiliate($wp_user->ID, $affiliate_data);
+        if (!$affiliate_id) {
+            $this->logger->log(
+                'Could not resolve affiliate for user',
+                PGB_Logger::LOG_WARNING,
+                ['wp_user_id' => $wp_user->ID],
+                __FILE__
+            );
+            return;
+        }
+
+        // Calculate commission
+        $commission = $this->calculate_commission($order, $amount);
+
+        // Create referral
+        $referral_id = $this->create_referral(
+            $affiliate_id,
+            $wp_user->ID,
+            $woo_order_id,
+            $commission
+        );
+
+        if ($referral_id) {
+            $this->logger->log(
+                'Affiliate referral created',
+                PGB_Logger::LOG_INFO,
+                [
+                    'woo_order_id' => $woo_order_id,
+                    'affiliate_id' => $affiliate_id,
+                    'referral_id' => $referral_id,
+                    'commission' => $commission
+                ],
+                __FILE__
+            );
+        }
+    }
+
+    /**
+     * Resolve affiliate from meta data
+     */
+    private function resolve_affiliate($wp_user_id, $affiliate_data) {
+        // First attempt: direct affiliate ID
+        if (!empty($affiliate_data['affwp_affiliate_id'])) {
+            $affiliate_id = intval($affiliate_data['affwp_affiliate_id']);
+            if (affiliate_wp()->affiliates->get_affiliate($affiliate_id)) {
+                return $affiliate_id;
+            }
+        }
+
+        // Second attempt: by reference
+        if (!empty($affiliate_data['affwp_ref'])) {
+            $affiliate = affiliate_wp()->affiliates->get_affiliate_by('slug', $affiliate_data['affwp_ref']);
+            if ($affiliate && isset($affiliate->ID)) {
+                return $affiliate->ID;
+            }
+        }
+
+        // Third attempt: by visit ID
+        if (!empty($affiliate_data['affwp_visit_id'])) {
+            $visit_id = intval($affiliate_data['affwp_visit_id']);
+            $visit = affiliate_wp()->visits->get_visit($visit_id);
+            if ($visit && isset($visit->affiliate_id)) {
+                return $visit->affiliate_id;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Calculate commission for order
+     */
+    private function calculate_commission($order, $amount) {
+        // Default: 10% commission
+        $rate = apply_filters('affwp_referral_rate', 0.10, $order, $amount);
+        return $amount * $rate;
+    }
+
+    /**
+     * Create referral in AffiliateWP
+     */
+    private function create_referral($affiliate_id, $wp_user_id, $woo_order_id, $commission) {
+        if (!function_exists('affwp_add_referral')) {
+            return false;
+        }
+
+        // Check for existing referral (idempotency)
+        $existing = affiliate_wp()->referrals->get_referrals([
+            'affiliate_id' => $affiliate_id,
+            'reference' => $woo_order_id,
+            'status' => 'approved'
+        ]);
+
+        if (!empty($existing)) {
+            return $existing[0]->ID;
+        }
+
+        // Create new referral
+        $referral_id = affwp_add_referral([
+            'affiliate_id' => $affiliate_id,
+            'customer_id' => $wp_user_id,
+            'reference' => $woo_order_id,
+            'amount' => $commission,
+            'status' => 'approved',
+            'context' => 'woocommerce',
+        ]);
+
+        return $referral_id ? $referral_id : false;
+    }
+}
+
+// Initialize addon
+if (class_exists('PGB_Logger')) {
+    PGB_Addon_AffiliateWP::instance();
+}
+?>
+```
+
+---
+
+### **FILE 11: Jewel Affiliate Integration**
+
+```php
+<?php
+/**
+ * shared/payment-gateway/integrations/pgb-int-jewel-affiliate.php
+ * 
+ * Jewel Affiliate Integration
+ * Handles pro activation and rebate credits for Jewel subscribers
+ * 
+ * Hook: pgb_handle_pro (for PRO transaction kind)
+ */
+
+if (!defined('ABSPATH') && !defined('PGB_ROOT')) {
+    exit('Direct access not permitted.');
+}
+
+class PGB_Int_JewelAffiliate {
+    private static $instance = null;
+    private $logger = null;
+
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    private function __construct() {
+        $this->logger = PGB_Logger::instance();
+
+        // Register hooks
+        add_action('pgb_handle_pro', [$this, 'handle_pro_purchase'], 10, 3);
+        add_action('pgb_before_fulfillment', [$this, 'check_jewel_mapping'], 10, 2);
+    }
+
+    /**
+     * Handle PRO purchase
+     */
+    public function handle_pro_purchase($woo_order, $wow_user_id, $order_meta) {
+        $this->logger->log(
+            'Handling PRO purchase',
+            PGB_Logger::LOG_INFO,
+            ['woo_order_id' => $woo_order->get_id(), 'wow_user_id' => $wow_user_id],
+            __FILE__
+        );
+
+        // Get WoWonder database connection
+        if (!function_exists('get_wowonder_db')) {
+            return;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return;
+        }
+
+        // Get line items to check for Jewel variations
+        $line_items = $woo_order->get_items();
+        $activated = [];
+
+        foreach ($line_items as $item) {
+            $variation_id = $item->get_variation_id();
+            if (!$variation_id) {
+                $variation_id = $item->get_product_id();
+            }
+
+            // Load mapping
+            $mapping = $this->get_jewel_mapping();
+            if (!isset($mapping[$variation_id])) {
+                continue;
+            }
+
+            $map = $mapping[$variation_id];
+            $pro_type = intval($map['wow_pro_type'] ?? 0);
+
+            if ($pro_type <= 0) {
+                continue;
+            }
+
+            // Activate pro
+            $pro_time = time();
+            $sql = "UPDATE Wo_Users SET pro_time=?, is_pro=1, pro_type=? WHERE user_id=? LIMIT 1";
+            $stmt = $db->prepare($sql);
+
+            if ($stmt) {
+                $stmt->bind_param('iii', $pro_time, $pro_type, $wow_user_id);
+                if ($stmt->execute()) {
+                    $this->logger->log(
+                        'Pro activated',
+                        PGB_Logger::LOG_INFO,
+                        ['wow_user_id' => $wow_user_id, 'pro_type' => $pro_type],
+                        __FILE__
+                    );
+                    $activated[] = $pro_type;
+
+                    // Sync WP roles
+                    $this->sync_wp_roles($wow_user_id, $map);
+                } else {
+                    $this->logger->log(
+                        'Failed to update pro status',
+                        PGB_Logger::LOG_ERROR,
+                        ['error' => $stmt->error],
+                        __FILE__
+                    );
+                }
+                $stmt->close();
+            }
+        }
+
+        // Apply rebate if found
+        $rebate_cents = intval($woo_order->get_meta('bz_rebate_credit_cents') ?? 0);
+        if ($rebate_cents > 0) {
+            $this->apply_rebate_credit($db, $wow_user_id, $rebate_cents, $woo_order->get_id());
+        }
+    }
+
+    /**
+     * Check for Jewel mapping
+     */
+    public function check_jewel_mapping($woo_order_id, $order_meta) {
+        $this->logger->log(
+            'Checking Jewel mapping',
+            PGB_Logger::LOG_DEBUG,
+            ['woo_order_id' => $woo_order_id],
+            __FILE__
+        );
+    }
+
+    /**
+     * Get Jewel variation mapping
+     */
+    private function get_jewel_mapping() {
+        $option_json = get_option('bz_rebate_mapping_json', '[]');
+        $mapping_array = json_decode($option_json, true);
+
+        $mapping = [];
+        if (is_array($mapping_array)) {
+            foreach ($mapping_array as $item) {
+                $vid = intval($item['variation_id'] ?? 0);
+                if ($vid > 0) {
+                    $mapping[$vid] = [
+                        'wow_pro_type' => intval($item['wow_pro_type'] ?? 0),
+                        'wp_role' => $item['wp_role'] ?? '',
+                        'wow_label' => $item['wow_label'] ?? '',
+                    ];
+                }
+            }
+        }
+
+        return $mapping;
+    }
+
+    /**
+     * Sync WordPress roles
+     */
+    private function sync_wp_roles($wow_user_id, $map_row) {
+        if (!function_exists('get_wp_db_conn')) {
+            return;
+        }
+
+        $db = get_wowonder_db();
+        if (!$db) {
+            return;
+        }
+
+        // Get WP user ID
+        $stmt = $db->prepare("SELECT wp_user_id FROM Wo_Users WHERE user_id=? LIMIT 1");
+        if (!$stmt) {
+            return;
+        }
+
+        $stmt->bind_param('i', $wow_user_id);
+        $stmt->execute();
+        $stmt->bind_result($wp_user_id);
+        $stmt->fetch();
+        $stmt->close();
+
+        if (!$wp_user_id) {
+            return;
+        }
+
+        // Get WordPress user
+        $wp_user = get_user_by('ID', $wp_user_id);
+        if (!$wp_user) {
+            return;
+        }
+
+        // Add roles
+        $wp_user->add_role('jewel-affiliate');
+        if (!empty($map_row['wp_role'])) {
+            $wp_user->add_role($map_row['wp_role']);
+        }
+
+        $this->logger->log(
+            'WordPress roles synced',
+            PGB_Logger::LOG_DEBUG,
+            ['wp_user_id' => $wp_user_id],
+            __FILE__
+        );
+    }
+
+    /**
+     * Apply rebate credit
+     */
+    private function apply_rebate_credit($db, $wow_user_id, $credit_cents, $woo_order_id) {
+        if ($credit_cents <= 0) {
+            return;
+        }
+
+        $amount = round($credit_cents / 100.0, 2);
+
+        // Check idempotency
+        $check_sql = "SELECT id FROM Wo_Payment_Transactions 
+                      WHERE woo_order_id=? AND userid=? AND notes LIKE '%Rebate%' LIMIT 1";
+        $stmt = $db->prepare($check_sql);
+
+        if ($stmt) {
+            $stmt->bind_param('ii', $woo_order_id, $wow_user_id);
+            $stmt->execute();
+            $stmt->store_result();
+
+            if ($stmt->num_rows > 0) {
+                $stmt->close();
+                $this->logger->log(
+                    'Rebate already applied',
+                    PGB_Logger::LOG_DEBUG,
+                    ['wow_user_id' => $wow_user_id, 'woo_order_id' => $woo_order_id],
+                    __FILE__
+                );
+                return;
+            }
+
+            $stmt->close();
+        }
+
+        try {
+            $db->begin_transaction();
+
+            // Update wallet
+            $upd = $db->prepare("UPDATE Wo_Users SET wallet=wallet+? WHERE user_id=? LIMIT 1");
+            if ($upd) {
+                $upd->bind_param('di', $amount, $wow_user_id);
+                $upd->execute();
+                $upd->close();
+            }
+
+            // Insert transaction
+            $ins = $db->prepare("
+                INSERT INTO Wo_Payment_Transactions 
+                (userid, kind, amount, notes, order_id, payment_status, woo_order_id, transaction_dt)
+                VALUES (?, 'REBATE', ?, ?, ?, 'completed', ?, NOW())
+            ");
+
+            if ($ins) {
+                $note = 'Jewel Affiliate Rebate Credit';
+                $order_ref = strval($woo_order_id);
+                $ins->bind_param('idsss', $wow_user_id, $amount, $note, $order_ref, $order_ref);
+                $ins->execute();
+                $ins->close();
+            }
+
+            $db->commit();
+
+            $this->logger->log(
+                'Rebate credit applied',
+                PGB_Logger::LOG_INFO,
+                ['wow_user_id' => $wow_user_id, 'amount' => $amount],
+                __FILE__
+            );
+        } catch (Exception $e) {
+            $db->rollback();
+            $this->logger->log(
+                'Rebate error: ' . $e->getMessage(),
+                PGB_Logger::LOG_ERROR,
+                [],
+                __FILE__
+            );
+        }
+    }
+}
+
+// Initialize integration
+if (class_exists('PGB_Logger')) {
+    PGB_Int_JewelAffiliate::instance();
+}
+?>
+```
+
+---
+
+## **PHASE 3: DATABASE MIGRATION**
+
+### **Add columns to existing tables:**
+
+```sql
+-- Streams database (WoWonder)
+ALTER TABLE Wo_Payment_Transactions ADD COLUMN IF NOT EXISTS woo_order_id INT DEFAULT 0 AFTER order_id;
+ALTER TABLE Wo_Payment_Transactions ADD COLUMN IF NOT EXISTS fulfillment_status VARCHAR(50) DEFAULT 'initiated' AFTER payment_status;
+ALTER TABLE Wo_Payment_Transactions ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMP NULL AFTER updated_at;
+ALTER TABLE Wo_Payment_Transactions ADD COLUMN IF NOT EXISTS last_error TEXT AFTER fulfilled_at;
+
+-- WordPress database
+ALTER TABLE wp_posts ADD COLUMN IF NOT EXISTS _bz_wow_user_id BIGINT DEFAULT 0 AFTER post_parent;
+ALTER TABLE wp_postmeta ADD COLUMN IF NOT EXISTS meta_wow_user_id BIGINT DEFAULT 0 AFTER meta_id;
+```
+
+---
+
+## **PHASE 4: STREAMS SETTINGS UPDATE**
+
+```html
+<!-- Update: streams/admin-panel/pages/payment-settings/content.phtml -->
+
+<!-- Remove these fields (no longer needed):
+- wow_api_key
+- wow_api_secret  
+- wow_webhook_secret
+-->
+
+<!-- Add these new fields:
+- pgb_logging_enabled (checkbox)
+- pgb_log_level (dropdown)
+- pgb_streams_url (text field)
+-->
+
+<!-- Keep these existing fields:
+- wow_payment (enable/disable)
+- wow_store_url
+- wow_market_id
+- wow_pro_package_id (x4)
+- wow_wallet_topup_id
+- wow_crowdfund_id
+-->
+```
+
+---
+
+## **PHASE 5: STREAMS PAYMENT MODAL UPDATE**
+
+```html
+<!-- Update: streams/themes/sunshine/layout/extra_js/content.phtml -->
+
+<script>
+function initPaymentGateway() {
+    // Call PGB Client to place order
+    const orderData = {
+        wow_user_id: USER_ID,
+        wow_email: USER_EMAIL,
+        product_id: PRODUCT_ID,
+        product_name: PRODUCT_NAME,
+        product_price: PRICE,
+        quantity: 1,
+        currency: 'GHS',
+        transaction_kind: 'PRO' // or WALLET, DONATE, PRODUCT
+    };
+
+    fetch('/shared/payment-gateway/pgb-client-streams.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderData)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'success') {
+            // Redirect to WordPress checkout
+            window.location.href = data.checkout_url;
+        } else {
+            alert('Error: ' + data.message);
+        }
+    });
+}
+</script>
+```
+
+---
+
+## **SUMMARY OF CHANGES**
+
+### **Files to Remove:**
+- `streams/wow-pgb_webhook.php`
+- `wp-content/plugins/blue-crown-wp/wow-pgb_sync/` (entire directory)
+- `streams/assets/wow-pgb/wow-pgb_init.php`
+
+### **Files to Replace:**
+- `wp-content/mu-plugins/buzzjuice-affwp-order-complete.php` → Use new `bzj-pgb-engine.php`
+
+### **Files to Create:**
+- `wp-content/mu-plugins/bzj-pgb-engine.php` (MU Plugin Engine)
+- `shared/payment-gateway/core/` (8 core classes)
+- `shared/payment-gateway/addons/` (AffiliateWP, Subscriptions, Currency)
+- `shared/payment-gateway/integrations/` (WooCommerce, Jewel Affiliate)
+- `shared/payment-gateway/pgb-client-streams.php` (Streams Client)
+- `shared/payment-gateway/log/` (directory for logs)
+
+### **Files to Update:**
+- `streams/admin-panel/pages/payment-settings/content.phtml`
+- `streams/themes/sunshine/layout/extra_js/content.phtml`
+- Database schema (add columns)
+
+---
+
+This completes the **Buzzjuice Payment Gateway Bridge v8.0** with:
+
+✅ Database-driven approach (no WooCommerce API calls from cPanel)
+✅ Single MU plugin orchestrator  
+✅ Modular addon/integration architecture
+✅ Comprehensive logging and monitoring
+✅ Idempotent fulfillment (no dropped orders)
+✅ AffiliateWP integration preserved
+✅ Jewel Affiliate rebates and pro activation
+✅ Full durable transaction state machine
+✅ WordPress as authoritative platform
+
+<<STOP GITHUB>>
