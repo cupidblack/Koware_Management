@@ -54,11 +54,11 @@ The following are previous workflow developments that were attempted:
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/production-wordkflow-trial.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.2.txt
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Developer%20Workflow%20Implementation%20Guide.md
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.1.txt
 
 
 
@@ -74,24 +74,6 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Developer%2
 
 
 
-Thoroughly review and analyze the following workflow infrastructure guides to support the implementation and production workflow of this project to completion:
-
-<<START PRODUCTION WORKFLOW INFRASTRUCTURE GUIDES>>
-
-
-
-
-
-
-
-<<STOP PRODUCTION WORKFLOW INFRASTRUCTURE GUIDES>>
-
-
-
-Thoroughly review and analyze the following prompt to develop an Architectural Engineering Analysis then take me step by step through to implement the updated prompt using the suggested updated production workflow.
-
-
-
 Note the following project initialization considerations:
 
 
@@ -100,7 +82,7 @@ Note the following project initialization considerations:
 
 
 
-1. Create GitHub Project: Buzzjuice Market Payment Gateway Bridge
+1\. Create GitHub Project: Buzzjuice Market Payment Gateway Bridge
 
 and set project attributes and description. This project uses the 'BZJ-PGB' prefix identifier with four digits used to identify specific sections. The second digit is used as the section counter whereas the last two digits identify a specific subsection. For instance, BZJ-PGB-4324 means subsection 24 of section 43 of the Buzzjuice Payment Gateway Bridge project.
 
@@ -114,15 +96,15 @@ and set project attributes and description. This project uses the 'BZJ-PGB' pref
 
 
 
-4\. Confirm skills folder ('.git/skills/project-name' or '.github/skills/project-name' ??)
+4\. Confirm skills folder ('.git/skills/project-name' or '.github/skills/project-name' ?? buzzjuice.net/.git folder exists, .github does not exist)
 
 
 
-5\. Confirm Architecture Decision Records location (buzzjuice.net/data/ADR)
+5\. Confirm Architecture Decision Records location (buzzjuice.net/data/docs/ADR)
 
 
 
-6\. Confirm Decision Ledger location (buzzjuice.net/data/ADR/decisions)
+6\. Confirm Decision Ledger location (buzzjuice.net/data/docs/ADR/decisions)
 
 
 
@@ -139,6 +121,32 @@ and set project attributes and description. This project uses the 'BZJ-PGB' pref
 
 
 <<STOP BZJ-PGB-0210 INITIAL CONSIDERATION NOTES>>
+
+
+
+Thoroughly review and analyze the following workflow infrastructure guides then appropriately use the tools and techniques addressed in the guides to effectively and efficiently support and guide the implementation and production workflow of this project to completion:
+
+<<START PRODUCTION WORKFLOW INFRASTRUCTURE GUIDES>>
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.3.txt
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.2.txt
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.1.txt
+
+
+
+<<STOP PRODUCTION WORKFLOW INFRASTRUCTURE GUIDES>>
+
+
+
+Referencing the workflow infrastructure guides to take me step by step through to the completion of the project, thoroughly review and analyze the following prompt to develop it into an 'Architectural Engineering Analysis' that would be shared with Claude, Jules and Copilot agents. The agent responses to the 'Architectural Engineering Analysis' would be shared here to help produce an 'Architectural Decision Record' that would be used for the final implementation after specifications have been verified. 
 
 
 
@@ -676,11 +684,31 @@ https://github.com/cupidblack/buzzjuice.net/blob/main/streams/jewel-affiliate-we
 
 # 
 
-# 
+
+
+
+
+
+
+
+
+# **BZJ-PGB-0230 — Evidence Lock \& Repository Engineering Inventory**
+
+
+
+
+
+
+
+
+
+
 
 # 
 
-# **BZJ-PGB-0300 Brief Analysis**
+# 
+
+# **BZJ-PGB-0300 Architectural Engineering Brief Analysis**
 
 
 
