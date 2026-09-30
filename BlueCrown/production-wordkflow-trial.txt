@@ -1,0 +1,2657 @@
+Considering the coding being used to develop featured on the Buzzjuice Network, what ai assisted platforms would be best to support the processes and provide reliable coding results, just like the collaboration between chatgpt and GitHub that we have been implementing?
+
+Yes. For Buzzjuice Network, I would not replace the ChatGPT + GitHub workflow. I would build a small AI-assisted engineering stack around it, where different AI coding systems perform different jobs.
+
+The important distinction is that Buzzjuice isn't a simple application. You're dealing with WordPress/BuddyBoss + WoWonder + QuickDate + WooCommerce + AffiliateWP + custom MU plugins + shared authentication + cross-database synchronization. That makes repository context, architectural consistency, testing, and controlled changes much more important than raw code generation.
+
+Recommended Buzzjuice AI development stack
+Platform	Best role for Buzzjuice	How I'd use it
+ChatGPT + Codex	🧠 Architecture + primary coding agent	Main engineering partner
+GitHub Copilot	🔧 Repository/PR/IDE integration	Daily coding + PR review
+Claude Code	🔍 Independent code review / second opinion	Complex PHP, legacy code, debugging
+Cursor	🛠️ Large-scale interactive codebase work	Optional developer workstation
+GitHub Actions + AI agents	🧪 Automated testing/review	Continuous validation
+Sentry / similar observability	📊 Runtime verification	Catch production failures
+PHPStan/Psalm + PHPUnit	🧱 Deterministic validation	Prevent AI-generated regressions
+1. ChatGPT + Codex — the primary system
+
+This is the closest evolution of what we're already doing.
+
+OpenAI's current Codex can work across ChatGPT, IDE and terminal, and can perform repository-level work such as features, refactors, migrations, testing and code review. It also supports project-specific AGENTS.md instructions.
+
+That is particularly useful for Buzzjuice because we can encode things such as:
+
+Buzzjuice Architecture Rules
+
+1. WP/BuddyBoss is authoritative for identity.
+2. Streams must not use wp-load.php.
+3. Socials must not use wp-load.php.
+4. MU plugins use bzj- prefix.
+5. Never modify existing SSO contracts without documenting migration impact.
+6. Streams/Socials database operations must use approved helpers.
+7. Every cross-platform operation requires an origin/event identifier.
+8. Pair locks are required for relationship synchronization.
+9. Logging must be toggleable.
+10. Never expose tokens, passwords or raw authentication data in logs.
+
+Then the coding agent isn't simply told:
+
+"Fix this PHP file."
+
+It gets:
+
+"Fix this PHP file while complying with Buzzjuice's architecture."
+
+That's a much more scalable AI-development model.
+
+2. GitHub Copilot — keep it
+
+I would actually make GitHub the engineering control centre.
+
+GitHub Copilot now operates across GitHub, IDEs, CLI and agent workflows, and GitHub supports both OpenAI Codex and Anthropic Claude as coding agents.
+
+This gives us an interesting architecture:
+
+                     BUZZJUICE GITHUB
+                           │
+             ┌─────────────┼─────────────┐
+             │             │             │
+          Codex         Copilot        Claude
+             │             │             │
+             └─────────────┼─────────────┘
+                           │
+                     Pull Request
+                           │
+                   Automated Testing
+                           │
+                    Human Review
+                           │
+                         MERGE
+
+So instead of asking one AI to be responsible for everything, we create an AI engineering pipeline.
+
+3. Claude Code — excellent second pair of eyes
+
+I would consider Claude Code particularly useful for independent review of complicated legacy PHP.
+
+Not because it should replace Codex, but because having a second reasoning system inspect the same implementation can expose problems that the first agent missed.
+
+For example:
+
+Codex
+
+Implement the new bzj-payment-gateway.php.
+
+Then:
+
+Claude
+
+Review this implementation against the existing Buzzjuice payment architecture. Look specifically for:
+
+dropped orders
+duplicate orders
+race conditions
+authentication problems
+WooCommerce lifecycle problems
+webhook failures
+retry problems
+database inconsistencies
+redirect failures
+subscription activation errors
+AffiliateWP duplication
+logging/security problems.
+
+Then we decide which findings are actually valid.
+
+That is substantially safer than:
+
+"AI, write the whole payment system."
+
+4. Cursor — useful, but optional
+
+Cursor is interesting if you want an AI-first development environment rather than primarily working through VS Code/GitHub.
+
+I wouldn't make Cursor another mandatory component yet.
+
+For Buzzjuice, I'd first establish:
+
+ChatGPT/Codex → GitHub → VS Code → testing
+
+and only introduce Cursor if you find that large-scale interactive editing across the Buzzjuice repositories is becoming cumbersome.
+
+The ecosystem has moved heavily toward agent-based, multi-file development rather than simple autocomplete, so tools such as Cursor are increasingly useful for that style of work.
+
+But adding another platform prematurely could actually make the workflow worse.
+
+The bigger opportunity: AI should become part of the Buzzjuice engineering system
+
+This is where I think we can improve considerably.
+
+Instead of:
+
+You
+ ↓
+ChatGPT
+ ↓
+GitHub
+ ↓
+Code
+
+I'd eventually build:
+
+                         YOU
+                          │
+                          ▼
+                    ARCHITECTURE
+                    /             \
+                   /               \
+             ChatGPT              GitHub
+                │                    │
+                ▼                    ▼
+             Codex              Copilot/Agents
+                │                    │
+                └─────────┬──────────┘
+                          ▼
+                     Pull Request
+                          │
+              ┌───────────┼───────────┐
+              ▼           ▼           ▼
+           Tests       PHPStan      Security
+              │           │           │
+              └───────────┼───────────┘
+                          ▼
+                   AI Code Review
+                          │
+                          ▼
+                    HUMAN REVIEW
+                          │
+                          ▼
+                        MERGE
+                          │
+                          ▼
+                     DEPLOYMENT
+                          │
+                          ▼
+                    MONITORING
+                          │
+                          ▼
+                   ERROR FEEDBACK
+                          │
+                          └──────────────► AI
+
+That's much closer to a professional software engineering system.
+
+Particularly important for Buzzjuice: AGENTS.md
+
+I think this should become one of our next improvements.
+
+OpenAI specifically supports AGENTS.md as a way to tell Codex how to navigate a repository, what commands to run, and what project conventions to follow.
+
+We could have:
+
+/buzzjuice.net/
+│
+├── AGENTS.md
+│
+├── wp-content/
+│   └── mu-plugins/
+│       └── AGENTS.md
+│
+├── streams/
+│   └── AGENTS.md
+│
+├── social/
+│   └── AGENTS.md
+│
+├── shared/
+│   └── AGENTS.md
+│
+└── docs/
+    ├── architecture/
+    ├── authentication/
+    ├── payments/
+    ├── relationships/
+    └── messaging/
+
+The root document establishes the global architecture.
+
+The individual documents establish system-specific rules.
+
+For example:
+
+streams/AGENTS.md
+
+could tell the AI:
+
+This is Buzzjuice Streams running WoWonder.
+
+DO:
+- use existing WoWonder functions where appropriate
+- use shared Buzzjuice helpers
+- use bzj logging conventions
+- preserve existing WoWonder behaviour
+- maintain compatibility with WooCommerce payment integration
+
+DO NOT:
+- load WordPress using wp-load.php
+- assume WordPress functions exist
+- modify authentication contracts without review
+- expose credentials in logs
+
+Then when an agent enters the Streams repository, it automatically gets the appropriate context.
+
+We should also separate AI responsibilities
+
+This is probably the most important architectural improvement.
+
+🧠 ChatGPT
+
+Architecture / system design
+
+Examples:
+
+"Design the unified messaging architecture."
+"Analyse this authentication flow."
+"Determine why these three databases can become inconsistent."
+"Design the payment state machine."
+⚙️ Codex
+
+Implementation
+
+Examples:
+
+"Implement the state machine."
+"Modify these five PHP files."
+"Write the tests."
+"Create the migration."
+🔍 Claude
+
+Independent review
+
+Examples:
+
+"Find race conditions."
+"Challenge the architecture."
+"Look for security weaknesses."
+"Look for backwards compatibility problems."
+🧪 GitHub Actions
+
+Machine verification
+
+Examples:
+
+PHP syntax
+↓
+PHPStan
+↓
+PHPUnit
+↓
+Security scanning
+↓
+Integration tests
+↓
+AI review
+👤 You + me
+
+Architecture and product decisions
+
+That's the part AI shouldn't silently decide for us.
+
+This would be especially powerful for the Payment Gateway
+
+Take the current Buzzjuice Payment Gateway problem.
+
+Instead of asking AI to simply fix dropped orders, we could give it the entire problem as an engineering task:
+
+Problem:
+Streams payment orders occasionally disappear.
+
+Systems:
+Streams
+WordPress
+WooCommerce
+WooCommerce Subscriptions
+AffiliateWP
+
+Requirements:
+- no dropped transactions
+- idempotent order creation
+- retry support
+- duplicate protection
+- transaction correlation ID
+- recoverable failures
+- logging toggle
+- no wp-load.php in Streams
+- preserve existing AffiliateWP behaviour
+- preserve existing subscription mapping
+
+Codex then investigates the repository.
+
+Claude independently reviews the proposed architecture.
+
+GitHub Actions tests the implementation.
+
+And we review the resulting PR before deployment.
+
+That is considerably more reliable than repeatedly asking an AI to patch symptoms.
+
+One more important capability: multiple agents
+
+This is becoming increasingly practical.
+
+OpenAI describes Codex as supporting multi-agent workflows and parallel work across projects, while GitHub now provides a workflow where agents such as Copilot, Claude and Codex can work on repository tasks.
+
+For Buzzjuice we could eventually have:
+
+                  BUZZJUICE TASK
+                       │
+             ┌─────────┼─────────┐
+             ▼         ▼         ▼
+          Agent A   Agent B   Agent C
+          Payment   Security  Testing
+             │         │         │
+             └─────────┼─────────┘
+                       ▼
+                  Review Agent
+                       │
+                       ▼
+                     PR
+                       │
+                       ▼
+                  Elliot + Cove
+
+That's where AI becomes an engineering team multiplier, rather than merely a better autocomplete tool.
+
+My proposed Buzzjuice stack
+
+I'd keep it deliberately lean:
+
+Tier 1 — Core
+
+ChatGPT + Codex + GitHub + VS Code
+
+This is your primary development environment.
+
+Tier 2 — Verification
+
+GitHub Actions + PHPUnit + PHPStan/Psalm + security scanning
+
+This establishes objective checks instead of trusting AI output.
+
+GitHub's current agent workflow can also perform security validation using CodeQL, secret scanning and dependency/security checks.
+
+Tier 3 — Independent AI review
+
+Claude Code
+
+Use it selectively for complicated changes.
+
+Tier 4 — Runtime intelligence
+
+Eventually:
+
+Sentry/log aggregation + automated issue creation → GitHub → AI investigation
+
+So a production problem could become:
+
+Production error
+      ↓
+Monitoring
+      ↓
+GitHub Issue
+      ↓
+Codex investigates
+      ↓
+Tests reproduced
+      ↓
+Fix generated
+      ↓
+PR
+      ↓
+Review
+      ↓
+Deploy
+
+That is the direction I'd take Buzzjuice.
+
+I wouldn't install five AI coding platforms right now. The biggest immediate gain is to make our existing ChatGPT + GitHub workflow much more structured, particularly through AGENTS.md, architecture documentation, automated tests and PR-based changes. Codex is the natural next layer because it now operates across ChatGPT, terminal, IDE and cloud repository workflows.
+
+If we do that properly, the AI becomes progressively more knowledgeable about Buzzjuice itself, rather than us having to explain the entire architecture every time we start a new coding session.
+
+Proceeding. BZJ-PGB-002 is now treated as the working implementation specification, with the explicit requirement that agents must stop and report any conflict between the specification and the deployed/repository code rather than silently changing the architecture.
+
+The next step is Step 4 — Controlled Implementation Kickoff.
+
+The first implementation task should not be “build the whole bridge.” It should establish the database/schema, evidence lock, and core transaction foundation first. That gives us a safe checkpoint before touching payment processing.
+
+Step 4A — Create the GitHub Issue
+
+I would create the following issue in cupidblack/buzzjuice.net:
+
+GitHub Issue — BZJ-PGB-003 Payment Gateway Bridge Implementation
+BZJ-PGB-003 — Payment Gateway Bridge Implementation
+Objective
+
+Implement the approved Buzzjuice Payment Gateway Bridge architecture defined by:
+
+BZJ-PGB-001 — Architecture Decision & Approval
+BZJ-PGB-002 — Payment Gateway Bridge Implementation Specification v1
+
+This is a staged implementation.
+
+Do not replace the existing production payment bridge in one operation.
+
+Repository
+
+cupidblack/buzzjuice.net
+
+Primary systems:
+
+Buzzjuice Streams / WoWonder
+WordPress
+WooCommerce
+WooCommerce Subscriptions
+AffiliateWP
+Jewel Affiliate
+WOOCS / WooCommerce currency switching
+Phase 1 — Evidence Lock
+
+Before changing transaction-processing behavior, inspect and document the current implementation.
+
+Verify:
+
+Current wow-pgb_init.php
+Current wow-pgb_sync.php
+Current wow-pgb_webhook.php
+Current AffiliateWP integration
+Current Jewel Affiliate invocation
+Current WooCommerce order metadata
+Current subscription handling
+Current Wo_Payment_Transactions usage
+Existing redirects
+Existing currency conversion
+Existing WOOCS integration
+Existing webhook behavior
+Existing transaction types
+Existing logging
+
+Record:
+
+file;
+function/class;
+hook;
+database table;
+metadata;
+transaction state;
+side effect;
+redirect;
+external dependency.
+
+Do not assume that repository state and production state are identical.
+
+Phase 2 — IAPD Payment Intent Schema
+
+Create the new durable payment-intent storage in:
+
+koware_iapd_db
+
+Use:
+
+get_iapd_db_conn()
+
+from:
+
+buzzjuice.net/shared/db_helpers/
+
+Do not create the new table in the WordPress database or WoWonder database.
+
+Proposed table:
+
+bzj_payment_intents
+
+Do not execute a production schema migration until the proposed SQL/schema has been reviewed.
+
+The schema must support:
+
+UUID;
+idempotency;
+correlation;
+Streams user;
+WordPress user;
+transaction kind;
+product/plan;
+source currency;
+source amount;
+WooCommerce base currency;
+base amount;
+checkout currency;
+checkout amount;
+exchange rate;
+exchange-rate source;
+WooCommerce order ID;
+payment state;
+fulfilment state;
+redirect state;
+subscription effect;
+AffiliateWP effect;
+Jewel Affiliate effect;
+Streams fulfilment effect;
+retry state;
+timestamps;
+expiry.
+Phase 3 — Core Intent Engine
+
+Implement only the durable transaction foundation.
+
+Required operations:
+
+create intent;
+retrieve intent;
+validate intent;
+idempotency lookup;
+state transition;
+locking;
+expiry;
+failure recording;
+retry metadata.
+
+Do not yet replace the existing payment initiation path.
+
+Phase 4 — Currency Engine
+
+Implement and test the currency abstraction.
+
+Required behaviour:
+
+Streams source currency
+        ↓
+WooCommerce base currency
+        ↓
+active WOOCS checkout currency
+
+Example:
+
+Streams:
+ZAR 500
+
+WooCommerce base:
+GHS
+
+Customer checkout:
+EUR
+
+The implementation must not treat ZAR 500 as GHS 500.
+
+Preserve:
+
+original ZAR amount;
+source currency;
+base amount;
+checkout amount;
+checkout currency;
+effective rate;
+rate source;
+conversion timestamp.
+
+Use the deployed WOOCS configuration/rate source.
+
+Do not introduce a second exchange-rate provider without explicit approval.
+
+Phase 5 — Tests
+
+Before proceeding to WordPress/WooCommerce order creation, add tests for:
+
+Idempotency
+duplicate intent;
+duplicate request;
+duplicate callback;
+duplicate fulfilment.
+State
+valid transitions;
+invalid transitions;
+expired intent;
+failed intent;
+retry.
+Currency
+
+At minimum:
+
+ZAR → GHS;
+ZAR → EUR;
+GHS → EUR;
+GHS → ZAR;
+
+where those currencies are configured.
+
+Database
+
+Verify:
+
+koware_iapd_db;
+get_iapd_db_conn();
+unique intent;
+unique idempotency key;
+concurrent access behavior.
+Critical Rules
+Do not:
+delete the old payment bridge;
+disable existing payment processing;
+alter production redirects without mapping them;
+manually activate subscriptions;
+rewrite AffiliateWP business logic;
+assume Jewel Affiliate invocation;
+trust browser-supplied amounts;
+create new database credentials;
+disable TLS verification;
+hard-code secrets;
+log sensitive request data;
+automatically rebuild tables based on filesystem state.
+Required Documentation
+
+Add/update repository documentation describing:
+
+BZJ-PGB-001 architecture decisions;
+BZJ-PGB-002 implementation specification;
+database ownership;
+payment-intent lifecycle;
+currency model;
+migration strategy;
+known unknowns;
+implementation status.
+Completion Criteria
+
+Phase 1–5 is complete only when:
+
+evidence inventory exists;
+schema is proposed and reviewed;
+no production payment flow has been broken;
+payment-intent foundation exists;
+IAPD connection uses get_iapd_db_conn();
+currency conversion tests exist;
+idempotency tests exist;
+state-machine tests exist;
+static analysis/syntax/tests pass;
+all deviations from BZJ-PGB-002 are documented.
+Next Gate
+
+After this issue is complete, stop.
+
+Do NOT continue automatically into WooCommerce order creation.
+
+The next review will determine whether the implementation is ready for:
+
+BZJ-PGB-004 — WordPress/WooCommerce Handoff & Order Creation.
+
+Step 4B — Codex gets the implementation task
+
+I would give Codex a deliberately constrained prompt, rather than the entire original payment-bridge prompt again.
+
+Codex Implementation Prompt — BZJ-PGB-003
+Codex Task — BZJ-PGB-003
+
+You are the primary implementation agent for the Buzzjuice Payment Gateway Bridge redesign.
+
+Implement only the scope defined by BZJ-PGB-003.
+
+Read the repository's AGENTS.md and relevant project documentation first.
+
+Also inspect the existing payment bridge before modifying anything.
+
+Authoritative design documents
+
+Use these as the architecture contract:
+
+BZJ-PGB-001 — Architecture Decision & Approval
+BZJ-PGB-002 — Payment Gateway Bridge Implementation Specification v1
+BZJ-PGB-003 — this issue
+
+If repository code conflicts with the specification:
+
+do not silently choose one;
+document the conflict;
+identify the exact file/function;
+explain the consequence;
+stop at the appropriate gate if the conflict changes architecture.
+Current task
+
+Implement:
+
+evidence inventory;
+payment-intent schema proposal;
+IAPD database abstraction;
+payment-intent core;
+state machine;
+idempotency foundation;
+currency abstraction;
+tests.
+Database requirement
+
+All new payment-intent storage belongs in:
+
+koware_iapd_db
+
+Use:
+
+get_iapd_db_conn()
+
+from:
+
+buzzjuice.net/shared/db_helpers/
+
+Do not create another database connection mechanism.
+
+Do not put the new payment-intent table in the WordPress database.
+
+Currency requirement
+
+The Streams product currency may differ from WooCommerce's GHS base currency.
+
+Example:
+
+Streams product = ZAR
+WooCommerce base = GHS
+Customer checkout = EUR
+
+The implementation must preserve the original ZAR price and correctly derive the checkout currency amount using the deployed WOOCS configuration.
+
+Do not interpret a ZAR amount as GHS.
+
+Do not introduce an unrelated exchange-rate provider.
+
+Important
+
+Do not yet:
+
+replace wow-pgb_init.php;
+replace wow-pgb_sync.php;
+replace existing webhooks;
+change production checkout;
+change redirects;
+alter AffiliateWP business rules;
+alter Jewel Affiliate production behavior;
+activate subscriptions manually.
+
+This is foundation work only.
+
+Required output
+
+Produce:
+
+1. Code
+
+Only code required for this phase.
+
+2. Tests
+
+Include tests for:
+
+idempotency;
+state transitions;
+expiry;
+duplicate processing;
+currency conversion;
+database connection;
+invalid currency;
+rounding.
+3. Evidence report
+
+Create a concise report identifying:
+
+current payment bridge files;
+current transaction tables;
+current hooks;
+current redirects;
+current currency logic;
+AffiliateWP path;
+Jewel Affiliate path;
+subscription path;
+unresolved unknowns.
+4. Deviation report
+
+If implementation differs from BZJ-PGB-002, document:
+
+Requirement
+Observed repository condition
+Proposed deviation
+Reason
+Risk
+Required approval
+5. Validation
+
+Run all applicable:
+
+PHP syntax checks;
+PHPUnit;
+static analysis;
+existing repository tests;
+security checks.
+
+Do not claim tests passed unless they actually ran.
+
+Stop condition
+
+After completing BZJ-PGB-003, stop.
+
+Do not begin WooCommerce order creation.
+
+The implementation will be independently reviewed by Jules and Claude before the next phase.
+
+Step 4C — Jules gets an independent review task
+
+Jules should not simply be told to review whether Codex's code works. We want an independent challenge against the specification.
+
+Jules Review Prompt — BZJ-PGB-003
+Jules — Independent Review of BZJ-PGB-003
+
+Review the implementation of BZJ-PGB-003 as an independent engineering reviewer.
+
+Do not assume that Codex's implementation is correct.
+
+Compare:
+
+BZJ-PGB-001;
+BZJ-PGB-002;
+BZJ-PGB-003;
+actual repository code;
+actual tests.
+Focus areas
+Database
+
+Verify:
+
+correct database;
+koware_iapd_db;
+get_iapd_db_conn();
+indexes;
+uniqueness;
+concurrency;
+transaction safety.
+Idempotency
+
+Attempt to identify paths where:
+
+duplicate intents;
+duplicate orders;
+duplicate callbacks;
+duplicate effects
+
+could occur.
+
+State machine
+
+Identify:
+
+illegal transitions;
+race conditions;
+missing states;
+states that cannot recover.
+Currency
+
+Attack the implementation using:
+
+ZAR → GHS
+ZAR → EUR
+GHS → EUR
+
+Check:
+
+source/base confusion;
+rounding;
+stale rate;
+missing rate;
+incorrect currency assumptions.
+Security
+
+Check:
+
+authorization;
+replay;
+signatures;
+secrets;
+logging;
+SQL;
+user-controlled amounts;
+race conditions.
+Regression
+
+Verify that the implementation does not unintentionally alter:
+
+existing payment bridge;
+AffiliateWP;
+subscriptions;
+Jewel Affiliate;
+redirects.
+Output
+
+Produce:
+
+PASS
+
+Correct implementation areas.
+
+FINDINGS
+
+Each finding must include:
+
+severity;
+file;
+function;
+evidence;
+impact;
+recommended correction.
+BLOCKERS
+
+Anything that prevents moving to BZJ-PGB-004.
+
+TEST GAPS
+
+Tests that should exist but do not.
+
+Do not modify production code unless explicitly asked to perform a fix.
+
+Step 4D — Claude gets the adversarial review
+
+Claude's role should be different from Jules'.
+
+Jules checks implementation correctness and CI/reliability.
+
+Claude attacks the design.
+
+Claude Adversarial Review Prompt — BZJ-PGB-003
+Claude — Adversarial Security & Architecture Review
+
+Perform an adversarial review of the BZJ-PGB-003 implementation.
+
+The objective is to find ways the implementation could:
+
+lose a transaction;
+create a duplicate order;
+duplicate a financial effect;
+miscalculate currency;
+bypass authorization;
+replay a payment intent;
+corrupt fulfilment state;
+break an existing redirect;
+break AffiliateWP;
+break Jewel Affiliate;
+incorrectly activate a subscription;
+expose sensitive information.
+
+Treat the following as invariants:
+
+A payment must never become untraceable.
+
+A successful financial effect must never be applied twice.
+
+A browser disappearing must not stop the transaction.
+
+A downstream failure must not make a successful payment appear unpaid.
+
+A client must never control the final financial amount.
+
+A ZAR amount must never silently be interpreted as GHS.
+
+New payment-intent data belongs in koware_iapd_db.
+
+get_iapd_db_conn() is the approved database connection.
+Specifically attack
+Concurrency
+
+Attempt:
+
+request A + request B
+
+at exactly the same time.
+
+Determine whether two WooCommerce orders or two financial effects can be created.
+
+Replay
+
+Replay an old signed payment-intent handoff.
+
+Determine whether it can:
+
+create another order;
+access another user's status;
+alter transaction state.
+Currency manipulation
+
+Attempt to modify:
+
+source amount;
+source currency;
+checkout currency;
+exchange rate;
+product price.
+
+Determine which values are server authoritative.
+
+Fulfilment
+
+Force:
+
+AffiliateWP failure
+Jewel failure
+Streams failure
+Subscription failure
+
+after payment succeeds.
+
+Determine whether recovery is possible without charging the customer again.
+
+Existing bridge
+
+Check whether the new foundation accidentally changes the old bridge before migration.
+
+Output
+
+Produce:
+
+Executive assessment;
+Critical findings;
+High findings;
+Medium findings;
+Low findings;
+Race-condition analysis;
+Currency analysis;
+Security analysis;
+Migration risks;
+Required changes before BZJ-PGB-004.
+
+Do not redesign unrelated parts of Buzzjuice.
+
+Do not make political, business, or product decisions.
+
+Focus strictly on engineering correctness and security.
+
+The execution gate
+
+This gives us a very clean multi-agent cycle:
+
+                 BZJ-PGB-002
+                      │
+                      ▼
+                 BZJ-PGB-003
+                      │
+                      ▼
+                   CODEX
+                      │
+                 implementation
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+        JULES                   CLAUDE
+    reliability/CI          adversarial/security
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+               OUR REVIEW
+                      │
+             ┌────────┴────────┐
+             │                 │
+           PASS              FAIL
+             │                 │
+             ▼                 ▼
+       BZJ-PGB-004        Codex fixes
+And importantly, we stop here before WooCommerce order creation.
+
+That is intentional. The first implementation checkpoint proves three things independently:
+
+We can reliably store and identify a transaction.
+We can correctly represent its financial/currency information.
+We can prevent duplicate processing.
+
+Only after those three foundations survive Jules + Claude review do we allow the system to cross the most dangerous boundary:
+
+creating the real WooCommerce order.
+
+That is the right place to put the next safety gate.
+
+Today 11:30 AM
+As we are currently working on codex and codex has all details of the project available, the Codex Task — BZJ-PGB-003  has been assigned to GitHub Copilot. 
+
+Take me step by step through how to share the Github issue created with Jules, Cluade and Github Copilot and how to implement the best branch management.
+
+Yes. Since BZJ-PGB-003 is now assigned to GitHub Copilot, I’d manage this as a controlled multi-agent engineering cycle rather than letting Jules, Claude, and Copilot all work independently on the same branch.
+
+The key principle should be:
+
+One implementation branch, independent review branches/agents, and GitHub as the source of truth.
+
+I recommend this workflow:
+
+main
+ │
+ └── pgb/bzj-pgb-003
+       │
+       ├── GitHub Copilot → IMPLEMENTATION
+       │
+       ├── Jules → INDEPENDENT REVIEW
+       │
+       └── Claude → ADVERSARIAL REVIEW
+                    │
+                    ▼
+             Review findings
+                    │
+                    ▼
+             Copilot fixes
+                    │
+                    ▼
+              Tests / CI
+                    │
+                    ▼
+                 PR
+                    │
+                    ▼
+              Human review
+                    │
+                    ▼
+                  main
+
+I would not have Jules or Claude directly modify the same implementation branch during this stage.
+
+Step 1 — Establish the GitHub branch structure
+
+For BZJ-PGB-003, create one dedicated feature branch:
+
+main
+└── pgb/bzj-pgb-003
+
+The branch should contain only BZJ-PGB-003 work.
+
+Do not create a branch such as:
+
+payment-gateway-upgrade
+
+because that will eventually contain multiple phases and make rollback/review harder.
+
+Use the phase-specific branch:
+
+pgb/bzj-pgb-003
+In GitHub
+
+Go to:
+
+Repository → Code → Branches → New branch
+
+Create:
+
+pgb/bzj-pgb-003
+
+starting from:
+
+main
+Step 2 — Make the Issue the control document
+
+Your existing issue should be:
+
+BZJ-PGB-003 — Payment Gateway Bridge Implementation
+
+Make sure the issue contains the implementation boundaries we already established.
+
+At the very top, I recommend adding a short Execution Rules section:
+
+BZJ-PGB-003 Execution Rules
+Execution Rules
+
+This issue is the controlled implementation task for BZJ-PGB-003.
+
+Branch
+
+Implementation branch:
+
+pgb/bzj-pgb-003
+
+Primary Implementer
+
+GitHub Copilot is the primary implementation agent.
+
+Copilot may modify the BZJ-PGB-003 implementation branch.
+
+Independent Reviewers
+
+Jules and Claude are independent reviewers.
+
+They must review the implementation and report findings before BZJ-PGB-003 is considered complete.
+
+They should not modify the primary implementation branch during the initial review.
+
+Scope Lock
+
+BZJ-PGB-003 is limited to:
+
+Evidence inventory of the existing payment bridge.
+IAPD database abstraction.
+Proposed bzj_payment_intents schema.
+Payment-intent foundation.
+Idempotency.
+State-machine foundation.
+Locking/concurrency protection.
+Expiry/retry foundation.
+Currency abstraction.
+Automated tests for the above.
+Explicitly Out of Scope
+
+Do not:
+
+replace the existing payment bridge;
+delete legacy payment files;
+disable existing payment processing;
+create WooCommerce orders;
+change checkout/payment gateway behaviour;
+manually activate subscriptions;
+rewrite AffiliateWP logic;
+rewrite Jewel Affiliate fulfilment;
+change existing redirects without explicit review;
+replace existing webhooks;
+introduce new database credentials;
+create filesystem-driven database schema rebuilds;
+trust browser-supplied commercial values;
+disable TLS verification;
+log credentials, tokens, signatures, payment data, or other secrets.
+Completion Gate
+
+BZJ-PGB-003 is not complete merely because the code compiles.
+
+It requires:
+
+implementation evidence;
+automated tests;
+successful validation;
+Jules review;
+Claude review;
+resolution of all Critical/High findings;
+confirmation that existing payment processing remains intact.
+
+Only after this gate should BZJ-PGB-004 begin.
+
+Source of Truth
+
+GitHub repository state, Issues, Pull Requests, commits, tests, and review comments are the authoritative implementation record.
+
+Conversation is used for architecture and decision-making; GitHub records the resulting engineering state.
+
+This gives all three agents the same rules.
+
+Step 3 — Make sure AGENTS.md controls the repository
+
+This is particularly important because Copilot and Jules can use repository instructions.
+
+You want the repository to communicate:
+
+AGENTS.md
+   ↓
+architecture rules
+   ↓
+payment rules
+   ↓
+security rules
+   ↓
+testing rules
+   ↓
+agent workflow
+
+I would not put the entire BZJ-PGB specification into AGENTS.md.
+
+Instead:
+
+AGENTS.md
+docs/
+  architecture/
+  payment-gateway/
+  decisions/
+
+For example:
+
+AGENTS.md
+docs/payment-gateway/BZJ-PGB-001-architecture.md
+docs/payment-gateway/BZJ-PGB-002-implementation-spec.md
+docs/payment-gateway/BZJ-PGB-003.md
+
+Then AGENTS.md tells agents to read the relevant document.
+
+This keeps the repository maintainable.
+
+Step 4 — Assign Copilot to the issue
+
+You have already done this.
+
+That makes Copilot the primary implementer.
+
+The important thing now is to make sure Copilot works on:
+
+pgb/bzj-pgb-003
+
+and not directly on main.
+
+If Copilot's interface offers branch selection, explicitly select:
+
+pgb/bzj-pgb-003
+
+If it creates a PR automatically, that's actually preferable.
+
+The resulting structure should become:
+
+Issue #XXX
+BZJ-PGB-003
+
+        ↓
+
+Branch
+pgb/bzj-pgb-003
+
+        ↓
+
+Copilot commits
+
+        ↓
+
+Pull Request
+pgb/bzj-pgb-003 → main
+
+Do not merge it yet.
+
+Step 5 — Let Copilot work uninterrupted
+
+For the first implementation pass, don't have Jules or Claude changing anything.
+
+Copilot should:
+
+inspect the existing implementation;
+document the evidence;
+implement the IAPD abstraction;
+implement the intent foundation;
+implement idempotency;
+implement state management;
+implement locking;
+implement currency abstraction;
+write tests;
+run validation.
+
+The important thing here is:
+
+Don't let Copilot start BZJ-PGB-004.
+
+We deliberately stop at the boundary.
+
+Step 6 — When Copilot finishes, do NOT merge
+
+This is the first major gate.
+
+You should have:
+
+BZJ-PGB-003
+      │
+      ▼
+Copilot implementation
+      │
+      ▼
+PR
+      │
+      ├── DO NOT MERGE
+      │
+      ├── Jules review
+      │
+      └── Claude review
+
+The PR becomes the common artifact that everyone reviews.
+
+This is much better than sending everyone a ZIP or copying code between systems.
+
+Step 7 — Give Jules the GitHub Issue + PR
+
+Jules should receive:
+
+repository;
+BZJ-PGB-003 issue;
+Copilot's implementation branch/PR;
+explicit instruction that Jules is reviewer, not primary implementer.
+
+The review should be based on the actual repository state.
+
+Use a prompt along these lines:
+
+Jules BZJ-PGB-003 Review Prompt
+Jules Review — BZJ-PGB-003
+
+Review the current GitHub implementation of:
+
+BZJ-PGB-003 — Payment Gateway Bridge Implementation
+
+You are an independent reviewer.
+
+Do not modify the primary implementation branch during this review.
+
+Review Sources
+
+Read:
+
+AGENTS.md
+BZJ-PGB architecture documentation
+BZJ-PGB-002 implementation specification
+GitHub Issue BZJ-PGB-003
+The current BZJ-PGB-003 implementation branch / Pull Request
+Existing payment gateway implementation and tests
+Review Objectives
+
+Independently verify:
+
+Architecture
+Does the implementation match BZJ-PGB-001?
+Does it remain within BZJ-PGB-003 scope?
+Has any BZJ-PGB-004 functionality been introduced prematurely?
+Database
+Are new payment-intent records stored in koware_iapd_db?
+Is get_iapd_db_conn() used correctly?
+Is the schema safe and migration-safe?
+Are indexes sufficient for idempotency and lookup?
+Are concurrent requests protected?
+Idempotency
+
+Test/inspect:
+
+duplicate intent creation;
+duplicate request IDs;
+repeated browser requests;
+retry after timeout;
+concurrent requests;
+duplicate fulfilment triggers.
+State Machine
+
+Verify that:
+
+illegal transitions are prevented;
+payment state and fulfilment state are independent;
+retry/recovery states are represented correctly;
+payment completion cannot be confused with fulfilment completion.
+Currency
+
+Verify:
+
+source currency is preserved;
+source amount is preserved;
+GHS remains WooCommerce base currency;
+WOOCS active checkout currency is respected;
+ZAR → GHS → EUR is not accidentally treated as GHS → EUR;
+browser-supplied amounts cannot override server calculations;
+conversion and rounding are deterministic.
+Security
+
+Check for:
+
+replay attacks;
+signature validation;
+timestamp validation;
+nonce reuse;
+identity mismatch;
+authorization failures;
+SQL injection;
+unsafe dynamic SQL;
+sensitive logging;
+secret leakage;
+TLS verification changes.
+Regression
+
+Confirm that BZJ-PGB-003 does not unintentionally change:
+
+existing payment processing;
+AffiliateWP;
+Jewel Affiliate;
+WooCommerce Subscriptions;
+existing redirects;
+existing webhooks;
+existing transaction records.
+Required Output
+
+Report:
+
+PASS / FAIL
+
+Then classify findings as:
+
+CRITICAL
+HIGH
+MEDIUM
+LOW
+INFORMATIONAL
+
+For each finding provide:
+
+file;
+relevant function/class;
+problem;
+why it matters;
+reproducible scenario;
+recommended correction.
+
+Also provide:
+
+test gaps;
+concurrency concerns;
+currency concerns;
+migration concerns;
+security concerns;
+regression concerns.
+
+Do not approve the implementation merely because tests pass.
+
+The objective is independent adversarial validation before BZJ-PGB-004.
+
+Step 8 — Give Claude the same implementation, but a different mission
+
+I would deliberately not give Claude exactly the same review prompt.
+
+Jules should be the independent engineering reviewer.
+
+Claude should be the adversarial reviewer.
+
+That gives you two different perspectives.
+
+Claude BZJ-PGB-003 Adversarial Review Prompt
+Claude Adversarial Review — BZJ-PGB-003
+
+Review the current GitHub implementation of:
+
+BZJ-PGB-003 — Payment Gateway Bridge Implementation
+
+Treat the implementation as potentially unsafe until proven otherwise.
+
+Do not modify the primary implementation branch.
+
+Read:
+
+AGENTS.md
+BZJ-PGB architecture decisions
+BZJ-PGB-002 implementation specification
+GitHub Issue BZJ-PGB-003
+Current BZJ-PGB-003 implementation
+Existing payment gateway implementation
+Tests and CI configuration
+Attack the Design
+
+Attempt to identify ways the implementation could fail under:
+
+Concurrency
+two identical requests arriving simultaneously;
+retry during database timeout;
+duplicate browser submission;
+duplicated callback;
+process termination between database writes;
+two workers processing the same intent.
+Currency Manipulation
+
+Attempt to cause:
+
+browser amount overriding server amount;
+browser currency overriding server currency;
+incorrect ZAR → GHS → EUR conversion;
+double conversion;
+incorrect rounding;
+stale exchange-rate usage;
+inconsistent stored and displayed values.
+Payment Lifecycle
+
+Look for situations where:
+
+payment is marked successful prematurely;
+fulfilment is assumed to be complete;
+a failed effect prevents unrelated effects;
+retry creates duplicate effects;
+a pending transaction becomes permanently stuck.
+Security
+
+Attempt to identify:
+
+replay;
+forged signatures;
+timestamp bypass;
+nonce reuse;
+identity substitution;
+privilege escalation;
+SQL injection;
+insecure database access;
+secret leakage;
+unsafe logging;
+TLS downgrade;
+unsafe redirects.
+Legacy Regression
+
+Determine whether the new code could unintentionally alter:
+
+current payment bridge behaviour;
+AffiliateWP commissions;
+Jewel Affiliate processing;
+subscription lifecycle;
+existing transaction records;
+existing redirect behaviour;
+existing webhooks.
+Required Output
+
+Produce:
+
+Executive assessment.
+CRITICAL findings.
+HIGH findings.
+MEDIUM findings.
+LOW findings.
+Race-condition analysis.
+Currency analysis.
+Security analysis.
+Migration analysis.
+Regression analysis.
+Missing tests.
+Required changes before BZJ-PGB-004.
+
+Do not provide a general opinion.
+
+Every finding should identify the affected code and explain a concrete failure scenario.
+
+Do not modify the primary branch.
+
+Step 9 — Keep the three agents separated
+
+This is one of the most important parts.
+
+Don't do this:
+
+Copilot ──────┐
+              ├── same branch
+Jules ────────┤
+              │
+Claude ───────┘
+
+Instead:
+
+                    main
+                     │
+                     │
+              pgb/bzj-pgb-003
+                     │
+                ┌────┴────┐
+                │ Copilot │
+                │         │
+                │ CODE    │
+                └────┬────┘
+                     │
+                     ▼
+                    PR
+                     │
+            ┌────────┴────────┐
+            │                 │
+          Jules             Claude
+        REVIEW              ATTACK
+            │                 │
+            └────────┬────────┘
+                     │
+                     ▼
+                 FINDINGS
+                     │
+                     ▼
+                  Copilot
+                 FIXES CODE
+                     │
+                     ▼
+                  TESTS
+                     │
+                     ▼
+              FINAL APPROVAL
+                     │
+                     ▼
+                    main
+
+That gives you independence without creating merge chaos.
+
+Step 10 — Have Copilot fix the findings
+
+Once Jules and Claude have completed their reviews, don't manually edit the code yourself unless necessary.
+
+Give the findings back to Copilot.
+
+Copilot remains the implementation owner.
+
+Its job becomes:
+
+Review findings
+      ↓
+Reproduce
+      ↓
+Fix
+      ↓
+Add regression test
+      ↓
+Run CI
+      ↓
+Update PR
+
+This is important because every bug found by a reviewer should ideally become a test.
+
+For example:
+
+Claude:
+"Two simultaneous requests can create two intents."
+
+        ↓
+
+Copilot:
+
+Add concurrency test
+        +
+Fix database constraint/locking
+        +
+Run test
+
+That's much stronger than simply changing the code.
+
+Step 11 — Use GitHub's review mechanism
+
+The PR should eventually show something like:
+
+BZJ-PGB-003
+
+Checks
+────────────────────────────
+✓ PHP syntax
+✓ Unit tests
+✓ Integration tests
+✓ Static analysis
+✓ Security checks
+
+Reviews
+────────────────────────────
+✓ Jules
+✓ Claude
+○ Human approval
+
+Status
+────────────────────────────
+Ready for final review
+
+Don't treat a green CI build as sufficient.
+
+CI proves:
+
+"The automated tests passed."
+
+It does not prove:
+
+"The architecture is correct."
+
+That's why Jules + Claude are valuable.
+
+Step 12 — Protect main
+
+This is something I strongly recommend doing before the payment work gets further along.
+
+In GitHub:
+
+Settings → Rules → Rulesets
+
+Create a ruleset for:
+
+main
+
+Require:
+
+pull request before merge;
+required status checks;
+at least one human approval;
+conversation resolution;
+no force pushes;
+no branch deletion if appropriate;
+required linear history if compatible with your workflow.
+
+For payment code, I would also prevent direct pushes to main.
+
+Your normal route becomes:
+
+Agent
+ ↓
+feature branch
+ ↓
+PR
+ ↓
+CI
+ ↓
+reviews
+ ↓
+human approval
+ ↓
+merge
+
+Never:
+
+Agent → main
+Step 13 — Use branch naming consistently
+
+I'd establish this convention now.
+
+Architecture/specification
+docs/bzj-pgb-001
+Implementation phases
+pgb/bzj-pgb-003
+pgb/bzj-pgb-004
+pgb/bzj-pgb-005
+Bug fixes
+fix/pgb-003-idempotency
+fix/pgb-003-currency-rounding
+fix/pgb-003-locking
+Emergency production fix
+hotfix/pgb-payment-...
+
+That makes Git history readable six months from now.
+
+Step 14 — Do not use long-lived development branches
+
+I would not create:
+
+development
+staging
+payment-gateway
+new-payment-system
+
+just for this project.
+
+For your current stage, keep it simple:
+
+main
+ │
+ ├── pgb/bzj-pgb-003
+ ├── pgb/bzj-pgb-004
+ ├── pgb/bzj-pgb-005
+ └── ...
+
+If you later introduce an actual staging deployment environment, that's different.
+
+But don't introduce branch complexity before you need it.
+
+Step 15 — One phase = one merge
+
+This is a very important rule for the payment bridge.
+
+For example:
+
+BZJ-PGB-003
+   ↓
+implementation
+   ↓
+review
+   ↓
+tests
+   ↓
+merge
+
+Then:
+
+BZJ-PGB-004
+   ↓
+implementation
+   ↓
+review
+   ↓
+tests
+   ↓
+merge
+
+Then:
+
+BZJ-PGB-005
+
+etc.
+
+Don't allow one giant PR containing:
+
+PGB-003
++
+PGB-004
++
+PGB-005
++
+subscription changes
++
+AffiliateWP changes
++
+redirect changes
+
+That makes payment failures extremely difficult to isolate.
+
+Step 16 — Use tags/releases at important milestones
+
+After BZJ-PGB-003 is safely merged and validated, tag it.
+
+For example:
+
+bzj-pgb-003-complete
+
+or, if you want proper semantic releases later:
+
+v0.3.0-pgb
+
+I'd initially favour the explicit project milestone:
+
+bzj-pgb-003-complete
+
+because it maps directly to the architecture plan.
+
+Then:
+
+main
+  │
+  ├── bzj-pgb-003-complete
+  │
+  └── pgb/bzj-pgb-004
+
+If BZJ-PGB-004 causes trouble, you have a known-good architectural checkpoint.
+
+Step 17 — The actual BZJ-PGB-003 lifecycle
+
+So your immediate process should be:
+
+NOW
+BZJ-PGB-003 Issue
+        │
+        ▼
+pgb/bzj-pgb-003
+        │
+        ▼
+GitHub Copilot
+After Copilot finishes
+Copilot PR
+   │
+   ├── Jules review
+   │
+   └── Claude review
+If findings exist
+Jules/Claude findings
+        │
+        ▼
+Copilot
+        │
+        ▼
+Fixes + regression tests
+        │
+        ▼
+CI
+Then
+Jules final review
+        +
+Claude final review
+        +
+Your human review
+        ↓
+      MERGE
+Then
+tag: bzj-pgb-003-complete
+Only then
+BZJ-PGB-004
+The most important rule for this project
+
+Because this is the payment gateway, I'd establish this as the permanent operating model:
+
+Copilot writes. Jules verifies. Claude attacks. GitHub records. You approve.
+
+And for particularly sensitive phases:
+
+No implementation agent gets to be the sole authority on its own payment code.
+
+That gives you a very strong division of responsibility:
+
+Role	Responsibility
+You	Product/architecture authority + final approval
+ChatGPT/Cove	Architecture, specifications, orchestration
+GitHub Copilot	Primary implementation
+Jules	Independent engineering validation
+Claude	Adversarial/security review
+GitHub Actions	Deterministic automated validation
+GitHub	Source of truth
+
+The important thing is that Jules and Claude should review the actual Copilot PR, not merely the original issue. That way they're reviewing what was actually implemented, including anything Copilot misunderstood or introduced unintentionally.
+
+If you'd like, the next practical step is to set up the exact GitHub branch protection/ruleset configuration and the BZJ-PGB-003 PR checklist, click-by-click, before Copilot gets too far into the implementation.
+
+Today 1:38 PM
+what should be put in the AGENTS.md file?
+
+For the Buzzjuice repository, AGENTS.md should be the short, authoritative operating manual for coding agents—not a giant copy of the entire payment architecture.
+
+Because Copilot and Jules may read it automatically, I would make it enforce the project's architecture, security boundaries, testing expectations, and workflow, while pointing agents to the detailed BZJ-PGB documents.
+
+I recommend putting the following at the repository root:
+
+AGENTS.md — Buzzjuice Network
+AGENTS.md — Buzzjuice Network
+1. Purpose
+
+This repository contains the Buzzjuice Network production codebase, including:
+
+WordPress/BuddyBoss
+Buzzjuice Streams (WoWonder)
+Buzzjuice Socials (QuickDate)
+WooCommerce integrations
+WooCommerce Subscriptions
+AffiliateWP integrations
+Buzzjuice custom bridges and MU plugins
+Shared integration utilities
+
+This file defines the mandatory rules for AI coding agents and automated development agents working in this repository.
+
+Detailed architecture and feature specifications live in the docs/ directory and take precedence for feature-specific implementation details.
+
+2. Agent Operating Principles
+
+Agents MUST:
+
+Inspect the existing implementation before changing it.
+Understand the surrounding architecture before introducing new code.
+Prefer minimal, targeted changes over broad rewrites.
+Preserve existing working behaviour unless the task explicitly requires a change.
+Follow the architecture and implementation documents associated with the task.
+Add or update tests for behaviour being changed.
+Never silently change unrelated functionality.
+Never assume that an existing implementation is wrong merely because it differs from a preferred design.
+Document important architectural decisions.
+Stop and report when a required architectural decision is ambiguous or conflicts with existing project rules.
+
+The repository is the source of truth for implementation state.
+
+Conversation is for reasoning and planning.
+
+GitHub Issues, Pull Requests, commits, tests, documentation, and code are the persistent engineering record.
+
+3. Repository Architecture
+
+The Buzzjuice Network consists of multiple application layers.
+
+WordPress / BuddyBoss
+
+WordPress is the authoritative platform for:
+
+WordPress users
+BuddyBoss relationships
+WordPress memberships/subscriptions where applicable
+central account/session authority
+WordPress-side integrations
+Buzzjuice Streams
+
+Streams is a WoWonder application.
+
+Important:
+
+Do NOT assume WordPress functions are available.
+Do NOT use wp-load.php from Streams unless an explicit architecture decision authorizes it.
+Prefer existing Streams integration mechanisms and shared bridge utilities.
+Preserve existing WoWonder behaviour unless the task explicitly changes it.
+Buzzjuice Socials
+
+Socials is a QuickDate application.
+
+Important:
+
+Do NOT assume WordPress functions are available.
+Do NOT use wp-load.php from Socials unless explicitly authorized.
+Preserve existing QuickDate behaviour unless the task explicitly changes it.
+Shared Integration Layer
+
+Shared integration code is located under:
+
+shared/
+
+Important shared utilities include:
+
+shared/db_helpers.php
+shared/wwqd_bridge.php
+
+Use existing shared helpers where appropriate instead of duplicating database, authentication, logging, or bridge functionality.
+
+4. Database Rules
+WordPress
+
+Use the existing WordPress database mechanisms and APIs where appropriate.
+
+IAPD Database
+
+New payment-gateway transaction/intention tables MUST be created in:
+
+koware_iapd_db
+
+Use:
+
+get_iapd_db_conn()
+
+from:
+
+shared/db_helpers.php
+
+Do not create new database credentials when an existing approved connection helper exists.
+
+Do not move IAPD payment data into another database without an explicit architecture decision.
+
+Database Safety
+
+Agents MUST NOT:
+
+silently change production schemas;
+delete existing transaction data;
+introduce destructive migrations without explicit approval;
+create filesystem-driven automatic schema rebuilds;
+drop tables as part of normal plugin initialization;
+assume a missing table should automatically be recreated in production.
+
+Schema migrations must be explicit, reviewable, and reversible where practical.
+
+5. Security Rules
+
+Security-sensitive code must be treated as production code.
+
+Agents MUST NOT:
+
+disable TLS certificate verification;
+hard-code credentials, API keys, tokens, or secrets;
+log passwords;
+log access tokens;
+log refresh tokens;
+log API credentials;
+log payment credentials;
+log complete signatures;
+trust browser-supplied financial values;
+trust browser-supplied user identity;
+bypass authorization;
+weaken authentication to make an integration work;
+introduce SQL injection vulnerabilities;
+construct SQL from untrusted input without appropriate parameterization;
+introduce open redirects;
+expose internal database credentials.
+
+Sensitive values must be redacted in logs.
+
+Security failures must fail closed where appropriate.
+
+6. Payment Gateway Rules
+
+Payment processing is safety-critical.
+
+The payment architecture separates:
+
+Business intent
+WooCommerce order
+Payment
+Subscription lifecycle
+Fulfilment
+Affiliate processing
+Redirect/status presentation
+
+Do not collapse these into one operation.
+
+Authority
+
+Buzzjuice Streams originates the purchase intent.
+
+WooCommerce is the authority for WooCommerce orders and payment.
+
+WooCommerce Subscriptions controls subscription lifecycle.
+
+AffiliateWP remains the authority for AffiliateWP referral/commission processing.
+
+The appropriate existing Jewel Affiliate integration remains the authority for Jewel Affiliate processing.
+
+Browser
+
+The browser is a transport/UI mechanism.
+
+The browser MUST NOT be treated as the financial authority.
+
+Never trust browser-supplied:
+
+price;
+amount;
+currency;
+product price;
+subscription price;
+user identity;
+affiliate commission;
+transaction state.
+
+Commercial values must be validated or calculated server-side.
+
+Payment Success
+
+Payment completion MUST NOT automatically mean that all downstream fulfilment has completed.
+
+Payment, fulfilment, affiliate effects, Jewel effects, and redirects may have independent states.
+
+WooCommerce Subscriptions
+
+Do not manually activate a subscription before the corresponding payment lifecycle permits activation.
+
+Use the deployed WooCommerce Subscriptions lifecycle and APIs.
+
+Do not replace WooCommerce's subscription lifecycle with custom activation logic unless explicitly authorized.
+
+AffiliateWP
+
+Existing working AffiliateWP logic is protected functionality.
+
+Do not rewrite or replace AffiliateWP business logic as part of unrelated payment-gateway work.
+
+Extract/refactor only when explicitly required and after preserving equivalent behaviour.
+
+Redirects
+
+Existing payment redirects are part of the compatibility contract.
+
+Do not remove or change an existing redirect without identifying:
+
+its current trigger;
+its current destination;
+its current conditions;
+its relationship to payment completion;
+its relationship to fulfilment.
+7. Currency Rules
+
+WooCommerce uses GHS/GHC as the configured base/shop currency unless an explicit architecture decision changes this.
+
+Buzzjuice Streams may originate a transaction in another currency.
+
+For example:
+
+ZAR → GHS → EUR
+
+may be required when:
+
+Streams source currency = ZAR;
+WooCommerce base currency = GHS;
+customer's active WooCommerce/WOOCS currency = EUR.
+
+Do not incorrectly treat the ZAR amount as though it were already a GHS amount.
+
+Payment systems must preserve, where applicable:
+
+source currency;
+source amount;
+base currency;
+base amount;
+checkout currency;
+checkout amount;
+exchange-rate information;
+conversion timestamp.
+
+Do not trust a browser-supplied converted amount.
+
+Rounding must be deterministic and performed according to the approved currency implementation.
+
+8. Idempotency and Concurrency
+
+Payment-related operations MUST be designed for retries and duplicate requests.
+
+Assume that:
+
+the browser can retry;
+callbacks can be duplicated;
+requests can time out;
+workers can terminate;
+users can double-click;
+two requests can arrive simultaneously;
+a downstream service can respond successfully while the caller times out.
+
+Use appropriate:
+
+unique constraints;
+idempotency keys;
+transaction identifiers;
+locking;
+state checks;
+retry controls.
+
+Do not rely solely on JavaScript or browser state to prevent duplicates.
+
+9. State Machines
+
+Where a feature defines explicit states, implement valid state transitions rather than allowing arbitrary status mutation.
+
+Payment state and fulfilment state must remain conceptually independent where the architecture requires it.
+
+Illegal transitions should be rejected or safely ignored according to the feature specification.
+
+10. Logging
+
+Logging is encouraged for difficult integration code, but logs must be safe.
+
+Logs should help answer:
+
+what operation occurred;
+when it occurred;
+which subsystem initiated it;
+what state transition occurred;
+whether the operation succeeded;
+what error category occurred;
+what correlation/transaction identifier was involved.
+
+Do NOT log:
+
+passwords;
+API keys;
+access tokens;
+refresh tokens;
+complete payment credentials;
+secrets;
+raw authentication headers;
+complete signed payloads.
+
+Use existing logging conventions where available.
+
+Debug logging must be toggleable where the relevant feature requires it.
+
+11. MU Plugin Rules
+
+Buzzjuice MU plugins should use the approved naming convention.
+
+New Buzzjuice MU plugins should normally use:
+
+bzj-*.php
+
+For the Payment Gateway Bridge, the approved primary MU entry point is:
+
+wp-content/mu-plugins/bzj-payment-gateway.php
+
+Supporting payment-gateway code belongs under the approved shared payment-gateway directory rather than creating unnecessary additional MU plugin entry points.
+
+Do not create multiple competing MU bootstrap files for the same subsystem without an explicit architecture decision.
+
+12. Payment Gateway Bridge Architecture
+
+For BZJ-PGB work, read the relevant documents before modifying code.
+
+Expected documentation includes:
+
+docs/payment-gateway/BZJ-PGB-001-architecture.md
+docs/payment-gateway/BZJ-PGB-002-implementation-spec.md
+the current BZJ-PGB task document
+
+The approved high-level architecture is:
+
+Streams
+→ durable payment intent
+→ signed browser handoff
+→ WordPress/MU
+→ native WooCommerce APIs
+→ WooCommerce order
+→ WooCommerce checkout/payment
+→ WooCommerce lifecycle
+→ downstream fulfilment
+→ reconciliation
+
+Prefer native WooCommerce PHP APIs when execution is already inside WordPress.
+
+Do not introduce server-to-self WooCommerce REST/cURL as the primary architecture merely because an API endpoint exists.
+
+13. BZJ-PGB-003 Scope Control
+
+When implementing BZJ-PGB-003, limit changes to the approved scope.
+
+BZJ-PGB-003 establishes the payment-intent foundation.
+
+It includes, where specified:
+
+evidence inventory;
+IAPD database abstraction;
+payment-intent schema;
+payment-intent creation/retrieval;
+idempotency;
+state management;
+locking/concurrency protection;
+expiry/retry foundation;
+currency abstraction;
+automated tests.
+
+BZJ-PGB-003 does NOT authorize:
+
+production replacement of the existing payment bridge;
+deletion of legacy payment code;
+WooCommerce order creation;
+checkout replacement;
+manual subscription activation;
+AffiliateWP rewrite;
+Jewel Affiliate rewrite;
+webhook replacement;
+unreviewed redirect changes.
+
+Do not implement later phases merely because they appear logically convenient.
+
+14. Legacy Systems
+
+Existing payment functionality may contain production behaviour that is not obvious from the architecture documentation.
+
+Before replacing or removing legacy functionality:
+
+identify current callers;
+identify hooks;
+identify redirects;
+identify database records;
+identify webhook dependencies;
+identify AffiliateWP dependencies;
+identify subscription dependencies;
+identify rollback implications.
+
+Legacy code should be removed only after the replacement is proven and the migration plan explicitly permits removal.
+
+15. Testing Requirements
+
+Changes should include appropriate automated tests.
+
+Depending on the feature, test:
+
+normal operation;
+invalid input;
+duplicate requests;
+concurrent requests;
+retries;
+failure recovery;
+state transitions;
+authorization;
+currency conversion;
+rounding;
+database failures;
+downstream failures;
+backwards compatibility.
+
+For payment work, tests should specifically consider:
+
+duplicate payment intents;
+duplicate order creation;
+payment completion followed by retry;
+fulfilment retry;
+browser closed before fulfilment completes;
+browser reopened after payment;
+source currency different from WooCommerce base currency;
+active checkout currency different from both.
+
+Never remove a regression test merely to make CI pass.
+
+16. Git and Branch Rules
+
+Do not commit directly to main.
+
+Use task-specific branches.
+
+Recommended naming:
+
+pgb/bzj-pgb-003
+
+pgb/bzj-pgb-004
+
+For focused fixes:
+
+fix/pgb-003-idempotency
+
+fix/pgb-003-currency
+
+fix/pgb-003-concurrency
+
+One major architecture phase should normally correspond to one reviewable Pull Request.
+
+Do not combine unrelated features into the payment-gateway PR.
+
+Keep commits logically grouped and descriptive.
+
+Do not rewrite shared branch history unless explicitly authorized.
+
+17. Agent Roles
+
+The project may use multiple AI development agents.
+
+The preferred responsibility model is:
+
+ChatGPT/Cove
+
+Architecture, requirements analysis, specifications, implementation planning, integration reasoning, and review orchestration.
+
+GitHub Copilot
+
+Primary implementation agent.
+
+Jules
+
+Independent implementation/engineering validation and review.
+
+Claude
+
+Adversarial architecture and security review.
+
+GitHub Actions
+
+Deterministic automated validation.
+
+No AI agent is the final authority for production payment changes.
+
+Human approval is required before merging critical payment changes.
+
+18. Multi-Agent Review
+
+For significant payment changes:
+
+Primary implementation is performed on the task branch.
+A Pull Request is opened.
+Automated tests run.
+Jules independently reviews the implementation.
+Claude performs adversarial/security review.
+Findings are returned to the implementation agent.
+Fixes include regression tests where appropriate.
+Automated tests run again.
+Critical and High findings must be resolved.
+Human review occurs.
+Only then is the PR merged.
+
+Review agents should not silently modify the primary implementation branch unless explicitly instructed.
+
+19. Pull Request Requirements
+
+Every significant PR should explain:
+
+what changed;
+why it changed;
+which architecture decision authorizes it;
+files changed;
+database changes;
+security implications;
+compatibility implications;
+tests performed;
+rollback considerations.
+
+For payment changes, also document:
+
+transaction states affected;
+idempotency behaviour;
+currency behaviour;
+fulfilment behaviour;
+redirect behaviour.
+20. Stop Conditions
+
+An agent MUST stop and report rather than guessing when:
+
+an architecture decision is contradictory;
+required credentials are unavailable;
+a database schema is unclear;
+a payment lifecycle assumption cannot be verified;
+an existing production behaviour would need to be changed unexpectedly;
+a security control would need to be weakened;
+a destructive migration appears necessary;
+a requested change exceeds the current issue scope.
+
+Do not invent missing infrastructure.
+
+Do not silently broaden the task.
+
+21. Documentation
+
+When a change introduces an important architectural decision, update the relevant documentation.
+
+Prefer:
+
+docs/
+
+for detailed architecture and implementation specifications.
+
+Keep this AGENTS.md focused on durable repository-wide rules.
+
+Do not turn this file into a complete technical manual.
+
+22. Final Principle
+
+For Buzzjuice payment and integration work:
+
+Understand before modifying.
+
+Preserve working behaviour.
+
+Keep financial authority server-side.
+
+Make operations idempotent.
+
+Separate payment from fulfilment.
+
+Test failure paths, not only success paths.
+
+Use GitHub as the engineering source of truth.
+
+One phase at a time.
+
+No production payment change without independent review and human approval.
+
+One important refinement
+
+I would not put every detail we've discussed into this file.
+
+For example, don't put the entire BZJ-PGB-002 database schema, every WooCommerce hook, or every current Buzzjuice filename into AGENTS.md. Those belong in:
+
+docs/
+├── architecture/
+│   └── ...
+└── payment-gateway/
+    ├── BZJ-PGB-001-architecture.md
+    ├── BZJ-PGB-002-implementation-spec.md
+    └── BZJ-PGB-003.md
+
+The hierarchy should be:
+
+                    AGENTS.md
+                        │
+              "How agents must work"
+                        │
+          ┌─────────────┴─────────────┐
+          │                           │
+   Architecture docs            Feature specs
+          │                           │
+   "How Buzzjuice works"       "What this task does"
+          │                           │
+          └─────────────┬─────────────┘
+                        │
+                    GitHub Issue
+                        │
+                    Implementation
+
+That distinction will become very valuable as the repository grows.
+
+One thing I would do before Copilot gets much further
+
+Put AGENTS.md in the repository now, commit it to main, and then have the BZJ-PGB-003 branch start from that commit.
+
+That way Copilot, Jules, and Claude are all operating against the same permanent repository rules rather than relying on instructions being manually pasted into every task.
