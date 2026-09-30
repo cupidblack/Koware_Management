@@ -1,0 +1,114 @@
+# Claude — Adversarial Security & Architecture Review
+
+Perform an adversarial review of the BZJ-PGB-003 implementation.
+
+The objective is to find ways the implementation could:
+
+* lose a transaction;
+* create a duplicate order;
+* duplicate a financial effect;
+* miscalculate currency;
+* bypass authorization;
+* replay a payment intent;
+* corrupt fulfilment state;
+* break an existing redirect;
+* break AffiliateWP;
+* break Jewel Affiliate;
+* incorrectly activate a subscription;
+* expose sensitive information.
+
+Treat the following as invariants:
+
+```text
+A payment must never become untraceable.
+
+A successful financial effect must never be applied twice.
+
+A browser disappearing must not stop the transaction.
+
+A downstream failure must not make a successful payment appear unpaid.
+
+A client must never control the final financial amount.
+
+A ZAR amount must never silently be interpreted as GHS.
+
+New payment-intent data belongs in koware_iapd_db.
+
+get_iapd_db_conn() is the approved database connection.
+```
+
+## Specifically attack
+
+### Concurrency
+
+Attempt:
+
+```text
+request A + request B
+```
+
+at exactly the same time.
+
+Determine whether two WooCommerce orders or two financial effects can be created.
+
+### Replay
+
+Replay an old signed payment-intent handoff.
+
+Determine whether it can:
+
+* create another order;
+* access another user's status;
+* alter transaction state.
+
+### Currency manipulation
+
+Attempt to modify:
+
+* source amount;
+* source currency;
+* checkout currency;
+* exchange rate;
+* product price.
+
+Determine which values are server authoritative.
+
+### Fulfilment
+
+Force:
+
+```text
+AffiliateWP failure
+Jewel failure
+Streams failure
+Subscription failure
+```
+
+after payment succeeds.
+
+Determine whether recovery is possible without charging the customer again.
+
+### Existing bridge
+
+Check whether the new foundation accidentally changes the old bridge before migration.
+
+## Output
+
+Produce:
+
+1. Executive assessment;
+2. Critical findings;
+3. High findings;
+4. Medium findings;
+5. Low findings;
+6. Race-condition analysis;
+7. Currency analysis;
+8. Security analysis;
+9. Migration risks;
+10. Required changes before BZJ-PGB-004.
+
+Do not redesign unrelated parts of Buzzjuice.
+
+Do not make political, business, or product decisions.
+
+Focus strictly on engineering correctness and security.
