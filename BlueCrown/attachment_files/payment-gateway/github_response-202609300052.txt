@@ -1,0 +1,901 @@
+<<START GITHUB>>
+
+1. Executive Summary
+
+This repository evidence supports a hybrid payment bridge in which the Streams application initiates a custom WooCommerce handoff, then WordPress/WooCommerce completes the transaction and a WordPress MU plugin triggers the post-payment AffiliateWP bridge. The clearest verified path is:
+
+- Streams request routing accepts a custom payment request in streams/requests.php.
+- The branch for f=payment with payment_type=wow_payment includes assets/wow-pgb/wow-pgb_init.php.
+- A second verification in streams/sources/checkout.php shows that a wow_payment request validates required fields, writes a pending record to a local table named wo_payment_transactions, and redirects to a WooCommerce checkout URL using add-to-cart and query-string metadata.
+- A WordPress MU plugin, wp-content/mu-plugins/buzzjuice-affwp-order-complete.php, loads the bridge and registers a handler on woocommerce_order_status_completed that calls bluecrown_affiliatewp_post_checkout_verification.
+
+This is enough to say the current architecture is not a pure single-app integration. It is a cross-system handoff pattern: Streams creates a pending transaction and redirects the browser to WordPress/WooCommerce, while WordPress performs order completion and the post-payment bridge then handles AffiliateWP work.
+
+The biggest gap is that the actual logic of wow-pgb_init.php and wow-pgb_sync.php is not directly evidenced in the repository snapshot inspected here. That prevents a reliable statement about API calls, cURL details, WooCommerce order creation APIs, subscriptions hooks, or the precise Streams-to-WooCommerce data contract beyond what is visible in the request/checkout flow.
+
+Classification:
+- VERIFIED: custom Streams payment branch exists and redirects to WooCommerce checkout.
+- VERIFIED: MU plugin calls the completion bridge on WooCommerce order completion.
+- INFERRED: the design is a brokered handoff across Streams and WordPress rather than a single database-driven system.
+- UNKNOWN / REQUIRES VERIFICATION: exact inner logic of wow-pgb_init.php, wow-pgb_sync.php, and any WooCommerce Subscriptions/WOOCS plugin integration code.
+
+2. Verified Existing Architecture
+
+Verified repository facts:
+
+- streams/requests.php explicitly allows the payment request path and includes the branch:
+  - if ($f == 'payment' && isset($_POST['payment_type']) && $_POST['payment_type'] === 'wow_payment') {
+  - require 'assets/wow-pgb/wow-pgb_init.php';
+- streams/sources/checkout.php contains a second branch:
+  - if ($payment_type === 'wow_payment') { ... validate required params ... insert into wo_payment_transactions ... redirect to "site_url/checkout/?add-to-cart=..." }
+- wp-content/mu-plugins/buzzjuice-affwp-order-complete.php:
+  - requires wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php
+  - adds_action('woocommerce_order_status_completed', ..., 999, 1)
+  - calls bluecrown_affiliatewp_post_checkout_verification($order_id)
+
+This means the architecture currently includes:
+- Streams-side initiation
+- WordPress/WooCommerce checkout
+- WordPress completion hook
+- AffiliateWP post-checkout verification bridge
+
+The repository does not show a direct Streams-to-WooCommerce REST API call in the inspected files. The strongest visible evidence is a browser redirect to WooCommerce with add-to-cart parameters, not a server-to-server API payload.
+
+3. Repository Evidence
+
+The relevant evidence reviewed from the repository snapshot:
+
+- streams/requests.php
+  - payment request router
+  - inclusion of wow-pgb_init.php
+  - custom config handling for wow_store_url, wow_market_id, wow_pro_package_id, wow_api_url, wow_api_key, wow_api_secret, wow_webhook_secret
+
+- streams/sources/checkout.php
+  - validation of required payment parameters
+  - database insert into wo_payment_transactions
+  - redirect to WooCommerce checkout with query-string fields:
+    - add-to-cart
+    - quantity
+    - wow_order_id
+    - amount
+    - user_id
+    - product_name
+    - product_price
+    - product_units
+    - product_owner_id
+
+- shared/db_helpers.php
+  - multiple database connection helpers
+  - environment-driven cross-database access for WordPress, QuickDate, WoWonder, Palmier
+  - indicates this project is a multi-system integration environment
+
+- wp-content/mu-plugins/buzzjuice-affwp-order-complete.php
+  - loads the bridge file
+  - registers a single completion hook
+  - calls the order-completion AffiliateWP bridge
+
+- streams/wow-pgb_webhook.php
+  - present in repository, likely part of payment callback/webhook logic, but not inspected in detail here
+  - status: requires verification
+
+- streams/jewel-affiliate-webhook.php
+  - present in repository, likely part of Jewel Affiliate processing, but not inspected in detail here
+  - status: requires verification
+
+- shared/wwqd_bridge.php
+  - present in repository, likely cross-system bridge logic, but not inspected here
+  - status: requires verification
+
+Important limitation:
+- The repository snapshot reviewed here does not include the specific contents of assets/wow-pgb/wow-pgb_init.php or wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php. As a result, exact API contracts and post-payment sync logic remain partially unverified.
+
+4. Current Transaction Lifecycle
+
+The repository supports the following lifecycle with the evidence currently available:
+
+User
+↓
+Streams UI
+↓
+Streams request
+↓
+requests.php payment branch
+↓
+wow_payment branch triggers wow-pgb_init.php
+↓
+streams/sources/checkout.php validates request and writes pending record to wo_payment_transactions
+↓
+browser redirect to WooCommerce checkout URL
+↓
+WooCommerce product add-to-cart flow using bridge product ID and metadata
+↓
+WordPress/WooCommerce order creation
+↓
+WooCommerce order reaches completed status
+↓
+MU plugin handles woocommerce_order_status_completed
+↓
+bluecrown_affiliatewp_post_checkout_verification is invoked
+↓
+AffiliateWP processing boundary
+↓
+remaining Streams/Jewel synchronization is likely downstream or via separate webhooks
+
+Observed data passed in the verified request flow:
+- user_id
+- amount
+- product_name
+- product_price
+- product_units
+- product_owner_id
+- wow_order_id
+- add-to-cart product id
+- quantity
+
+Persistence:
+- Verified: Streams inserts a row into wo_payment_transactions before redirect.
+- Unverified: no exact durable cross-system table linking Streams reference to WooCommerce order ID was shown in the reviewed files.
+
+Failure mode:
+- The current evidence supports a redirect-based bridge that depends on browser continuity and a real WooCommerce checkout flow after the initial insertion.
+- That makes the system vulnerable to interrupted browser sessions or lost redirect follow-through unless there is additional durable state not visible here.
+
+5. Dropped-Order Failure Analysis
+
+This section focuses on realistic loss points visible in the current architecture.
+
+1) Streams request fails before redirect
+- Failure location: Streams router or earlier processing before the checkout redirect.
+- Evidence: custom payment request is handled in requests.php and checkout.php, but exact validation logic beyond the visible branch is not reviewed.
+- Protection: basic required-field validation is present in checkout.php.
+- Impact: no order is handed to WooCommerce.
+- Recoverability: limited unless a durable transaction table or retry queue exists.
+- Recommended mitigation: record a payment intent at creation time with status pending and retryable.
+
+2) Streams validation fails
+- Failure location: checkout.php validation loop.
+- Evidence: required params are checked before insertion.
+- Protection: explicit required-parameter validation exists.
+- Impact: request rejected before creating pending record.
+- Recoverability: user can retry with valid data.
+- Recommended mitigation: consistent user-facing error codes and transaction log correlation.
+
+3) Database insert fails
+- Failure location: wo_payment_transactions insert.
+- Evidence: insert is executed in checkout.php and returns error if execution fails.
+- Protection: mysql execute call with error logging.
+- Impact: no redirect occurs after failed insert.
+- Recoverability: manual retry possible; no durable compensation shown.
+- Recommended mitigation: transactional insert + idempotency key.
+
+4) Redirect lost or browser closes after order creation
+- Failure location: redirect to WooCommerce checkout and browser continuity.
+- Evidence: redirect is issued with a URL that includes add-to-cart and metadata.
+- Protection: none visible beyond redirect generation.
+- Impact: customer does not reach checkout and the pending Streams record may remain without a corresponding WooCommerce order.
+- Recoverability: weak without recovery queue or reconciliation logic.
+- Recommended mitigation: store a durable handoff record and reconcile on return.
+
+5) WooCommerce order created but response lost
+- Failure location: the WooCommerce checkout path after add-to-cart.
+- Evidence: the only visible handoff is the add-to-cart payload, not a direct server-side order create call.
+- Protection: none visible in reviewed files.
+- Impact: order may be created in WooCommerce without clean downstream completion.
+- Recoverability: requires reconciliation by order metadata or unique payment intent key.
+- Recommended mitigation: unique correlation ID in both Streams and WooCommerce metadata.
+
+6) Payment gateway callback or order completion hook fires more than once
+- Failure location: WooCommerce completion path and affiliate processing.
+- Evidence: MU plugin registers a single completed hook, which is a good protective pattern, but no deduplication logic was reviewed in the bridge function itself.
+- Protection: single-hook registration reduces duplicate processing risk.
+- Impact: duplicate AffiliateWP or sync processing.
+- Recoverability: depends on dedupe guards inside bridge functions.
+- Recommended mitigation: idempotency key and processed marker at every downstream system boundary.
+
+7) Payment succeeds but synchronization fails
+- Failure location: downstream post-payment processing after order completion.
+- Evidence: order completion triggers the bridge, but exact downstream logic is not reviewed.
+- Protection: minimal evidence of a state machine or durable retry queue.
+- Impact: customer sees payment success while Streams, subscriptions, or affiliate state remains incomplete.
+- Recoverability: low without a reconciliation or scheduled repair process.
+- Recommended mitigation: durable state tracking at every stage.
+
+8) AffiliateWP or Jewel Affiliate processing fails
+- Failure location: post-completion bridge and webhook flows.
+- Evidence: AffiliateWP bridge is hooked to order completion; Jewel Affiliate appears to use a separate webhook file.
+- Protection: no direct evidence of a retry or compensation layer in inspected files.
+- Impact: referral credit or downstream account sync can be missed.
+- Recoverability: weak unless webhook replay or scheduled reconciliation exists.
+- Recommended mitigation: durable event log with replay ability.
+
+6. Root-Cause Hypotheses
+
+The most credible root-cause hypotheses, based on the reviewed code, are:
+
+1) Cross-system state loss between Streams and WooCommerce
+- Evidence: the visible handoff is a redirect with query parameters and a pending insert to wo_payment_transactions; there is no clearly shown durable transaction key linking Streams to WooCommerce order IDs.
+- Classification: INFERRED / HYPOTHESIS
+- Why plausible: browser redirect plus order creation URL is fragile if any step is interrupted.
+
+2) Missing idempotency and correlation in the handoff
+- Evidence: redirect includes query parameters but no explicit durable idempotency token or payment-intent registry is visible in the inspected files.
+- Classification: HYPOTHESIS
+- Why plausible: the visible flow can easily create duplicate or orphaned orders under refresh, double submit, or callback replay.
+
+3) Payment completion may be the only reliable boundary currently guarded
+- Evidence: MU plugin hooks on woocommerce_order_status_completed.
+- Classification: VERIFIED for the hook
+- Why plausible: this is a strong signal that the system relies on the order completion event as the authoritative post-payment trigger.
+
+4) Streams-side custom payment flow is likely a compatibility bridge rather than a native WooCommerce payment implementation
+- Evidence: add-to-cart checkout flow with a custom product ID and query parameters.
+- Classification: INFERRED
+- Why plausible: this is consistent with a cart-driven WooCommerce checkout path, not a direct API order create.
+
+5) The exact failure profile around wow-pgb_init.php and wow-pgb_sync.php is unverified and could be the critical source of dropped orders
+- Evidence: those files are named in the requested scope but not inspected in this repository snapshot.
+- Classification: UNKNOWN / REQUIRES VERIFICATION
+
+7. Architectural Options
+
+Option A: Streams → WooCommerce REST/API → browser checkout
+- Evidence: not directly confirmed in repository; no REST client code was inspected in the reviewed files.
+- Assessment: possible but not evidenced in the available repo snapshot.
+- Transaction durability: medium if handled with durable payment intent.
+- Security: depends on signed requests and server-side validation.
+- Compatibility: good with WooCommerce if native API is used.
+- Conclusion: not proven by repo evidence.
+
+Option B: Streams → durable payment intent → browser → WordPress → native WooCommerce PHP APIs → checkout
+- Evidence: the repository shows a pending transaction insert plus redirect-based handoff, which aligns with a payment-intent pattern.
+- Assessment: strongest architectural fit with existing evidence.
+- Transaction durability: stronger than pure redirect-only flows.
+- Network dependency: lower for server-side WordPress processing than external API calls.
+- Security: good if server-side validation is enforced and browser data is not trusted.
+- Compatibility: good for WordPress/WooCommerce native APIs.
+- Conclusion: most aligned with current evidence, though not yet verified.
+
+Option C: Streams → browser → WordPress endpoint → native WooCommerce processing
+- Evidence: no direct WordPress endpoint implementation was inspected.
+- Assessment: plausible but not evidenced.
+- Transaction durability: good if the endpoint records intent and order state.
+- Security: strong if endpoint is authenticated and signed.
+- Conclusion: possible redesign path, but not the current repository pattern.
+
+Option D: Current architecture with targeted reliability improvements
+- Evidence: this is the repository’s actual displayed architecture.
+- Assessment: the current pattern is observable and consistent with a hybrid redirect flow.
+- Transaction durability: currently weak to moderate.
+- Recovery: improved by adding state tracking and idempotency.
+- Conclusion: best fit for the current evidence, but it needs reliability hardening before it can be considered robust.
+
+8. Transaction State Model
+
+The minimum durable state model should be designed around the actual handoff reality, not just order completion. A minimal model could include:
+
+- created
+  - Purpose: payment request accepted in Streams
+  - Entry condition: user selects payment and request is received
+  - Responsible: Streams
+  - Valid transitions: validated, failed, recovery_required
+  - Retry behavior: yes
+  - Terminal: no
+
+- validated
+  - Purpose: required fields and business rules are accepted
+  - Entry condition: request passes validation
+  - Responsible: Streams
+  - Valid transitions: handoff_pending, failed
+  - Retry behavior: yes
+  - Terminal: no
+
+- handoff_pending
+  - Purpose: transaction is ready to be sent to WooCommerce
+  - Entry condition: Streams inserts pending record and creates redirect
+  - Responsible: Streams
+  - Valid transitions: woocommerce_order_pending, failed, recovery_required
+  - Retry behavior: yes
+  - Terminal: no
+
+- woocommerce_order_pending
+  - Purpose: order creation is expected but not yet confirmed
+  - Entry condition: browser reaches WooCommerce checkout
+  - Responsible: WordPress/WooCommerce
+  - Valid transitions: woocommerce_order_created, failed, recovery_required
+  - Retry behavior: yes
+  - Terminal: no
+
+- woocommerce_order_created
+  - Purpose: order exists and is linked to the original transaction
+  - Entry condition: WooCommerce order is created with metadata
+  - Responsible: WordPress/WooCommerce
+  - Valid transitions: checkout_ready, failed, recovery_required
+  - Retry behavior: yes
+  - Terminal: no
+
+- checkout_ready
+  - Purpose: customer is ready to pay
+  - Entry condition: payment URL is valid and order is associated
+  - Responsible: WooCommerce
+  - Valid transitions: payment_pending, expired, cancelled
+  - Retry behavior: yes
+  - Terminal: no
+
+- payment_pending / payment_processing / payment_completed
+  - Purpose: gateway lifecycle tracking
+  - Entry condition: gateway status progression
+  - Responsible: WooCommerce/gateway
+  - Valid transitions: post_payment_processing, failed, cancelled, expired
+  - Retry behavior: yes
+  - Terminal: no
+
+- post_payment_processing
+  - Purpose: downstream state sync after successful payment
+  - Entry condition: WooCommerce completion hook fires
+  - Responsible: WordPress bridge
+  - Valid transitions: completed, failed, recovery_required
+  - Retry behavior: yes
+  - Terminal: no
+
+- completed
+  - Purpose: final success state
+  - Entry condition: Streams, subscriptions, and affiliate processing succeeded
+  - Responsible: multi-system
+  - Valid transitions: none
+  - Retry behavior: no
+  - Terminal: yes
+
+- failed / expired / cancelled / recovery_required
+  - Purpose: failure and recovery paths
+  - Entry condition: retry or manual triage needed
+  - Responsible: relevant system
+  - Valid transitions: retry or terminal resolution
+  - Retry behavior: yes depending on state
+  - Terminal: no for recovery_required; yes for terminal failed/expired/cancelled states
+
+This is a recommended model, not a proven current model.
+
+9. Idempotency Model
+
+The inspected code reveals a strong need for idempotency, but not clear evidence of a complete idempotency model.
+
+Current evidence:
+- There is a pending insert into wo_payment_transactions with a generated wow_order_id in streams/sources/checkout.php.
+- The redirect URL includes wow_order_id in query-string parameters.
+- The MU plugin calls a handler on woocommerce_order_status_completed, which is a standard post-payment trigger.
+- There is no visible dedupe key or processed marker for downstream steps in the inspected files.
+
+Required idempotency boundaries:
+- payment intent creation
+  - Need: unique payment_intent_id and request hash
+  - Current protection: minimal; required-field validation only
+  - Recommendation: enforce unique external reference
+
+- WordPress handoff
+  - Need: stable key linking Streams request to WooCommerce cart/order
+  - Current protection: none visible
+  - Recommendation: correlate on a single transaction UUID
+
+- WooCommerce order creation
+  - Need: one order per payment intent
+  - Current protection: not visible in repo evidence
+  - Recommendation: guard on source intent ID and external order reference
+
+- checkout requests
+  - Need: refresh or repeated purchase should not generate duplicate orders
+  - Current protection: not visible
+  - Recommendation: prevent duplicate order creation by idempotency key
+
+- payment callbacks
+  - Need: prevent double handling of webhook or gateway callback data
+  - Current protection: not visible in reviewed files
+  - Recommendation: enforce callback receipt and processed marker
+
+- order completion
+  - Need: only one successful completion state transition
+  - Current protection: MU plugin uses a single completed hook
+  - Recommendation: maintain created/completed completion marker
+
+- subscription processing
+  - Need: avoid duplicate subscription activation
+  - Current protection: not reviewed
+  - Recommendation: rely on WooCommerce Subscriptions’ own idempotent activation, but verify
+
+- AffiliateWP
+  - Need: one commission per qualifying order
+  - Current protection: single order completion hook is a positive sign
+  - Recommendation: verify the bridge function itself before assuming safety
+
+- Jewel Affiliate
+  - Need: ensure one webhook event does not trigger duplicate referrals
+  - Current protection: not visible
+  - Recommendation: require replay-safe webhook processing
+
+Conclusion:
+- The repository currently shows a partial pattern of completion protection, but not a full transaction-wide idempotency model.
+
+10. Database Design
+
+A dedicated payment transaction table is justified by the current architecture. The reason is that the system spans at least:
+- Streams
+- WordPress/WooCommerce
+- potential subscriptions
+- AffiliateWP
+- Jewel Affiliate
+
+The repository’s visible flow already creates a pending record in wo_payment_transactions, which is evidence that transaction state is already recognized as important. However, there is no evidence of a complete durable state model.
+
+A justified table design would include:
+
+- id / transaction_uuid
+- streams_user_id
+- wp_user_id
+- streams_reference
+- wow_order_id
+- wc_order_id
+- subscription_id
+- product_id or plan_id
+- amount
+- source_currency
+- wc_currency
+- exchange_rate
+- state
+- payment_status
+- idempotency_key
+- retry_count
+- correlation_id
+- created_at
+- updated_at
+- expires_at
+- failure_reason
+- recovery_data
+
+Recommended primary key:
+- transaction_uuid or big integer primary key with UUID
+
+Recommended unique constraints:
+- unique idempotency_key
+- unique streams_reference
+- unique wow_order_id if present
+- unique wc_order_id if present
+
+Recommended indexes:
+- state
+- payment_status
+- created_at
+- correlation_id
+- streams_user_id
+- wp_user_id
+- wc_order_id
+
+Migration strategy:
+- Add as a new table with backfill not required for forward-only transactions.
+- Use soft introduction behind a feature flag if the live environment requires staged deployment.
+- Do not create the table in this report.
+
+11. WooCommerce Order Lifecycle
+
+The specific WooCommerce order creation mechanism is only partially visible in the repository, but the strongest evidence is the redirect to:
+
+- /checkout/?add-to-cart={product_id}&quantity={quantity}&wow_order_id=...&amount=...&user_id=... etc.
+
+This strongly suggests:
+- a WooCommerce cart-based creation flow
+- a custom product is used as the bridge product
+- order total and metadata are passed through query parameters
+- the current bridge depends on WooCommerce’s native checkout flow rather than a direct server-side API order creation call in the reviewed files
+
+The exact lifecycle cannot be confirmed without the missing bridge files, but the pattern is:
+
+- Bridge product selected in WooCommerce
+- add-to-cart request initializes a WooCommerce cart
+- checkout page renders
+- payment gateway completes the order
+- completed order triggers WordPress hook
+- post-payment sync runs
+
+This is consistent with a WooCommerce cart checkout flow and not necessarily with a REST order creation endpoint.
+
+12. Checkout Architecture
+
+The code shows a redirect-based handoff to WooCommerce checkout rather than a direct API-driven checkout. Evidence:
+
+- streams/sources/checkout.php builds the redirect URL:
+  - $wow_store_url . '/checkout/?add-to-cart=' . $wow_bridge_product_id . '&quantity=' . $product_units . '&wow_order_id=' . $order_id
+- The file also checks for missing configuration values, including wow_store_url and wow_bridge_product_id.
+- A browser then follows the redirect.
+
+Important constraints:
+- There is clear dependence on the browser continuing to the WooCommerce storefront.
+- There is no evidence in the reviewed files of a server-side order-create call that does not involve the browser.
+- There are no visible safeguards around repeated refreshes or repeated double-submission in the reviewed files.
+
+The following are not established by repository evidence:
+- pay_for_order flow details
+- guest-user checkout specifics
+- login/refresh behavior beyond the redirect itself
+- repeated-visit recovery logic
+
+Conclusion:
+- The checked-in code supports redirect-based checkout, but the broader checkout and repeat-visit security model remains partially unknown.
+
+13. WooCommerce Subscriptions
+
+This area is not directly evidenced in the inspected repository files. The project references WooCommerce Subscriptions in the problem description, but the reviewed code does not show:
+- subscription creation API calls
+- order-to-subscription mapping
+- activation hooks
+- renewal logic
+- failed-payment behavior
+
+Because of this, the responsibility of Subscriptions in this payment bridge cannot be verified from repository evidence alone.
+
+Classification:
+- UNKNOWN / REQUIRES VERIFICATION
+
+This is important because the user requirement expects a full lifecycle including subscription state. The repo reviewed here does not provide enough direct evidence for a definitive conclusion about when subscriptions are created or activated.
+
+14. WOOCS / Currency
+
+The repository does show some currency logic on the Streams side:
+
+- streams/sources/checkout.php reads product currency and config exchange values:
+  - $wo['currencies']
+  - $wo['config']['exchange']
+  - conversion logic is applied before total is finalized
+- The file also sets totals based on product currency and config conversion before storing or redirecting.
+
+This suggests the system does perform currency conversion on the Streams side before handoff.
+
+However:
+- No direct sign of the WOOCS plugin API or its configuration is visible in the inspected files.
+- No direct evidence was reviewed for plugin-specific currency state persistence, exchange handling, or order-currency conversion in WooCommerce itself.
+
+Therefore:
+- Verified: Streams performs conversion logic before payment handoff.
+- Unknown: actual WooCommerce-native currency behavior and WOOCS plugin implementation.
+
+15. AffiliateWP
+
+This is the most clearly evidenced post-payment system in the inspected files.
+
+Verified evidence:
+- wp-content/mu-plugins/buzzjuice-affwp-order-complete.php is a WordPress MU plugin.
+- It loads the bridge file at wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php.
+- It registers:
+  - add_action('woocommerce_order_status_completed', function($order_id) { ... bluecrown_affiliatewp_post_checkout_verification($order_id); }, 999, 1);
+
+This means:
+- AffiliateWP post-checkout processing is tied to the completed status of the WooCommerce order.
+- The completion hook is the authoritative WordPress-side trigger for the affiliate flow.
+- The repository explicitly treats AffiliateWP as protected, working functionality.
+
+Important nuance:
+- The exact internal logic of bluecrown_affiliatewp_post_checkout_verification is not reviewed here, so the commission logic, duplicate guards, first/recurring referral behavior, and Lifetime Commissions integration remain unverified.
+
+Conclusion:
+- The hook is verified.
+- The internal AffiliateWP algorithm is not fully verified.
+
+16. Jewel Affiliate
+
+The repository names:
+- streams/jewel-affiliate-webhook.php
+
+This indicates a separate webhook-driven integration path. Based on the file name and the required investigation list, it likely handles an affiliate or referral event outside the direct WooCommerce order-completion hook.
+
+However:
+- This file was not directly inspected in the reviewed repository snapshot.
+- No exact source of data, order mapping, user mapping, duplicate protections, or retry behavior is verifiable from the evidence available here.
+
+Classification:
+- UNKNOWN / REQUIRES VERIFICATION
+
+This path is real in the repository, but its operational details are not established.
+
+17. Streams Integration
+
+The Streams integration is most clearly visible in:
+- streams/requests.php
+- streams/sources/checkout.php
+- the include of assets/wow-pgb/wow-pgb_init.php
+
+Verified behavior:
+- The request router handles a payment branch when payment_type=wow_payment.
+- The system validates required user and product fields.
+- It writes a pending transaction record named wo_payment_transactions.
+- It builds a redirect URL to the WooCommerce store and includes metadata.
+
+Observed data flow:
+- user_id
+- amount
+- product_name
+- product_price
+- product_units
+- product_owner_id
+- wow_order_id
+
+Not verified:
+- cURL calls
+- API requests to external gateways or endpoints
+- exact validation and error handling in wow-pgb_init.php
+- any Streams database update logic after payment completion
+
+This leaves a significant gap between the request initiation and the actual payment/checkout pipeline. The repository evidence supports the existence of a custom bridge but not the full implementation details of the bridge itself.
+
+18. MU Plugin Architecture
+
+The WordPress MU plugin architecture is clearly represented by:
+
+- wp-content/mu-plugins/buzzjuice-affwp-order-complete.php
+
+This plugin:
+- guards on ABSPATH
+- loads the bridge file from the plugin directory
+- calls a function from the bridge
+- registers a completion hook for WooCommerce order completion
+
+This matters because it shows a specific architectural decision:
+- WordPress handles completion and then hands off to the bridge
+- the bridge is not loaded in the Streams app itself
+- the WordPress MU plugin acts as the integration boundary
+
+This is a strong signal that the project intentionally uses WordPress as the authoritative post-payment environment, not Streams.
+
+19. Security
+
+The reviewed files show several security concerns that should be treated as architectural risks until proven otherwise.
+
+Verified security issues present in the visible flow:
+- browser-supplied values are used in the redirect parameters
+- amount, product_name, product_price, product_units, product_owner_id, and wow_order_id are passed as query parameters
+- the repo does not show a signed payload or server-side verification of those values before WooCommerce order creation
+- the system relies on a browser redirect as a bridge boundary
+
+The following risks are valid concerns:
+- amount manipulation
+- product manipulation
+- currency manipulation
+- user-ID tampering
+- order-ID manipulation
+- return-URL manipulation
+- replay of the same payment request
+- transaction ownership mismatch
+- untrusted browser metadata being accepted as authority
+
+Important architectural principle:
+- A browser must never be trusted as the authority for amount, currency, product price, subscription entitlement, or affiliate attribution.
+
+The reviewed code does not provide enough evidence to conclude that the system currently enforces signed server-to-server validation at the handoff boundary. That is a major gap.
+
+20. Observability
+
+The repository includes logging in at least some of the plugin and bridge code, but there is no full structured logging model visible in the reviewed files.
+
+The minimal production-safe logging model required would include:
+- transaction UUID
+- correlation ID
+- order ID
+- Streams user ID
+- WordPress user ID
+- payment state
+- gateway state
+- action name
+- timestamp
+- success/failure outcome
+- recovery metadata
+- no passwords, tokens, API secrets, or personal data beyond minimal user correlation fields
+
+Recommended logging lifecycle:
+- request creation
+- validation success/failure
+- transaction insert success/failure
+- redirect generation
+- WooCommerce order created
+- completion hook fired
+- downstream AffiliateWP/Jewel processing success/failure
+- final redirect or terminal state
+
+This is a recommendation, not a confirmed existing implementation.
+
+21. Failure Recovery
+
+The current repository evidence supports a need for explicit recovery handling, but not a complete recovery framework.
+
+Recommended recovery categories:
+- Automatic
+  - retryable validation failure and transient DB failure
+  - retry of downstream completion processing
+- Scheduled
+  - stale transaction reconciliation
+  - orphaned WooCommerce order detection
+  - duplicate callback detection
+- Manual
+  - complex affiliate discrepancy resolution
+  - refund or order correction cases
+- User initiated
+  - customer retry after abandoned flow if payment never reached gateway
+- Terminal
+  - irreversible completed orders with confirmed settlement and final downstream completion
+
+Minimum recovery scenarios:
+- abandoned payment intent
+- missing WordPress handoff
+- failed order creation
+- failed redirect
+- successful payment with failed synchronization
+- failed subscription synchronization
+- failed AffiliateWP processing
+- failed Jewel Affiliate processing
+- duplicate callbacks
+- stale transactions
+
+The current repo does not show a durable recovery loop or scheduled reconciliation process. This is a critical gap.
+
+22. File Impact Matrix
+
+This is the recommended impact classification based on current evidence:
+
+- streams/requests.php
+  - KEEP
+  - It is the entry router for the custom payment flow.
+
+- streams/sources/checkout.php
+  - MODIFY
+  - It is where validation and handoff creation are currently performed.
+
+- streams/assets/wow-pgb/wow-pgb_init.php
+  - KEEP / MODIFY
+  - It is the initialization boundary, but its internal logic is not verified.
+
+- wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php
+  - KEEP / MODIFY
+  - It is the bridge invoked by the WordPress MU plugin.
+
+- wp-content/mu-plugins/buzzjuice-affwp-order-complete.php
+  - KEEP
+  - It is a stable WordPress completion hook and should be preserved unless a better boundary is approved.
+
+- streams/wow-pgb_webhook.php
+  - KEEP / REVIEW
+  - Likely relevant to payment callback handling.
+
+- streams/jewel-affiliate-webhook.php
+  - KEEP / REVIEW
+  - It likely handles Jewel Affiliate flow, but is not sufficiently verified.
+
+- shared/db_helpers.php
+  - KEEP
+  - It provides cross-system DB access configuration and is clearly core shared infrastructure.
+
+- shared/wwqd_bridge.php
+  - KEEP / REVIEW
+  - Not inspected enough to classify further.
+
+- No file should be recommended for deletion in this report because the responsibilities are not fully mapped and the repo explicitly honors protected functionality.
+
+23. Migration Strategy
+
+A staged migration is the safest approach given the evidence:
+
+1) Stage 1: map and codify current state
+- preserve existing Streams redirect pattern
+- record correlation IDs and state transition data
+- ensure no functionality is lost
+
+2) Stage 2: add durable transaction ledger
+- implement a single payment transaction record that is authoritative for handoff and reconciliation
+- keep the current code path functional while introducing the new record
+
+3) Stage 3: add idempotency guards
+- dedupe payment intent creation
+- dedupe WooCommerce order creation
+- dedupe completion callbacks
+- dedupe affiliate processing
+
+4) Stage 4: introduce a more direct WordPress transaction boundary
+- prefer native WordPress/WooCommerce server-side APIs
+- retain the browser redirect only as the user-facing handoff, not as the only durable state
+
+5) Stage 5: staged coexistence
+- keep current architecture working
+- introduce feature flags for alternative route selection
+- monitor completion rate and reconciliation
+
+This should be no more than a controlled migration, not a disruptive replacement.
+
+24. Test Strategy
+
+Unit tests
+- input validation for required payment fields
+- state transitions and invalid transitions
+- idempotency checks
+- payload signature and tamper detection
+- database write failure handling
+
+Integration tests
+- Streams intent creation
+- request-to-redirect handoff
+- WooCommerce order creation from the bridge product
+- checkout URL generation
+- payment success callback handling
+- subscription processing
+- AffiliateWP commission creation
+- Jewel Affiliate handling
+- currency conversion flow
+
+Failure tests
+- DNS failure
+- timeout during redirect or callback
+- duplicate request hits
+- duplicate completion events
+- browser abandonment
+- failed synchronization after successful payment
+- stale transaction recovery
+
+Regression tests
+- all existing working Streams payment scenarios
+- all current WooCommerce checkout scenarios
+- affiliate attribution still firing on existing valid orders
+
+25. Open Questions
+
+These questions remain unresolved from the reviewed repository evidence:
+
+- What exactly does assets/wow-pgb/wow-pgb_init.php do in detail?
+- What does wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php do after order completion?
+- Is the bridge using WooCommerce native PHP APIs, cart-based checkout, or a hybrid?
+- What is the exact order creation API and whether a direct server-side order is used?
+- What exact fields are persisted in the database for the payment handoff?
+- How are recurring subscriptions and renewals handled in the real implementation?
+- How are duplicate callback events prevented?
+- What exact AffiliateWP/recurring referral logic is executed after order completion?
+- What exact user-to-order mapping is used by Jewel Affiliate?
+- Does the system rely on a separate payment transaction table beyond wo_payment_transactions?
+- What is the exact timeout, retry, and DNS failure behavior of the current implementation?
+- What is the authoritative state source when Streams and WooCommerce disagree?
+
+26. Decisions Requiring Approval
+
+The following decisions should not be implemented without explicit approval:
+
+- any change to the existing AffiliateWP protected workflow
+- any change that modifies the WordPress completion hook boundary
+- any redesign of the current redirect-based WooCommerce handoff unless transaction durability is proven acceptable
+- any proposal to replace or delete the current bridge files without mapping responsibilities
+- any migration that changes subscription activation semantics
+- any modification to the current currency conversion pattern without confirming the real WooCommerce behavior
+- any change to logging or secret handling in production
+
+27. Recommended Next Stage
+
+The next stage should be a tightly scoped verification pass focused on the actual bridge implementation files that are currently missing from the inspected evidence:
+- streams/assets/wow-pgb/wow-pgb_init.php
+- wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php
+- streams/wow-pgb_webhook.php
+- streams/jewel-affiliate-webhook.php
+- the exact WooCommerce Subscriptions and WOOCS plugin code paths
+
+This should answer the open questions without changing any production behavior. The objective should be to confirm:
+- the precise handoff mechanism
+- the authoritative completion hook
+- the exact idempotency protections
+- the actual state model
+- the real recovery path for dropped orders
+
+Only after those facts are confirmed can a robust architectural recommendation be made.
+
+### CONFIDENCE SUMMARY
+
+- Streams initiates a custom payment branch and redirects to WooCommerce checkout: High
+- The WordPress MU plugin invokes the AffiliateWP completion bridge on woocommerce_order_status_completed: High
+- The repo uses a redirect-based handoff pattern rather than a direct, fully verified server-side WooCommerce API order create call: High
+- A durable cross-system transaction table and idempotency model are likely missing or incomplete: Medium
+- The exact contents and behavior of wow-pgb_init.php and wow-pgb_sync.php remain unresolved: Unknown / Requires Verification
+- WooCommerce Subscriptions lifecycle is not verified in the reviewed code: Unknown / Requires Verification
+- WOOCS / currency behavior is partially evidenced on the Streams side but not fully verified at the WooCommerce plugin boundary: Medium
+- Jewel Affiliate webhook logic is present but not verified: Unknown / Requires Verification
+- Current security protections around browser-trusted payment data are insufficiently evidenced: Medium
+- Recovery and reconciliation logic for dropped transactions is not demonstrated in the reviewed repo: Medium
+
+<<STOP GITHUB>>
