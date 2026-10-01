@@ -1,0 +1,132 @@
+# BZJ-PGB-0200 Evidence Addendum: 10 gap areas
+
+**Source:** `cupidblack/buzzjuice.net`, `main`. The search index served ref `9136ade9…`, so `main` has moved since `cc5dc0e`. I ran out of tool budget partway, so several items are only partly closed. Each is marked CLOSED, PARTIAL or OPEN, with what I could not verify.
+
+## Correction to my earlier report
+
+I said AffiliateWP commission was triggered only from the browser Thank-You page. That was wrong.
+
+- **FACT:** `wp-content/mu-plugins/buzzjuice-affwp-order-complete.php` hooks `woocommerce_order_status_completed` at priority 999. It `require_once`s `wow-pgb_sync.php` and calls `bluecrown_affiliatewp_post_checkout_verification()`.
+- AffiliateWP therefore has two triggers: the server-side `completed` hook and the `wp_footer` Thank-You path. Both are guarded only by `_affwp_bridge_processed`, which is check-then-act and not atomic.
+- Severity of PGB-F06 is reduced for AffiliateWP. It still stands for the manual subscription creation and the redirect, which run only in `wp_footer`.
+- The server-side hook fires only on status `completed`. An order that stops at `processing` gets no commission, which matches the webhook's `completed`-only behavior.
+
+## Status summary
+
+| # | Area | Status |
+|---|---|---|
+| 1 | WooCommerce order creation APIs | CLOSED for REST; native-API semantics PARTIAL |
+| 2 | Checkout/payment URL APIs | PARTIAL |
+| 3 | Subscriptions lifecycle | PARTIAL, with one major spec conflict |
+| 4 | WOOCS functions/hooks | PARTIAL |
+| 5 | AffiliateWP implementation | PARTIAL |
+| 6 | Jewel integration | CLOSED for repo state; production OPEN |
+| 7 | Auth/session handoff | CLOSED |
+| 8 | IAPD schema/conventions | CLOSED (none in repo) |
+| 9 | Scheduled tasks | PARTIAL |
+| 10 | Logging/locking conventions | CLOSED |
+
+## 1. Order creation APIs
+
+- **FACT:** WooCommerce is 11.1.0.
+- **FACT:** `wc_create_order( $args )` exists in `wc-core-functions.php`. I did not read its body.
+- **FACT, from `class-wc-rest-orders-v2-controller.php`:**
+  - A line item's `total` and `subtotal` are set from the catalog price on create. They are then overridden by whatever the client posts, which confirms PGB-F04 at API level.
+  - `billing` is applied only if it is posted. There is no auto-fill from `customer_id`, which strengthens FM2 (null billing email).
+  - After creation the controller calls `calculate_totals()`. The default status is `pending`. `created_via` is `rest-api`.
+  - `set_paid=true` calls `payment_complete()`.
+  - Extension points are `woocommerce_rest_pre_insert_shop_order_object` and `woocommerce_rest_set_order_item`.
+- **UNKNOWN:** whether HPOS is enabled. The controller branches on it.
+
+## 2. Checkout/payment URL
+
+- **FACT:** the REST `payment_url` field is `$order->get_checkout_payment_url()`, with `$on_checkout=false` by default.
+- **FACT:** that method builds the URL from `wc_get_endpoint_url('order-pay', id, wc_get_checkout_url())`. I saw only its first lines; the key and `pay_for_order` parameters are expected but unverified.
+- **FACT:** the order-pay page checks the key with `hash_equals`. A logged-out visitor is prompted to log in.
+- **FACT:** the `pay_for_order` capability is granted when the user ID equals the order's user ID, **or when the order has no user**.
+- **New RISK:** `wow-pgb_init.php` logs and continues when the WordPress user ID is missing. It would then create a guest order (`customer_id` 0), and any logged-in holder of the link could pay it.
+
+## 3. Subscriptions lifecycle
+
+- **FACT:** `WC_Subscriptions_Checkout::process_checkout` hooks `woocommerce_checkout_order_processed` (priority 100) and `woocommerce_store_api_checkout_order_processed`. Those are the only creation hooks I found. REST-created orders never trigger them.
+- **FACT:** `WC_Subscriptions_Manager::activate_subscriptions_for_order()` and `wcs_create_subscription()` exist. Paid statuses are `processing` and `completed`, moving from `pending`, `on-hold` or `failed`.
+- **FACT:** the bridge's products are plain `WC_Product_Variable` and `WC_Product_Variation`, with `_subscription_*` written as raw post meta.
+- **INFERENCE:** these are probably not WCS subscription products. I could not read the body of `WC_Subscriptions_Product::is_subscription()`.
+- **Spec conflict (BZJ-PGB-002 §13):** the spec says WCS creates the pending subscription at checkout and the bridge must not activate manually. For Streams-created REST orders that is false today, which explains why `wow-pgb_sync.php` creates `/subscriptions` with `status: active`. Decision needed: make real subscription products and go through checkout, create via `wcs_create_subscription()` with explicit state, or keep Streams-side entitlement outside WCS.
+- **Not verified:** the REST `/subscriptions` controller semantics, the `woocommerce_subscription_payment_complete` hook (Subscriptions payment-complete is only mentioned in the spec), and whether renewal orders copy `wow_order_id`.
+
+## 4. WOOCS
+
+- **FACT:** rates live in the WP option `woocs` and are returned by `$WOOCS->get_currencies()`, which is base-relative.
+- **FACT:** `woocs_exchange_value($v)` multiplies by the rate of `current_currency`, which is session or cookie bound. In REST, cron or worker context there is no browser session, so it would use the default currency. A server-side currency engine should read `get_currencies()` and compute the cross-rate itself.
+- **FACT:** `debug-woocommerce-currency-switcher.php` shows WOOCS depends on PHP sessions (`session_start` failures are logged).
+- **UNKNOWN:** the WOOCS version and whether it re-prices an existing order at order-pay.
+- **FACT:** `bz-rebate.php` mixes currencies. It subtracts a Streams plan price (`Wo_Manage_Pro.price`, in cents) from a WC cart price that may be WOOCS-converted. This is a risk until tested.
+
+## 5. AffiliateWP
+
+- **FACT:** installed plugins are affiliate-wp, lifetime-commissions, recurring-referrals, multi-tier-commissions and the affiliate portal.
+- **FACT:** the native WooCommerce integration hooks `mark_referral_complete` on `completed` and `processing`. It revokes on `completed_to_refunded` and `processing_to_refunded`.
+- The bridge's referrals use `context=woocommerce` and `reference=order_id`, so native refund revocation likely covers them. That is probably why the bridge chose those values.
+- **Not read:** native referral creation, recurring and lifetime plugin internals, multi-tier behavior (a possible double-pay path), and versions.
+
+## 6. Jewel
+
+- **FACT:** Jewel is a native WP checkout flow in `bz-rebate.php`. It adds a negative-priced "Subscription Rebate" product to the cart. At `woocommerce_checkout_create_order` it writes `bz_rebate_*` and `bz_wow_user_id` meta.
+- **FACT:** the default mapping is variations 6775 to 6778, stored in option `bz_rebate_mapping_json`. WP-to-Streams identity uses user meta `wo_user_id`.
+- Because Jewel goes through real checkout, WCS checkout hooks do apply to it. That makes it a different lifecycle from Streams-initiated orders.
+- **FACT:** the file's docblock says the webhook credits the wallet, but `wow-pgb_webhook.php` contains no rebate code and never calls `jewel_affiliate_process()`. `jewel-affiliate-webhook.php` has no entry point of its own. In this snapshot, Jewel's Streams activation and rebate credit are not executed by any code I found. Production may differ.
+- **New MEDIUM:** `bz-rebate.php` debug is on by default and writes `print_r` meta to `wp-content/uploads/bz-rebate-debug.log`, a potentially web-readable path.
+
+## 7. Auth and session handoff
+
+- **FACT:** WordPress is the SSO authority (`sso-session-sync.php`). It issues an HS256 `buzz_sso` cookie on `.buzzjuice.net` (Secure, HttpOnly, Lax). Audience is `buzznet`, TTL is 1200 s, and the payload carries `wp_user_id`, `wo_user_id` and `qd_user_id`.
+- **FACT:** WordPress hydrates its own session from a valid `buzz_sso` at `init` priority 12. Tokens are revoked by a per-user logout epoch.
+- A Streams user arriving at an order-pay URL with a valid cookie is auto-logged-in as the WP user. So a signed handoff can bind to `wp_user_id` and the order's `customer_id`, as long as that ID is non-zero (see §2).
+- **FACT:** the replay (JTI) store is files in `data/.bz_sso_jti_store`, marked TODO. The check-then-mark is non-atomic, and the comment says 30 minutes while the code expires at 3600 s.
+- **FACT:** `bzj_get_sso_secret()` in `db_helpers.php` falls back to a value derived from `ABSPATH`, which is predictable.
+
+## 8. IAPD
+
+- **FACT:** `get_iapd_db_conn()` is defined in `db_helpers.php` and has no callers in code. No IAPD schema exists in the repo, and IAPD appears only in `AGENTS.md` and the 0040 doc.
+- **Conventions available:** mysqli, a static singleton connection, utf8mb4, and credentials from `.env`. Cross-database access is established practice: WP reads Streams via `get_wowonder_db()`, and Streams reads WP options via `get_wp_db_conn()`.
+- **Not verifiable here:** the actual IAPD tables, engine and collation.
+- **Note:** `dirname(__DIR__, 3) . '/.env'` depends on the deploy depth.
+
+## 9. Scheduled tasks
+
+- **FACT:** `bzj-connections-sync.php` schedules two hourly WP-Cron events, `CRON` and `CRON_RECONCILE`. Action Scheduler ships in `woocommerce/packages/action-scheduler`, and WCS uses it.
+- **FACT:** `shared/wwqd_sync_queue.php` is a JSON-file queue whose read-modify-write is not locked, so concurrent writers can lose jobs. It must not be reused for payments.
+- **UNKNOWN:** whether `DISABLE_WP_CRON` is set and whether a system cron exists. `wp-config` is not in the repo.
+
+## 10. Logging and locking
+
+- **Logging:** logs live in `data/logs/` (for example `buzzjuice-streams.log`, `debug-woocs.log` with a `.lock` throttle file). `bz_bridge_log()` writes JSON lines with `FILE_APPEND|LOCK_EX` and deliberately omits sessions, cookies, JWTs and secrets, which is a good precedent. `bzj_log_once()` is in `debug-runtime-error-handler.php`.
+- **Locking:** there is a DB precedent in `bzj-connections-sync.php`: `SELECT GET_LOCK('bzj_rel_a_b', timeout)` through `$wpdb`, with a reentrancy counter. `GET_LOCK` is per-connection and per-server. A payment lock should live on the same connection and database as the intent table, which is IAPD, not WordPress.
+
+## New or updated findings
+
+- **PGB-F15 (HIGH): three writers of `is_pro`/`pro_time`.**
+  - The writers are `wow-pgb_webhook.php`, `jewel-affiliate-webhook.php`, and `check_wp_role.php`.
+  - `check_wp_role.php` reads the WP role through the WP REST API and revokes Pro (`is_pro=0`) when no matching role exists.
+  - The webhook's activation can therefore be undone, or be skipped depending on a role set by rules I could not see (the Addify Automatic User Roles Switcher plugin is installed; its rules are in the DB).
+  - Where `check_wp_role.php` is included is unknown, since it is commented out in the webhook. Its `$session_timeout = 20` contradicts its "4 hours" comment.
+- **I3 revised:** the role the PRO branch waits for is probably set by Addify rules on WCS or order events. Unconfirmed.
+- **DNS inference (I1) weakened:** `bz_fetch_wp_stateless_payload()` and `check_wp_role.php` already make same-host HTTPS calls to WordPress, and login evidently works. The "could not resolve host" failure may be specific to the cPanel shell or one request path rather than the PHP web runtime. Test from the PHP-FPM user.
+
+## Still OPEN (needs production or human input)
+
+- `streams/requests.php`, `ww-sso-bridge.php` and `bzj-redirect-to-checkout.php`.
+- The `get_checkout_payment_url` body.
+- Versions of WCS, WOOCS and AffiliateWP.
+- HPOS status.
+- WooCommerce webhook status and logs.
+- Production Addify rules.
+- Cron configuration.
+- Whether any production webhook invokes Jewel.
+- The real IAPD schema.
+- Docs `BZJ-PGB-0020` and `AGENTS.md` consistency (`AGENTS.md` and 0040 already treat ADR 001/002 as approved).
+
+## Recommendation
+
+Do not approve the Brief Analysis yet. The three blocking decisions are the subscription model (§3), the single owner of Streams Pro state (PGB-F15), and the Jewel production path (§6). I can package this as `agent-reports/claude-addendum.md` for the task packet if you want it.
