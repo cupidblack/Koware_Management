@@ -2644,7 +2644,7 @@ For reference, the following GitHub folder contains a combination of reports, co
 
 
 
-<<START BZJ-PGB-0325 Architecture Challenge Benchmark>>
+<<START BZJ-PGB-0323 Architecture Pre-Challenge Benchmark>>
 
 
 
@@ -2652,7 +2652,7 @@ https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/
 
 
 
-<<STOP BZJ-PGB-0325 Architecture Challenge Benchmark>>
+<<STOP BZJ-PGB-0323 Architecture Pre-Challenge Benchmark>>
 
 \*\*\*\*\*
 
@@ -5010,7 +5010,7 @@ The strongest surviving architectural elements are the IAPD boundary, native Woo
 
 ## **BZJ-PGB-0330**
 
-## **Architectural Decision Record (ADR)**
+## **Architecture Decision Record (ADR)**
 
 
 
@@ -5060,7 +5060,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-### **<<START BZJ-PGB-0332 Draft Architectural Decision Record>>**
+### **<<START BZJ-PGB-0332 Draft Architecture Decision Record>>**
 
 
 
@@ -9096,7 +9096,7 @@ Therefore:
 
 
 
-### **<<STOP BZJ-PGB-0332 Draft Architectural Decision Record>>**
+### **<<STOP BZJ-PGB-0332 Draft Architecture Decision Record>>**
 
 
 
@@ -9114,7 +9114,7 @@ Take me step by step through implementing the next stage to produce an Architect
 
 
 
-### **<<START BZJ-PGB-0335 Architectural Decision Record (ADR)>>**
+### **<<START BZJ-PGB-0335 Architecture Decision Record (ADR)>>**
 
 
 
