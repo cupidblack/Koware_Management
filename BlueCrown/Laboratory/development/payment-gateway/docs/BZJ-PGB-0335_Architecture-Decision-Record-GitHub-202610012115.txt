@@ -1,0 +1,213 @@
+I reviewed the repository evidence and the benchmark materials provided, and I did not find the actual BZJ-PGB-0332 draft ADR file in the shared benchmark repo snapshot. The available materials include the challenge closure and workflow notes, but the final ADR itself is not present. That absence is material for this review.
+
+I have not modified production code and I have not implemented any proposed solution.
+
+A. Repository compatibility matrix
+
+For ADR-D001 through ADR-D012:
+
+- ADR-D001 — Payment Intent architecture
+  - Status: Compatible with change
+  - Reason: The repository already shows a need for durable state and intent tracking, especially in the current Streams payment transaction flow and the lack of durable linkage between Streams and WooCommerce.
+  - Caveat: The current repository does not contain a payment-intent model; this is a new architectural layer, but it is consistent with the repo’s pain points.
+
+- ADR-D002 — `koware_iapd_db` as new-state database
+  - Status: Contradiction
+  - Reason: The repo contains `shared/db_helpers.php` with `get_iapd_db_conn()`, but there is no production schema, no migration registry, no repo-level IAPD table pattern, and no evidence of actual IAPD tables being used. The architecture relies on a database boundary that is not present in the repository or existing conventions.
+  - This is the strongest blocker.
+
+- ADR-D003 — Native WooCommerce execution
+  - Status: Compatible with change
+  - Reason: The repo shows native WooCommerce core APIs and WooCommerce order creation patterns are present. This is consistent with the idea of WordPress/WooCommerce as the authoritative execution environment.
+
+- ADR-D004 — Browser is not transaction authority
+  - Status: Compatible with change
+  - Reason: The repo’s existing code shows browser-supplied values being used in the payment path (`streams/assets/wow-pgb/wow-pgb_init.php` and the client-side JS), which supports the ADR’s position that the browser must not be the authority for amount, product price, or financial state.
+  - This is consistent with the existing repo’s weakness, not a contradiction.
+
+- ADR-D005 — Server-authoritative price
+  - Status: Compatible with change
+  - Reason: The repo’s evidence strongly supports this decision because WooCommerce itself overwrites client-provided order item totals when the product is mapped to a real product in the catalogue.
+  - The repo already supports this principle, even though the current implementation does not enforce it consistently.
+
+- ADR-D006 — Effect-level idempotency
+  - Status: Compatible with change
+  - Reason: The repository already contains multiple idempotency problems (duplicate affiliate processing, duplicate wallet credit, duplicate fulfillment), so this decision is consistent with the existing architecture and issues.
+
+- ADR-D007 — Reconciliation required
+  - Status: Compatible with change
+  - Reason: The repo has existing patterns for reconciliation and recovery in other MU plugin systems (`bzj-connections-sync.php`, `bzj-affiliate-access-gate.php`), which makes this design consistent with repository precedent.
+
+- ADR-D008 — AffiliateWP ownership
+  - Status: Compatible with change
+  - Reason: The repository has both a custom bridge and a native WooCommerce integration path. The ADR choice to centralize ownership in WordPress is consistent with the repo, but the current repo has competing trigger paths and must be explicitly constrained to one entry point.
+
+- ADR-D009 — Jewel Affiliate isolation
+  - Status: Compatible with change
+  - Reason: The repo contains a Jewel Affiliate webhook file and a dead/inert rebate MU plugin. This supports the ADR’s concept of separating Jewel as an optional addon rather than a core payment primitive.
+
+- ADR-D010 — Migration strategy
+  - Status: Compatible with change
+  - Reason: The repo does not yet have a migration strategy, but other modules use staged patterns and feature-flag-like deployment practices. This is consistent with the need for controlled rollout, but it does not yet exist in the repo.
+
+- ADR-D011 — Security/signing model
+  - Status: Compatible with change
+  - Reason: The repository already contains SSO signature helpers (`shared/db_helpers.php`, related SSO helper code) and some replay/claim discipline patterns. This supports the decision to use signed handoff and replay protection.
+
+- ADR-D012 — Recovery worker
+  - Status: Compatible with change
+  - Reason: The repository has proven queue/recovery patterns in other MU plugins. This is consistent with the proposed worker model.
+
+B. Missing repository components
+
+These are the components the ADR assumes but the current repo does not provide:
+
+- A real, committed `koware_iapd_db` schema or migration system
+- A production-grade DA boundary in the repo for the payment-intent table
+- A concrete `shared/payment-gateway/` orchestration tree with core, integrations, addons, recovery, and migrations
+- A real `bzj-payment-gateway.php` MU plugin implementation or bootstrap consistent with the ADR
+- A repo-backed payment-intent table definition or schema versioning pattern with `dbDelta` and migration metadata
+- A proven queue table for payment events matching the recovery model
+- A single repository-based implementation of the recovery worker that is already used by the platform
+- An actual, checked-in decisions ledger and ADR file in the same repository with final approval metadata
+- Production evidence that the `IAPD` database is actually the authoritative boundary for this workflow
+
+C. Ownership contradictions
+
+These are state ownership conflicts that the ADR must resolve explicitly:
+
+- Streams vs WordPress/WooCommerce
+  - Streams currently owns user-facing initiation, UI state, and partial transaction records.
+  - WooCommerce owns order state, pricing, payment, and subscription state.
+  - The ADR must state explicitly which system owns final payment state and which one owns “payment intent” state.
+
+- WooCommerce Subscriptions vs custom bridge logic
+  - The repo currently contains custom subscription logic plus direct `POST /subscriptions`-style attempts and reconciliation hooks.
+  - The ADR must decide: does WordPress/WCS own subscription creation, or does the payment bridge own it?
+  - As written, that ownership is not sufficiently explicit.
+
+- AffiliateWP native integration vs custom bridge
+  - The repo contains both native AffiliateWP WooCommerce hooks and custom bridge logic.
+  - Without an explicit ownership rule, the same order can be processed twice or in conflicting ways.
+
+- Streams/Tokens vs WordPress/JWT handoff
+  - The repo already contains SSO/JWT patterns, but the ADR must define whether this is the payment handoff mechanism or a separate user/SAML-SSO mechanism.
+  - The current repo does not clearly distinguish the two.
+
+- Browser state vs server state
+  - The repo still contains browser-originated data and browser-triggered payment continuation logic.
+  - The ADR must explicitly forbid browser-derived financial authority; otherwise the planned architecture is not enforced.
+
+D. Database conflicts
+
+These are the existing schemas and patterns that can conflict with a `koware_iapd_db` design:
+
+- `shared/db_helpers.php` provides database helpers for WordPress, IAPD, Streams, QuickDate, WoWonder, etc.
+  - It defines `get_iapd_db_conn()`, but there is no repository evidence that it is actually used.
+  - It also silently returns `false` on connection failure, which is not adequate for a production-grade payment-intent ledger.
+
+- Existing Streams tables are highly relevant:
+  - `Wo_Payment_Transactions`
+  - `Wo_Users`
+  - `Wo_Purchases`
+  - other Streams tables
+  - These are not abstractions of a durable payment-intent layer; they are separate application tables.
+
+- Existing WordPress/WooCommerce tables are authoritative for:
+  - orders
+  - subscriptions
+  - product prices
+  - customer mapping
+  - affiliate data
+
+- A new IAPD boundary would create a second source of truth unless it is explicitly scoped as orchestration-only and not as the authoritative order/payment database.
+
+- The repo’s current architecture does not yet show a migration registry or versioned schema structure for `koware_iapd_db`, which is a major gap.
+
+E. Migration hazards
+
+These can cause duplicate processing or lost transactions during migration:
+
+- Old Streams payment flow still exists alongside any new payment-intent design.
+- `buzzjuice-affwp-order-complete.php` still triggers on `woocommerce_order_status_completed`.
+- `wow-pgb_webhook.php` still delivers payment completion effects after order processing.
+- Native AffiliateWP hooks and custom bridge logic may both execute for the same order.
+- Browser-triggered post-purchase fulfillment still exists in the repo and can continue firing during overlap.
+- Existing orders created before migration will still be in-flight and will not necessarily match the new payment-intent table.
+- The repo contains historical order/payment state in several tables, with no cross-database reconciliation contract.
+
+- This creates a serious migration hazard unless the ADR explicitly states:
+  - old system remains read-only until migration completion;
+  - all new instances must be feature-flagged;
+  - old and new payment intents are never both treated as authoritative;
+  - reconciliation runs before old systems are retired.
+
+F. Dependency assumptions
+
+The ADR depends on assumptions that must be explicitly verified before approval:
+
+- `koware_iapd_db` exists, is reachable, and has the required privileges
+- A production migration/regression process for the IAPD database is approved and supported by the hosting platform
+- Environment variables and secrets for `BUZZ_SSO_SECRET` and related DB keys are present and consistent across Streams/WordPress
+- The WordPress environment has the necessary cron or Action Scheduler capability
+- The cPanel/server environment supports the required DNS and network path for webhook delivery or reconciliation routing
+- New payment-intent logic does not conflict with the existing Streams and WordPress DB relationships
+- The old payment bridge and new bridge are not both live in production during the same transaction window
+- The final decision on whether `get_iapd_db_conn()` is the authoritative payment ledger is approved by the project owner
+- The route for signed handoff is valid in the actual deployment topology, not just in a local development environment
+
+G. Architecture blockers
+
+These are the issues that genuinely prevent architectural approval:
+
+1. The draft ADR assumes a `koware_iapd_db` boundary that is not present in the repository or schema conventions.
+2. The repository does not show a production migration strategy or schema versioning system for that boundary.
+3. The repo contains competing ownership paths for payment state, subscription state, and AffiliateWP processing.
+4. The draft ADR is not present in the shared benchmark repo snapshot as an actual reviewable artifact.
+5. The ADR must explicitly define the authoritative source of truth among:
+   - Streams DB
+   - WordPress DB
+   - WooCommerce order tables
+   - new payment-intent tables
+6. The current repo still contains browser-triggered fulfillment and direct post-payment processing logic; the ADR must include explicit shutdown/disable rules for those legacy paths, not just conceptual future rules.
+
+H. Recommended ADR changes
+
+These are the exact changes I recommend before approval:
+
+- Change D002 from:
+  - “`koware_iapd_db` is the new-state database”
+  to:
+  - “New payment-intent and effect-ledger tables SHALL be created in the authoritative platform database unless the production deployment explicitly proves the IAPD database is the mandated operational boundary. Until that proof exists, WordPress/WooCommerce database conventions remain authoritative.”
+
+- Add a decision explicitly stating:
+  - “Streams DB remains the user/account state source; WordPress/WooCommerce remains the order/payment/subscription source of truth.”
+  - “No payment state may have two authoritative owners.”
+
+- Add a decision constraint:
+  - “The legacy bridge code paths in `wow-pgb_webhook.php`, `buzzjuice-affwp-order-complete.php`, and the current `wow-pgb_sync.php` processing MUST be treated as legacy parallel paths until migration is complete and feature-flagged.”
+
+- Add a decision on recovery scheduling:
+  - “Action Scheduler or WP-Cron SHALL be designated as the recovery mechanism, and its use must be explicitly verified by the deployment environment.”
+
+- Add an explicit database migration requirement:
+  - “A migration/version registry and rollback path must be included before any new state table is introduced.”
+
+- Add an explicit compatibility clause:
+  - “The ADR does not override existing protected functionality in AffiliateWP or existing subscription behavior until a controlled compatibility review is completed.”
+
+- Add an explicit handshake requirement:
+  - “The signed handoff policy SHALL specify the authoritative secret, token validity window, replay protection, and exact payload validation rules for the production deployment.”
+
+I. Final determination
+
+BLOCK
+
+Reason:
+- The repository does not provide adequate evidence for the proposed `koware_iapd_db` boundary as the authoritative state store.
+- The draft ADR is not present in the repository snapshot reviewed.
+- The repo contains multiple overlapping ownership paths for payment and fulfilment state.
+- The ADR must explicitly define the single authoritative source of truth among Streams, WordPress/WooCommerce, and any new payment-intent tables.
+- The migration and rollback constraints are not yet repository-backed enough for architectural approval.
+
+This means the architecture is not yet ready for approval as written. The design direction is promising, but it needs repository-backed decision locking and a concrete source-of-truth boundary before it can be approved.

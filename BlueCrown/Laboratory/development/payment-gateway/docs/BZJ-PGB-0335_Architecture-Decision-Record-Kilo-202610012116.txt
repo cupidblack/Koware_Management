@@ -1,0 +1,368 @@
+# BZJ-PGB-0332 — Architecture Implementation-Strategy Review (Kilo)
+
+**Reviewer:** Kilo Code · **Date:** 2026-10-01
+**Reviewed:** `BZJ-PGB-0332_Draft-Architectural-Decision-Record-Codex-202610011955.txt` (1388 lines, ADR-D001…D012, all `PROPOSED`)
+**Gate artifact:** `BZJ-PGB-0325_Architecture-Challenge-Closure-Codex-202610011653.txt`
+**Evidence basis:** repository source, `cupidblack/buzzjuice.net` @ `9136ade9d`
+
+---
+
+## 0. Preliminary finding — the gate artifact is not what the ADR says it is
+
+ADR §2 declares:
+
+```
+| BZJ-PGB-0325 Challenge Closure   | **PASS / CLOSED**                          |
+| Architecture-blocking objections | **None identified at 0325 closure**        |
+```
+
+I downloaded `BZJ-PGB-0325_Architecture-Challenge-Closure-Codex-202610011653.txt` (25,239 bytes) and read it in full. **It contains no challenge findings.** Its title is *"BZJ-PGB-0330 — Architecture Decision & Implementation Strategy / Controlled Production Workflow"*. It is a 23-step process for *producing* an ADR. It records:
+
+- no challenge scope, no challenge agents, no challenge questions;
+- no findings, no resolved objections, no unresolved objections;
+- no accepted risks, no rejected alternatives, no required ADR constraints;
+- no evidence classification of any kind.
+
+Every architecture-blocking objection raised in BZJ-PGB-0324 (`…-Kilo-…`, `…-GitHub-…`) has therefore **never been formally answered**. The ADR's assertion that the architecture "SURVIVED" challenge rests on an artifact that does not contain a challenge.
+
+This is a **process blocker (B-05)** and it is the reason several of my objections below have never been dispositioned rather than new ones.
+
+---
+
+## A. Decision-by-decision review
+
+| ID | Decision | Verdict |
+|---|---|---|
+| ADR-D001 | Durable Payment Intent architecture | **PASS WITH REVISION** |
+| ADR-D002 | `koware_iapd_db` orchestration boundary | **BLOCK** |
+| ADR-D003 | Native WordPress/WooCommerce execution | **BLOCK** |
+| ADR-D004 | Browser is not transaction authority | **PASS** |
+| ADR-D005 | Server-authoritative commercial data | **PASS WITH REVISION** |
+| ADR-D006 | Effect-level idempotency | **BLOCK** |
+| ADR-D007 | Recovery and reconciliation mandatory | **PASS WITH REVISION** |
+| ADR-D008 | AffiliateWP ownership / controlled orchestration | **PASS WITH REVISION** |
+| ADR-D009 | Jewel Affiliate isolation | **PASS WITH REVISION** |
+| ADR-D010 | Controlled staged migration | **BLOCK** |
+| ADR-D011 | Security and signed handoff | **PASS WITH REVISION** |
+| ADR-D012 | Dedicated recovery worker | **PASS WITH REVISION** |
+
+### ADR-D001 — Durable Payment Intent · PASS WITH REVISION
+
+**Correct.** The thesis is right and the boundary clause is well drawn: the intent is an orchestration object and *"SHALL NOT replace WooCommerce's order; WooCommerce's payment state; WooCommerce Subscriptions' subscription state; Streams' existing financial records; AffiliateWP's referral records"* (`:193-201`). That is the correct authority split and I endorse it.
+
+**Revision required.** D001 lists *"recovery information"* and *"idempotency information"* as intent attributes (`:183-184`), while D006 makes effects independently idempotent with their own state. Two overlapping idempotency homes. The ADR §29 Data Integrity Strategy (`:1115-1128`) already says *"these must not be collapsed into one mutable status field"* — but D001 itself still folds recovery and idempotency into the intent record. **Revision:** state explicitly that idempotency keys and recovery counters live on the *effect* record, not the intent; the intent carries only the correlation identity and aggregate lifecycle state.
+
+Also: no reverse index is specified from WooCommerce order back to intent. INV-03 (`:1183-1185`) asserts *"a Payment Intent cannot produce more than one authoritative WooCommerce order association"* — but the **only** mechanism WooCommerce offers for order→intent is free-text order meta (the current code uses `wow_order_id`, `wow-pgb_init.php:594-598`). A meta key is not a unique constraint and cannot enforce INV-03. **Revision:** the uniqueness must live in the BZJ-PGB store (unique index on `intent_uuid` within the order association), and the ADR must say so.
+
+### ADR-D002 — `koware_iapd_db` · **BLOCK**
+
+**B-02.** Five independent, verified problems:
+
+1. **The mandated connection helper has never executed and fails silently.** `shared/db_helpers.php:79-86`:
+   ```php
+   $conn = new mysqli( IAPD_DB_HOST, … );
+   if ($conn->connect_errno) return false;   // no throw, no log
+   ```
+   Repo-wide, `get_iapd_db_conn` has **zero callers**. The most durable component of the architecture rests on an untested code path whose only failure mode is a silent `false`. D011 requires "validate intent state" and D007 requires a worker; **both become silently unavailable rather than loudly failed.**
+
+2. **No migration mechanism exists and `dbDelta` cannot be used.** The only first-party migration precedent is `wp-content/mu-plugins/bzj-connections-sync.php:70-114` — option-guarded `dbDelta` against `$wpdb`. `dbDelta` operates on `$wpdb`; it cannot target IAPD. There is no schema-version registry, no migration runner, and `data/db/migrations/` does not exist (only anticipated at `.gitignore:105-109`). D002 + INV-09 therefore mandate a control the project must build from zero.
+
+3. **Cross-database atomicity is impossible and is not addressed.** Intent → IAPD; order → WordPress DB; fulfilment → WoWonder DB. MySQL has no distributed transaction. D001 requires intent↔order association; nothing states which write wins or what compensates.
+
+4. **D002 introduces a new single point of failure into the payment path.** Today a payment needs the WordPress database. Under D002 it needs WordPress **and** IAPD. IAPD unreachable ⇒ no intent ⇒ no order ⇒ all payments halt, silently (§1).
+
+5. **The lock cannot span the critical section.** The only first-party lock is MySQL `GET_LOCK` with `LOCK_TIMEOUT=15` (`bzj-connections-sync.php:131-141`). `GET_LOCK` is scoped to **one MySQL connection**. The order-creation critical section spans IAPD and WordPress connections — and across servers if IAPD is not co-hosted (unknown, never asked).
+
+**The one thing D002 gets right:** A7 correctly rejects putting orchestration state into `Wo_Payment_Transactions`. Verified — that table has **no primary key and no unique constraint** (`streams/wowonder.sql:4874-4883`), so it cannot serve as an orchestration anchor.
+
+### ADR-D003 — Native WooCommerce execution · **BLOCK**
+
+**B-03.** D003 is directionally correct (creating the order in WordPress avoids REST price overwrite at `class-wc-rest-orders-v2-controller.php:997-1002` and avoids WOOCS being disabled on `/wp-json/wc/v3/*`, `woocommerce-currency-switcher/index.php:31-45`). **But the decision is unimplementable as written because it never says what the customer actually lands on.**
+
+The D003 path is `signed handoff → WordPress → native WooCommerce APIs → Order`. For a pre-created order the browser then arrives at `order-pay`. Verified `includes/shortcodes/class-wc-shortcode-checkout.php:88-119`, `order_pay()` does exactly four things — `absint`, `hash_equals` the order key, capability check, render the payment form. It **never** runs `WC_Checkout::process_checkout()`, never builds a cart, never fires `woocommerce_checkout_order_processed`. Whatever D003 intends as the terminal step, it is not "checkout".
+
+Three concrete failure modes follow:
+
+1. **Unpayable order.** If server-authoritative pricing yields `total = 0`, `needs_payment()` is false and `order_pay()` **throws** *"cannot be paid for"* (`:126-129`). Given the only code that creates these products sets `set_price(0)` (`wow-pgb_sync.php:87-88`), this is not hypothetical. Note also that this creation code **never runs**: `register_activation_hook(__FILE__, …)` at `wow-pgb_sync.php:192` sits in a *sub-file*, not the plugin main file, so WordPress never fires it. Actual catalogue prices remain **UNKNOWN**.
+
+2. **The customer may be shown a WordPress login form at the payment step.** `class-wc-shortcode-checkout.php:100-107`: if `!current_user_can('pay_for_order', $order_id) && !is_user_logged_in()`, WooCommerce renders `woocommerce_login_form()`. Streams users authenticate against WoWonder (`streams/requests.php:160-169`). **D003, D004 and D011 nowhere mention that the payment step depends on SSO having established a WordPress session.** That is a hard architectural dependency, currently unverified and unstated.
+
+3. **A silent-drop path survives into the new design.** `wow-pgb_init.php:479-503` resolves `wp_user_id`; on failure it **only `error_log`s and continues**. D005 requires the server to "validate" user mapping but does not require *aborting*. With no `customer_id`, billing email cannot be populated, and downstream fulfilment (`streams/wow-pgb_webhook.php:50,122` → `getUserIdByEmail()`) returns null — customer charged, nothing delivered, no error surfaced.
+
+**Revision required regardless of the verdict:** D003 must name the terminal WooCommerce surface explicitly (`order-pay` vs full checkout) and must state the session requirement for `pay_for_order`.
+
+### ADR-D004 — Browser is not transaction authority · **PASS**
+
+Correct, necessary, and correctly rejected as an alternative (A4, `:755-757`). INV-01 and AC-05 (`:1175-1177`, `:803-805`) are the right statements.
+
+**Minor revision:** D004 says the browser "SHALL NOT determine final payment state" (`:309`). Verified: WooCommerce's own `payment_complete()` is server-side and idempotent-guarded (`class-wc-order.php:157-158` gates on `PAYMENT_COMPLETE_STATUSES`). This is already correct as written — but the ADR should say so, because the current code's browser-dependency is in **fulfilment** (`wp_footer`, `wow-pgb_sync.php:509-532`), not in payment state, and the distinction matters for remediation scope.
+
+### ADR-D005 — Server-authoritative commercial data · PASS WITH REVISION
+
+**Correct:** INV-02, A3 rejection, and the "Open implementation requirement" (`:349-353`) are right.
+
+**Three revisions required:**
+
+1. **No rule for catalogue price vs Streams price.** D005 says the server "SHALL resolve and validate price". It does not say what happens when the WooCommerce catalogue price differs from the Streams product price — which is the *normal* case, and the REST path already silently resolves it in WooCommerce's favour (`class-wc-rest-orders-v2-controller.php:997-1002`). The ADR must state which price is authoritative and what Streams does with the delta, or "server-authoritative" is undefined.
+
+2. **WOOCS cannot do what §7.4 of the predecessor spec assumed.** WOOCS stores only base-relative rates (`classes/woocs.php:100-104, :2800`), has **no TTL** (`classes/cron.php:50-63`), and its `rate_plus` markup (`index.php:205-220`) makes `back_convert()` (`classes/woocs.php:4058`) **not the inverse** of `woocs_exchange_value()` (`:3458`). A cross-rate "snapshot" required for auditability does not exist in this data model. D005 must not delegate an impossible guarantee to BZJ-PGB-0340.
+
+3. **Silent for renewals.** WCS copies subscription line items verbatim into renewal orders (`includes/core/wcs-order-functions.php:248-269`) and those orders receive no `_woocs_order_rate` (`class-wc-subscriptions-data-copier.php:122,280-293`). D005 governs "final commercial data" without scoping it to initial purchase only. Renewal currency behaviour is undefined.
+
+**Also a live override path D005 does not close** (see §E-4).
+
+### ADR-D006 — Effect-level idempotency · **BLOCK**
+
+**B-01 is the fatal one, but two further blockers exist inside D006.**
+
+**B-01 — the subscription effect has no mechanism.** D006 requires idempotency for *"subscription creation/activation"* (`:368`) and the §19 authority table assigns Subscription to WooCommerce Subscriptions (`:612`). **No decision states how the subscription is created.** Verified installed WCS 8.6.0:
+
+- `WC_Subscriptions_Checkout::process_checkout()` early-returns unless the cart contains a subscription — `includes/core/class-wc-subscriptions-checkout.php:75`
+- iterates `WC()->cart->recurring_carts` — `:101`
+- hooked **only** on `woocommerce_checkout_order_processed` (`:24`) and `woocommerce_store_api_checkout_order_processed` (`:27`)
+
+An order created by D003's native API **never fires either hook**. Therefore the effect D006 mandates **never occurs**. Deferring this to open item 5 (§32, `:1225`, "Exact subscription lifecycle hooks/APIs") is not a deferral — it is the architecture's single largest unspecified mechanism, and each available escape has a different blast radius:
+
+- synthesise a cart and fire checkout hooks → re-triggers AffiliateWP's native `add_pending_referral()` (`includes/integrations/class-woocommerce.php:66`) and Recurring Referrals; duplicate-order risk;
+- `wcs_create_subscription()` (`includes/core/wcs-functions.php:157`) → defaults to `pending` (`:162`) and creates **no line items or totals** (`:222-259`); renewals break;
+- keep `POST /subscriptions` with `status=active` (`wow-pgb_sync.php:1685, :406`) → preserves the browser-triggered parallel engine the ADR claims to eliminate.
+
+**B-06 — the effect idempotency key cannot be enforced at the AffiliateWP boundary.** D006 requires `affiliate:{intent_uuid}` semantics. Verified: `affiliate_wp_referrals` has **no unique key** on `(reference, context)` — only `PRIMARY KEY (referral_id)` and `KEY affiliate_id` (`includes/class-referrals-db.php:1318-1342`). And `affwp_add_referral()` performs **no** dedupe (`includes/referral-functions.php:277-299`; the only guard is per-`visit_id`, which the current code never passes). The key can only be enforced by BZJ-PGB's own store — which is acceptable, but D006 must say so, and must say what happens when BZJ-PGB's store and AffiliateWP's table disagree.
+
+**B-07 — retry is itself a financial hazard for three installed add-ons, and D006 assumes it is safe.** Verified:
+
+- **Recurring Referrals** has no idempotency guard on `woocommerce_subscription_renewal_payment_complete` and uses `insert_referral()`, bypassing the reference guard (`affiliate-wp-recurring-referrals/integrations/class-woocommerce.php:31-128`).
+- **Lifetime Commissions** `add()` has no dedupe and the table has no unique key on `affwp_customer_id` (`affiliate-wp-lifetime-commissions/includes/class-lifetime-commissions-db.php:113-158, 272-281`); the caller guard keys on `affwp_customer_id` **alone** (`integrations/class-base.php:618`). A retry can create a second lifetime row, after which affiliate resolution becomes non-deterministic (`wow-pgb_sync.php:846-850`) — **a retry can permanently corrupt future attribution.**
+- **Multi-Tier** children share the parent's `reference` + `context` (`affiliatewp-multi-tier-commissions/includes/class-controller.php:307, 317`), so the current `LIMIT 1` duplicate check can match a `tiered_sale` row and silently skip the real referral.
+
+D006's principle — *"a retry of one failed effect cannot automatically repeat already-completed financial effects"* (`:399`) — is **true of BZJ-PGB's own effects and false of the affiliate stack it is retrying into.** The ADR must constrain the adapter, not only the orchestrator.
+
+### ADR-D007 — Recovery and reconciliation · PASS WITH REVISION
+
+**The principle is right:** identify the missing effect, retry that effect, never replay the transaction (`:418-422`). INV-06, INV-07, INV-08, AC-08/09/10 are correct statements.
+
+**B-08 — recovery of the most probable production failure is circular.** The single most likely live failure is the WooCommerce→Streams webhook being undeliverable (observed `curl: (6) Could not resolve host: buzzjuice.net` from the server). Under D007 that leaves the Streams effect incomplete and reconciliation Case C fires. **But recovering it requires WordPress→Streams reachability — the same path observed broken.** The architecture's remedy for its most probable failure requires the failed capability.
+
+The correct answer already exists in this repository and is **not in the ADR**: fulfil Streams state directly from WordPress against the WoWonder database via `get_wowonder_db()` (`shared/db_helpers.php:115`) — the mechanism `streams/jewel-affiliate-webhook.php` already uses to reach `Wo_Users`, and `wp-content/mu-plugins/bz-rebate.php:117-131` already loads shared helpers for. Under that design the webhook becomes an *optimisation*, not the mechanism. **D007 must require this or state an alternative.**
+
+**Further revisions:**
+- The six reconciliation cases have no scan predicate, lookback window, batch size, lock, cadence, owner or terminal state. D007 requires the *capability*; AC-10 requires it to be *demonstrable*. As written AC-10 is untestable.
+- The predecessor's Case B ("WC order exists, Payment intent missing") is undecidable under D001: if the intent is the primary orchestration identity, either the order predates the intent (a migration concern) or the intent can be lost (which contradicts D001). D007 carries this forward without deciding.
+- **No trigger runs when nothing happens.** With fulfilment moved off `wp_footer`, an abandoned `order-pay` produces no webhook, no browser page, and no event. Only the D012 worker can advance it. That makes D012 load-bearing, not optional — see B-09.
+
+### ADR-D008 — AffiliateWP ownership · PASS WITH REVISION
+
+**Correct and appropriately scoped:** *"competing payment-bridge trigger paths SHALL NOT independently process the same commission effect"* (`:449`) and *"may require consolidation or adaptation of existing AffiliateWP hooks without changing the intended commission semantics"* (`:463`). That is the right decision.
+
+**Revisions required:**
+
+1. **The competitor is not addressed.** The competing path is not only the bridge — it is **AffiliateWP's own native WooCommerce integration**: `Affiliate_WP_WooCommerce` registers `woocommerce_checkout_update_order_meta` (`:66`) and `woocommerce_order_status_completed`/`_processing` (`:78-79`) independently. The bridge registers `woocommerce_order_status_completed` at priority 999 (`wp-content/mu-plugins/buzzjuice-affwp-order-complete.php:34`) and is called inline four more times (`wow-pgb_sync.php:246, 455, 473, 495`). Up to **three** invocations per order. D008 says "BZJ-PGB owns orchestration" without stating what happens to the native registration — which is third-party code under `AGENTS.md` protection.
+
+2. **There is no reconciliation case for double-credit.** D007 lists discrepancies between intent/order/subscription/Streams/AffiliateWP/Jewel. **"AffiliateWP effect applied twice" is not among them.** A reconciliation design that cannot detect double-credit is incomplete for a system whose stated failure class is duplicate financial effects.
+
+3. **Consolidation is a change to protected code.** `AGENTS.md` declares AffiliateWP protected. Collapsing three invocation sites to one *is* a change to that surface. D008 implies the authority (`:463`) but the ADR must **explicitly authorise** it, or the implementation stage will be blocked by its own governance.
+
+4. **Defect the adapter must handle:** `affwp_add_referral()` silently zeroes `customer_id`, because its arg whitelist has no `customer` key (`includes/referral-functions.php:277-293`) and `setup_customer()` returns 0 without one (`includes/class-referrals-db.php:1246-1253, :267`). Every referral the bridge creates today carries `customer_id = 0`. Any adapter that reuses this function inherits the defect.
+
+### ADR-D009 — Jewel Affiliate isolation · PASS WITH REVISION
+
+**The decision is architecturally correct:** optional addon, core payment validity independent of it, own idempotency and recovery (`:471-491`). INV-05 and A8 are the right statements, and the `shared/payment-gateway/addons/` boundary is right.
+
+**Revisions required — the component does not exist.** `jewel_affiliate_process()` is defined at `streams/jewel-affiliate-webhook.php:29` and is **called from nowhere**. The file's own docblock (`:5`, `:17-18`) asserts it is invoked from the `completed` branch of `streams/wow-pgb_webhook.php`; that webhook contains no `include` and no call. Repo-wide grep returns only the definition, the docblock, and one documentation mention. `wp-content/mu-plugins/subscription-rebate.php` is **0 bytes**.
+
+Consequences:
+- D009 assigns a boundary to a component with no behaviour. The isolation property is **trivially true and untested**.
+- The predecessor spec nonetheless carries `jewel_affiliate_status` in the core intent (`BZJ-PGB-0040 §3`) and a reconciliation Case E. **D009 contradicts the schema that precedes it.** Either the column is removed or Jewel becomes core — the ADR must decide.
+- AC-12 (`:831-833`) is a criterion that cannot fail, and therefore cannot prove anything. See §F.
+- If Jewel is to be *built*, note the one genuinely correct pattern in the current codebase is there — `jewel_apply_rebate_credit()` (`jewel-affiliate-webhook.php:279-340`): check-before-write, real transaction, rollback on failure. **But its idempotency is a non-atomic check on a non-indexed `notes LIKE '%Rebate%'` predicate (`:287-303`)**, so it is not actually idempotent under concurrency. It is the best code in the bridge and still does not satisfy INV-04.
+
+### ADR-D010 — Controlled staged migration · **BLOCK**
+
+**B-10.** The staging sequence (`:509-531`) and the rollback principle (`:1055-1080`) are both *principles*, not mechanisms. Four verified hazards:
+
+1. **No routing mechanism exists.** D010 says the old bridge "can remain available as a controlled fallback" (`:535`). There is no feature flag, no per-transaction routing, no cutover watermark, no dual-read. During coexistence `wow-pgb_init.php` still writes `Wo_Payment_Transactions` and still calls `POST /wc/v3/orders` — **two systems writing to one table that has no primary key and no unique constraint** (`streams/wowonder.sql:4874-4883`). There is no way to tell which system produced a row.
+
+2. **Rollback re-enables a known unguarded financial write.** Falling back to the legacy path restores `UPDATE Wo_Users SET wallet = wallet + $amount` with no lock, no idempotency and no transaction (`streams/wow-pgb_webhook.php:175-185`), and restores browser-triggered subscription creation from `wp_footer` (`wow-pgb_sync.php:509-532`). Any intent created under the new system and then fulfilled by the old system has **no protection at all**. The ADR's rollback principle is correct in principle; **the fallback it names is not a safe fallback.**
+
+3. **Historical orphans are unowned and undetectable.** Every `Wo_Payment_Transactions` row not written by the new system is a potential already-charged customer. Case A ("intent exists, order missing") is only detectable *in the new table*, so **all historical orphans are permanently un-detectable by the new reconciliation**. D010 has no backfill step.
+
+4. **The repo schema is not authoritative.** The bridge writes `order_id`, `currency_code`, `payment_status`, `payment_method`, `woo_order_id` — **none of which exist in `streams/wowonder.sql:4874-4883`**. Any migration step that trusts the committed schema file will be wrong. This must be resolved before D010 can be specified.
+
+### ADR-D011 — Security and signed handoff · PASS WITH REVISION
+
+**Correct in direction** — signed, time-bounded, replay-resistant, incapable of changing commercial values (`:543-566`). D007/D004's threat model is right.
+
+**Revisions required:**
+
+1. **The replay defence already exists in this codebase and the ADR reinvents it weakly.** `shared/sso_bridge_helpers.php:398` implements HS256 `hash_hmac`; `:426-428` verifies with `hash_equals`. And `streams/ww-sso-bridge.php:158` documents the required claim set: *"Validate JWT signature, claims, exp, nbf, iss, aud, **jti (replay)**"*. The predecessor spec's *"nonce"* is a weaker name for `jti`. D011 should mandate reuse of the established helper and the `exp`/`nbf`/`iss`/`aud`/`jti` claim set — a reusable, already-reviewed mechanism — instead of specifying an undefined nonce.
+
+2. **The signature is not the right control for the actual exposure.** The handoff binds an intent. But `intent_uuid` + valid signature lets WordPress **reconstruct the payment URL** via `get_checkout_payment_url()` (`class-wc-order.php:1924`), and that URL carries the **order key** — which is the sole authorisation token at `order-pay` (`class-wc-shortcode-checkout.php:88-96`). Replay protection must therefore bind to the **order-key lifecycle**, not only to the handoff. D011 is silent.
+
+3. **The session dependency is unstated (see D003).** D011 requires "validate intent ownership" (`:562`), but ownership is only enforceable against a **WordPress** identity, and the browser may arrive with no WordPress session. Ownership validation is currently delegated, invisibly, to SSO.
+
+4. **"Eliminate hardcoded secrets" is not a rotation instruction.** The live webhook secret is hard-coded (`streams/wow-pgb_webhook.php:29`) and the admin-configurable `wow_webhook_secret` (`streams/requests.php:217-219`) is **never read by anything** — rotating it in the UI has no effect. A leaked secret stays valid unless it is *rotated*. D011 must require rotation and a procedure, not only removal.
+
+5. **Security requirements do not enumerate the existing violations.** Verified current leaks: full raw `$_POST` logged (`wow-pgb_init.php:42`); full AffiliateWP snapshot including `customer_email` and `http_referer` logged (`:704`); WoWonder `access_token` payloads reachable via `log_error()` (`wow-pgb_sync.php:1628-1634`, `:1750`); TLS verification defaulted **off** (`wow-pgb_init.php:436-437`, `wow-pgb_sync.php:679-680`); `affiliate-wp.php:32-78` force-writes a licence key on every `init`. A section that says "avoid exposing sensitive payment data in logs" without enumerating these does not authorise their removal.
+
+6. **"Parameterised queries through the approved DB helper" is not a safety property** while the helper can return `false` (`shared/db_helpers.php:79-86`). D011 must require an explicit fail-closed connection contract.
+
+### ADR-D012 — Dedicated recovery worker · PASS WITH REVISION
+
+**Correct as a capability requirement** (`:578-598`), and correctly leaves the scheduler open. INV-05 and AC-10 depend on it.
+
+**Revisions required — the "open scheduler" is more constrained than the ADR implies:**
+
+1. **The scheduler must produce an event when nothing else does.** This is the load-bearing requirement identified in D007. WP-Cron is traffic-driven; `DISABLE_WP_CRON` is **not defined anywhere in the repository** (`wp-config.php` is gitignored at `.gitignore:69`; `wp-config-sample.php` does not define it) and is therefore unverified. The repository's robust precedent is OS crontab (`streams/cron-job.php`, documented `*/5 * * * *` at `streams/admin-panel/pages/cronjob_settings/content.phtml:22, 28`).
+
+2. **Action Scheduler is installed, in use, and should be the default candidate.** Bundled in WooCommerce at `wp-content/plugins/woocommerce/packages/action-scheduler/action-scheduler.php:8` (v4.0.0), already used by first-party code (`bzj-dashboard-todo.php:1898, 1941`, group `buzzjuice-todo`), and already used by WCS for renewals (`includes/core/class-wcs-action-scheduler.php:265`). Leaving it as one option among four, with no decision criterion, risks the worker being built on the least reliable option for lack of analysis.
+
+3. **The worker needs a retry contract.** The only production-grade precedent in this repository is `bzj-connections-sync.php`: `MAX_ATTEMPTS=12` (`:24`), `next_attempt_at`, `last_error`, `KEY queue(status, next_attempt_at)` (`:93-112`), backoff `min(3600, max(30, attempts*30))`, terminal `status='failed'` (`:906-930`), and per-item `GET_LOCK` (`:131-141`). D012 specifies none of this. Without a terminal state there is no operational definition of "done", and AC-09/AC-10 are untestable.
+
+---
+
+## B. Architecture blockers
+
+Only issues that prevent approval.
+
+| ID | Blocker | Why it blocks |
+|---|---|---|
+| **B-01** | **The subscription effect has no mechanism.** WCS 8.6.0 creates subscriptions only from a cart (`class-wc-subscriptions-checkout.php:75, 101, 24, 27`). D003 creates the order natively, so no subscription is ever created. D006 nonetheless mandates subscription idempotency and §19 assigns authority to WCS. | The architecture mandates an effect it has no path to produce. Deferred to open item 5, but it is not an implementation detail — it is a missing architectural decision. |
+| **B-02** | **IAPD boundary is unimplementable as declared.** `get_iapd_db_conn()` has zero callers and fails silently (`shared/db_helpers.php:79-86`); no migration precedent exists and `dbDelta` cannot target IAPD (`bzj-connections-sync.php:70-114` is `$wpdb`-only); cross-database atomicity is unaddressed; D002 introduces a new silent single point of failure; `GET_LOCK` cannot span the critical section. | Four of the five failure modes are silent. INV-09 and AC-02 cannot be demonstrated. |
+| **B-03** | **Recovery of the most probable production failure is circular.** WordPress→Streams undeliverability is the observed live failure; D007's remedy requires the same path. | The architecture's recovery model fails against its own primary failure class. A direct WordPress→WoWonder fulfilment path (via `get_wowonder_db()`, `shared/db_helpers.php:115`) exists in the codebase and is absent from the ADR. |
+| **B-04** | **No reconciliation case for duplicate financial effects.** D007 lists missing-effect discrepancies only. Duplicate referral, duplicate wallet credit, duplicate lifetime customer, duplicate subscription — none are detectable by the specified reconciliation. | The ADR's stated failure class is duplicate financial effects (`:94-104`); its detection capability does not cover them. INV-04 is unverifiable. |
+| **B-05** | **The approval gate is unevidenced.** ADR §2 records `0325 Challenge Closure: PASS/CLOSED` and *"None identified at 0325 closure"*. The referenced artifact contains no challenge, no findings, no objections and no resolutions. | Approval would rest on a closure that does not exist. BZJ-PGB-0324 objections (Kilo, GitHub) have never been dispositioned. |
+| **B-06** | **AffiliateWP idempotency key is unenforceable at the boundary.** `affiliate_wp_referrals` has no unique key on `(reference, context)` (`class-referrals-db.php:1318-1342`); `affwp_add_referral()` performs no dedupe (`referral-functions.php:277-299`). | D006/AC-07/AC-11 cannot be satisfied through the named domain authority. |
+| **B-07** | **Migration has no routing mechanism and an unsafe fallback.** Two systems write to an unkeyed `Wo_Payment_Transactions`; rollback re-enables unguarded `UPDATE Wo_Users SET wallet = wallet + $amount` (`streams/wow-pgb_webhook.php:176`) and `wp_footer` fulfilment (`wow-pgb_sync.php:509-532`); historical orphans are undetectable; `streams/wowonder.sql` has already drifted from the live table. | AC-14 and AC-15 cannot be demonstrated, and the named fallback is more dangerous than the thing being rolled back from. |
+| **B-08** | **Duplicate-subscription and duplicate-order paths are unaddressed.** WooCommerce has no order-creation idempotency at all (`class-wc-rest-orders-controller.php:277-281`); the existing `retry_with_backoff` re-POSTs `/subscriptions` after a timeout where the first POST may have committed (`wow-pgb_sync.php:435-442, 1727-1742`), and the REST path has WCS's stale-subscription cleanup (`class-wc-subscriptions-checkout.php:84-94`) available to it. | INV-03 is asserted but no mechanism enforces it. |
+
+---
+
+## C. Architectural revisions required
+
+These change the **architecture**, not the implementation.
+
+**C-01 — Add a decision for the subscription creation mechanism (closes B-01).** ADR-D013 must choose explicitly, and state the rejected alternatives:
+- (a) full WooCommerce checkout carrying the intent — subscription works natively, but Streams must hand off a *cart*, not an intent, and D003's "native order creation" must be narrowed;
+- (b) synthesise cart + recurring cart and fire `woocommerce_checkout_order_processed` — must be accompanied by an explicit list of every integration that hook activates, and a decision on the AffiliateWP native collision;
+- (c) `wcs_create_subscription()` with explicit items and totals — must state who owns renewal totals and next-payment scheduling;
+- (d) retain `POST /subscriptions` — then ADR-D004's rejection of browser-dependent fulfilment is **false for subscriptions**, and the ADR must say so.
+
+**C-02 — Make the IAPD boundary fail-closed and explicitly non-atomic (closes B-02).** Require: a connection health check with a loud failure mode; a statement that cross-database atomicity is impossible and which store is authoritative on partial failure; a migration mechanism other than `dbDelta`; and either co-hosting confirmation or removal of the cross-connection lock requirement.
+
+**C-03 — Add a direct WordPress→Streams fulfilment path (closes B-03).** Streams-side entitlement must not depend on WordPress→Streams HTTP reachability. Specify `get_wowonder_db()` as the fulfilment transport and demote the webhook to an optimisation. Without this, the architecture cannot recover from its own most likely failure.
+
+**C-04 — Extend reconciliation to duplicate and drift detection (closes B-04).** Add cases: effect applied twice; effect applied to the wrong entity (affiliate A vs B); intent with no order after N; order paid with no intent; lifetime-customer multiplicity.
+
+**C-05 — Decide the order↔intent uniqueness mechanism (closes B-08).** INV-03 requires a unique constraint in the BZJ-PGB store, plus a declared source of truth when WooCommerce order meta and the BZJ-PGB record disagree.
+
+**C-06 — Specify migration routing and a safe rollback (closes B-07).** Feature flag; cutover watermark; explicit statement that the legacy path is **not** a safe fallback and that a rollback is transaction-aware only; a backfill/disposition rule for historical `Wo_Payment_Transactions` rows; a rule that `streams/wowonder.sql` is not authoritative.
+
+**C-07 — Remove `jewel_affiliate_status` from the core intent, or declare Jewel core.** D009 and the predecessor schema disagree. Also record that Jewel currently has no implementation, so AC-12 must be rewritten as a build-time criterion.
+
+**C-08 — Add a retry contract to D012** — attempts, backoff, terminal state, lock — and a default scheduler selection with stated criteria (closes the D012 revision above).
+
+**C-09 — Reconcile D008 with `AGENTS.md` protection.** Either authorise consolidation of the AffiliateWP invocation sites explicitly, or record that it is prohibited and specify an alternative duplicate-suppression layer.
+
+**C-10 — Produce the missing Architecture Challenge Closure record**, classifying each BZJ-PGB-0324 objection as resolved / unresolved / accepted-risk, with the required ADR constraints derived from it (closes B-05).
+
+---
+
+## D. Implementation questions (explicitly *not* blockers)
+
+Listed to keep the blocker list honest.
+
+- Exact IAPD SQL DDL, column types, index names.
+- Whether `wc_create_order()` or direct `new WC_Order()` is used, and how items are added (`includes/abstracts/abstract-wc-order.php:1982`).
+- Whether the order is created under HPOS or CPT storage (option-dependent; both data stores exist in11.1.0).
+- Exact choice of `get_checkout_payment_url()` variant and endpoint slug.
+- Which GHS-bridge currency path is used, and whether a rate snapshot is persisted.
+- Log file names, rotation, retention.
+- Admin UI for manual reconciliation.
+- Alerting thresholds.
+- Whether Action Scheduler group naming reuses `buzzjuice-todo` or introduces a new group.
+- Exact `WC_Order::payment_complete()` eligibility handling for the product set in use.
+
+---
+
+## E. Repository contradictions
+
+**E-01 — The only first-party `woocommerce_order_status_completed` hook is the AffiliateWP bridge.**
+`wp-content/mu-plugins/buzzjuice-affwp-order-complete.php:34` (priority 999). There is **no** first-party hook on `woocommerce_payment_complete`, and **no** first-party hook performing Streams wallet/pro fulfilment in WordPress at all. **All Streams-side fulfilment is in `streams/wow-pgb_webhook.php`, browser-independent but network-dependent; and all WooCommerce-side fulfilment is in `wp_footer`, browser-dependent.** Any architecture claim that "the browser is not the authority" must replace both, not one. D004 is approved; D003 and D007 must carry the consequence.
+
+**E-02 — `register_activation_hook` on a sub-file.**
+`wow-pgb_sync.php:192` registers on `__FILE__` = `wow-pgb_sync/wow-pgb_sync.php`, not the plugin main file. WordPress never fires it. Consequence: the products whose prices govern the payment **were not created by this code**, so their actual prices are unknown — which is why B-01's "total = 0 → order unpayable" cannot be dismissed.
+
+**E-03 — `Wo_Payment_Transactions` cannot serve as an orchestration anchor.**
+`streams/wowonder.sql:4874-4883`: no `PRIMARY KEY`, no `AUTO_INCREMENT`, no unique key; `amount decimal(11,0)` — **zero decimals**, truncating fractional currency. Same defect in `Wo_Purchases`, `Wo_UserOrders`, `Wo_Funding_Raise`. Also, the table has already drifted: the bridge writes six columns absent from the dump. D010 must not trust the committed schema.
+
+**E-04 — Live commercial-authority override paths D005 does not close.** Beyond the browser:
+
+- **WOOCS mutates prices globally.** `raw_woocommerce_price()` (`classes/woocs.php:1950`) is attached to every product CRTP getter (`:294-305, 334-343`) and honours request-scoped state via `$_REQUEST['woocs_raw_woocommerce_price_currency']` (`:1963-1965`). Any server-side price read inside a request can be silently converted.
+- **WOOCS fixes are shipped as a local modification.** `woocommerce-currency-switcher/classes/storage.php:32-52` is a patched file (session `save_path` guard), i.e. the plugin is not stock. D005 assumes a vendor component.
+- **Fixed-price overrides bypass conversion entirely** (`classes/woocs.php:1981-1999`, shipping `:3562-3568`, coupons `:5192-5194`), so a fixed-price path and a converted path can disagree inside one order.
+- **Coupon loading mutates amounts**: `woocommerce_coupon_loaded` → `woocommerce_coupon_loaded()` (`:288`, `:5173`) converts `amount`/`min_spend`/`max_spend` (`:5190`). A coupon on the order changes the authoritative total outside the intent's snapshot.
+- **`rate_plus` markup changes the rate itself** (`index.php:205-220`), so an "authoritative rate" is not the FX rate.
+- **Stale product metadata:** the subscription period/interval/length the bridge applies comes from Streams config (`wow-pgb_init.php:520-537`), **not** from the WooCommerce variation, even though the variation carries `_subscription_period` / `_subscription_interval` meta (`wow-pgb_sync.php:99-130`). Two sources of truth for subscription configuration already exist in the repository; D005 does not adjudicate them.
+
+**E-05 — `wp-content/mu-plugins/bz-rebate.php` already occupies a share of the payment surface.** It hooks `woocommerce_cart_calculate_fees` (`:213`), `woocommerce_before_calculate_totals` (`:214`), `woocommerce_checkout_create_order` (`:215`), `woocommerce_get_cart_item_from_session` (`:217`), `woocommerce_is_purchasable` (`:218`) and writes `bz_rebate_credit_cents` / `bz_wow_user_id` order meta (`:563-564`). This is a second, independent price-and-meta authority on the same orders the new bridge will create. **The ADR does not mention it.**
+
+**E-06 — `wp-content/mu-plugins/bzj-redirect-to-checkout.php`** is already "HPOS-safe order/session handling" (`:13`). Its interaction with a new handoff endpoint is unassessed.
+
+**E-07 — Existing generic global function names** in the file the new bridge must coexist with: `make_curl_request` (`wow-pgb_sync.php:666`), `retry_with_backoff` (`:1727`), `log_error` (`:1749`), `get_subscription_metadata` (`:621`). Unguarded, non-prefixed, globally scoped. A new shared/payment-gateway namespace must not redeclare them.
+
+---
+
+## F. Acceptance-criteria weaknesses
+
+Criteria that cannot prove the architecture works as written.
+
+| AC | Weakness |
+|---|---|
+| **AC-02** | *"tables are **designed for** `koware_iapd_db`"* — tests a document, not a system. Cannot detect the silent-`false` connection or the absent migration path (B-02). |
+| **AC-06** | *"Repeated requests cannot create duplicate WooCommerce orders"* — unfalsifiable as stated without specifying the concurrent-request test and the lock. AC-07 has the same problem. |
+| **AC-12** | **Vacuously true.** Jewel has no implementation (`jewel-affiliate-webhook.php:29` is never called). A criterion that cannot fail proves nothing (D009). |
+| **AC-10** | *"can identify inconsistent … states"* — no predicate, no window, no cadence. Cannot be objectively passed or failed (D007). |
+| **AC-13** | *"replay-resistant"* — undefined without the claim set (`exp`/`nbf`/`iss`/`aud`/`jti`) and the order-key lifecycle constraint (D011). |
+| **AC-14 / AC-15** | Cannot be demonstrated because no routing mechanism and no safe fallback exist (B-07). |
+| **AC-16** | *"correlated across all relevant components through the Payment Intent identity"* — but today the only correlation key into WooCommerce is a **free-text order meta** (`wow_order_id`), and into Streams a `uniqid()` string with no unique constraint. There is no reverse index, so correlation in the Streams→intent direction is currently impossible. |
+| **AC-04** | Cannot be evaluated at all while catalogue prices are unknown (B-01/E-02) and no catalogue-vs-Streams precedence rule exists. |
+
+**Missing criteria entirely:** renewal/subscription-currency correctness; duplicate-effect *detection*; historical-orphan disposition; behaviour when `wp_user_id` is unmapped; behaviour when IAPD is unreachable.
+
+---
+
+## G. Migration / rollback risks
+
+1. **Two writers, one unkeyed table.** During coexistence, legacy `wow-pgb_init.php` and the new bridge both write `Wo_Payment_Transactions`, which has no primary key and no unique constraint (`wowonder.sql:4874-4883`). Provenance is unrecoverable after the fact.
+2. **Rollback re-arms an unguarded financial write.** `UPDATE Wo_Users SET wallet = wallet + $amount` with no lock, no idempotency, no transaction (`streams/wow-pgb_webhook.php:175-185`). A rollback executed after even one replayed webhook delivery double-credits a customer.
+3. **Rollback re-arms browser-triggered fulfilment.** `wp_footer` → `wowonder_redirect_after_purchase` → `POST /subscriptions` with `status=active` (`wow-pgb_sync.php:406, 509-532`). In-flight intents fulfilled by the legacy path get no subscription idempotency at all.
+4. **`retry_with_backoff` can sleep ~300 s inside a page render** (`wow-pgb_sync.php:318-356, 1727-1742`) and can exceed `max_execution_time`, dying mid-fulfilment with **no state recorded anywhere**. Any coexistence test that exercises this path can produce silent orphans.
+5. **Historical orphans are undetectable by the new system.** Case A requires an intent row. Every pre-existing `Wo_Payment_Transactions` row that represents a charged-but-unfulfilled customer is outside the new reconciliation's reach, permanently.
+6. **`streams/wowonder.sql` is not authoritative.** Six columns the bridge writes are absent from the dump. Any migration or backfill script trusting it will corrupt data.
+7. **`decimal(11,0)` on `Wo_Payment_Transactions.amount`.** Fractional currency truncates on write. Any backfill that writes precise amounts to that table will silently lose precision.
+8. **The live webhook secret is hard-coded** (`streams/wow-pgb_webhook.php:29`) and the configurable `wow_webhook_secret` is dead (`streams/requests.php:217-219`). Until rotation is performed, the secret remains in version control history **and** the admin UI rotation path is non-functional — a migration runbook must include rotation, not only replacement.
+9. **No production schema visibility.** `DISABLE_WP_CRON` is unverified and `wp-config.php` is not in the repository. Migration monitoring cannot be designed against an unknown cron configuration.
+
+---
+
+## H. Final determination
+
+# BLOCK
+
+**Basis.** Not implementation inconvenience — five of the eight blockers are missing or contradictory *architecture*, verifiable in the ADR text against installed source:
+
+- **B-01** — the architecture mandates a subscription effect it provides no path to produce, because WCS 8.6.0 creates subscriptions exclusively from a cart and D003 creates the order natively.
+- **B-02** — the IAPD boundary is declared non-negotiable on a connection helper with zero prior callers that fails silently, with no migration mechanism available, and with unaddressed cross-database atomicity and a lock that cannot span the critical section.
+- **B-03** — recovery of the most probable live failure requires the capability observed to be broken.
+- **B-04** — reconciliation cannot detect the failure class the ADR exists to eliminate.
+- **B-07** — the named fallback path is less safe than the system it would replace.
+
+Compounding these, **B-05**: the ADR's own gate is recorded as `PASS / CLOSED` against an artifact that contains no challenge, no findings and no resolutions. My BZJ-PGB-0324 challenge findings — the amount-overwrite chain, the dead Jewel component, the browser-bound `wp_footer` fulfilment, the unguarded wallet credit, the missing cURL timeout — were never formally dispositioned, and several are load-bearing for the decisions above.
+
+**What is sound and should be preserved.** ADR-D001 (durable intent as orchestration identity, with correct authority boundaries), D004 (browser is not transaction authority), D009 (Jewel as optional addon), the rejection list A1–A9 (each is correctly reasoned), the rollback *principle* at §27, and the §29 insistence that identity, commercial snapshot, payment, fulfilment, effect and recovery state must not collapse into one status field. That is a real foundation. The failures above are in the seams between decisions, not in the thesis.
+
+**Path to APPROVE.** Resolve C-01 … C-10. C-01 (subscription mechanism), C-03 (direct WordPress→Streams fulfilment) and C-05/C-06 (order↔intent uniqueness, migration routing and safe rollback) are the minimum set that converts this from BLOCK to reviewable. C-02, C-04, C-07, C-08, C-09, C-10 are required for a defensible approval record.
+
+Two evidence items remain outstanding regardless of the ADR's disposition and should be closed before BZJ-PGB-0340 begins: the actual `_price`/`_regular_price` of every `wow-pgb_*` product and variation (E-02), and whether AffiliateWP's native WooCommerce integration is enabled in the live `affwp_settings` (which decides whether the double-credit vector is 2× or 3×).
+
+**No production code changes were made by this review. No ADR text was modified. No database, migration or configuration change was proposed beyond architecture-level constraints.**
