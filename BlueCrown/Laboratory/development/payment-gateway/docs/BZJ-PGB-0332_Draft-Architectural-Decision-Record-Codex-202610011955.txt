@@ -1,0 +1,1388 @@
+# BZJ-PGB-0332 — Draft Architectural Decision Record
+
+**Project:** Buzzjuice Streams Payment Gateway Bridge
+**Architecture:** BZJ-PGB
+**Stage:** Draft Architectural Decision Record
+**Predecessor Gate:** BZJ-PGB-0325 — Architecture Challenge Closure
+**Preparation Guide:** BZJ-PGB-0331 — Architectural Decision Record Preparation Guide
+**Status:** **DRAFT — PROPOSED — NOT APPROVED**
+**Production Code:** **MUST REMAIN UNTOUCHED**
+**Next Gate:** Independent ADR Review → Reconciliation → BZJ-PGB-0330 Approval Decision
+
+---
+
+# 1. Document Purpose
+
+This document converts the surviving architecture from the completed Architecture Challenge into a formal set of proposed architectural decisions, boundaries, consequences, constraints, acceptance criteria and implementation strategy.
+
+It is not an implementation specification.
+
+It is not authorization to modify production code.
+
+It is not final architectural approval.
+
+The authoritative challenge baseline is:
+
+**BZJ-PGB-0325 — Architecture Challenge Closure**
+
+The 0325 closure established that the proposed architecture survived destructive challenge with no remaining architecture-blocking objection and is therefore eligible for formal ADR consideration.
+
+The BZJ-PGB-0331 preparation guide establishes the required transition from challenge closure into:
+
+1. Decision Ledger;
+2. architectural thesis;
+3. draft decisions and boundaries;
+4. consequences, constraints and acceptance;
+5. implementation strategy;
+6. independent review;
+7. reconciliation;
+8. final approval or blockage.
+
+The preparation guide explicitly requires the ledger to begin in `PROPOSED` status and requires independent review before approval.
+
+---
+
+# 2. Governance Status
+
+| Item                             | Status                                                     |
+| -------------------------------- | ---------------------------------------------------------- |
+| BZJ-PGB-0325 Challenge Closure   | **PASS / CLOSED**                                          |
+| Architecture Challenge           | **SURVIVED**                                               |
+| Architecture-blocking objections | **None identified at 0325 closure**                        |
+| Draft ADR                        | **PROPOSED**                                               |
+| Decision Ledger                  | **PROPOSED**                                               |
+| Independent ADR review           | **PENDING**                                                |
+| Formal ADR approval              | **PENDING**                                                |
+| Implementation authorization     | **NOT GRANTED**                                            |
+| Production code changes          | **PROHIBITED**                                             |
+| Next gate                        | **Independent Review → Reconciliation → Approval/Blocked** |
+
+The distinction is deliberate:
+
+> **0325 proved that the architecture survived challenge. 0332 defines what the proposed architecture actually is. Only the subsequent approval gate can make those decisions approved.**
+
+---
+
+# 3. Source and Evidence Baseline
+
+The ADR is based on:
+
+* BZJ-PGB-0325 Architecture Challenge Closure;
+* BZJ-PGB-0331 Architectural Decision Record Preparation Guide;
+* preceding BZJ-PGB architecture analysis;
+* Architecture Verification reports;
+* independent challenge findings;
+* repository evidence gathered during the preceding architecture phases.
+
+The 0325 closure established the surviving architecture and its mandatory constraints. The 0331 guide specifically requires those constraints to be converted into testable architectural decisions rather than merely carrying forward statements such as "native WooCommerce is better."
+
+---
+
+# 4. Architectural Problem
+
+The existing payment bridge has multiple independent failure boundaries.
+
+The current model places significant responsibility on:
+
+* synchronous Streams-to-WooCommerce HTTP communication;
+* client/browser continuity;
+* transient request state;
+* downstream callbacks;
+* non-durable fulfilment;
+* and effect processing without sufficient independent idempotency.
+
+This permits failure modes including:
+
+* payment initiation failure;
+* orphaned transactions;
+* duplicate order creation;
+* browser-abandoned fulfilment;
+* paid-but-unfulfilled transactions;
+* duplicate downstream effects;
+* partial fulfilment;
+* difficult recovery;
+* and insufficient transaction-level forensic correlation.
+
+The architecture therefore needs to change from a **request-oriented payment bridge** into a **durable transaction orchestration system**.
+
+---
+
+# 5. Architectural Thesis
+
+The proposed architectural thesis is:
+
+> **Buzzjuice Payment Gateway Bridge SHALL use a durable Payment Intent orchestration layer stored in `koware_iapd_db`, with WordPress/WooCommerce as the authoritative payment execution environment, a signed browser handoff between Streams and WordPress, server-authoritative commercial data, independently idempotent fulfilment effects, and asynchronous recovery/reconciliation.**
+
+This thesis is the central proposition being reviewed by Kilo, GitHub/Copilot and Jules.
+
+---
+
+# 6. Decision Ledger
+
+The following permanent decision identifiers are established for this ADR.
+
+**All decisions remain `PROPOSED` until the formal BZJ-PGB-0330 approval gate.**
+
+| ID           | Proposed Decision                                          | Status   |
+| ------------ | ---------------------------------------------------------- | -------- |
+| **ADR-D001** | Durable Payment Intent architecture                        | PROPOSED |
+| **ADR-D002** | `koware_iapd_db` is the new BZJ-PGB orchestration database | PROPOSED |
+| **ADR-D003** | Native WordPress/WooCommerce execution                     | PROPOSED |
+| **ADR-D004** | Browser is not transaction authority                       | PROPOSED |
+| **ADR-D005** | Server-authoritative commercial data                       | PROPOSED |
+| **ADR-D006** | Effect-level idempotency                                   | PROPOSED |
+| **ADR-D007** | Recovery and reconciliation are mandatory                  | PROPOSED |
+| **ADR-D008** | AffiliateWP ownership and controlled orchestration         | PROPOSED |
+| **ADR-D009** | Jewel Affiliate isolation                                  | PROPOSED |
+| **ADR-D010** | Controlled staged migration                                | PROPOSED |
+| **ADR-D011** | Security and signed-handoff model                          | PROPOSED |
+| **ADR-D012** | Dedicated recovery-worker architecture                     | PROPOSED |
+
+### Ledger governance
+
+These identifiers are permanent.
+
+An identifier SHALL NOT be reused for another decision.
+
+If a decision is later changed, superseded or rejected:
+
+* the original ID remains historically recorded;
+* its status is changed appropriately;
+* and a new decision ID is created when a materially different decision replaces it.
+
+The ledger is therefore an architectural history, not merely a current-state checklist.
+
+---
+
+# 7. ADR-D001 — Durable Payment Intent Architecture
+
+## Decision
+
+The BZJ-PGB SHALL introduce a durable Payment Intent representing the Buzzjuice transaction independently of the browser request and independently of the WooCommerce order.
+
+The Payment Intent SHALL be the primary orchestration identity for a payment transaction.
+
+## Intent responsibilities
+
+A Payment Intent is expected to represent, at minimum:
+
+* intent UUID;
+* originating platform;
+* originating user;
+* WordPress user mapping;
+* transaction type;
+* product reference;
+* commercial snapshot/reference;
+* source currency;
+* authoritative currency;
+* amount;
+* lifecycle state;
+* WooCommerce order association;
+* timestamps;
+* expiration;
+* idempotency information;
+* recovery information;
+* and correlation information.
+
+The exact physical schema is deliberately deferred to the database/migration specification.
+
+## Boundary
+
+The Payment Intent is an orchestration object.
+
+It SHALL NOT replace:
+
+* WooCommerce's order;
+* WooCommerce's payment state;
+* WooCommerce Subscriptions' subscription state;
+* Streams' existing financial records;
+* AffiliateWP's referral records.
+
+Each system retains ownership of its own native records.
+
+## Consequence
+
+The bridge gains a durable transaction anchor.
+
+Failure of one downstream operation no longer destroys the identity of the transaction.
+
+---
+
+# 8. ADR-D002 — IAPD Database Boundary
+
+## Decision
+
+All new BZJ-PGB orchestration tables SHALL be created in:
+
+`koware_iapd_db`
+
+This is the authoritative database boundary for newly introduced Payment Intent state.
+
+## Existing databases
+
+Existing system databases remain authoritative for their existing domains:
+
+* WordPress/WooCommerce → existing WordPress database;
+* Streams → existing Streams database;
+* Social → existing Social database;
+* IAPD → `koware_iapd_db`.
+
+Existing tables may be modified where required by an approved migration design.
+
+New BZJ-PGB orchestration state SHALL NOT be placed arbitrarily into existing platform databases.
+
+## Boundary
+
+The IAPD database is not a replacement for WooCommerce or Streams databases.
+
+It is the durable orchestration boundary.
+
+## Consequence
+
+Cross-system payment state gains a dedicated home without requiring the existing Streams transaction table to become a cross-platform workflow engine.
+
+---
+
+# 9. ADR-D003 — Native WordPress/WooCommerce Execution
+
+## Decision
+
+WooCommerce order creation and payment orchestration SHALL occur within the WordPress execution environment using native WooCommerce APIs.
+
+The critical payment-initiation path SHALL NOT depend on a Streams-to-WordPress HTTP API call to create the WooCommerce order.
+
+## Prohibited critical-path dependency
+
+The architecture SHALL NOT depend on:
+
+```text
+Streams
+  ↓
+self-referential HTTP/cURL
+  ↓
+WooCommerce REST API
+  ↓
+Order
+```
+
+for its primary order-creation mechanism.
+
+## Proposed path
+
+```text
+Streams
+  ↓
+Payment Intent
+  ↓
+signed handoff
+  ↓
+WordPress
+  ↓
+native WooCommerce APIs
+  ↓
+WooCommerce Order
+```
+
+## Consequence
+
+The architecture eliminates a known network/DNS dependency from the critical path and provides direct access to WordPress/WooCommerce execution semantics.
+
+---
+
+# 10. ADR-D004 — Browser Is Not Transaction Authority
+
+## Decision
+
+The browser SHALL NOT be authoritative for transaction state or financial fulfilment.
+
+The browser may:
+
+* initiate a user-facing flow;
+* transport a signed handoff;
+* display checkout;
+* return the user to Streams;
+* display transaction status.
+
+The browser SHALL NOT determine:
+
+* final payment state;
+* final commercial amount;
+* entitlement;
+* AffiliateWP completion;
+* Jewel completion;
+* reconciliation;
+* or recovery.
+
+## Consequence
+
+Closing the browser must not prevent a confirmed payment from being fulfilled.
+
+---
+
+# 11. ADR-D005 — Server-Authoritative Commercial Data
+
+## Decision
+
+The browser and Streams client SHALL NOT be trusted as the authoritative source for final commercial values.
+
+The server-side payment engine SHALL resolve and validate:
+
+* product;
+* variation;
+* price;
+* currency;
+* subscription configuration;
+* applicable discounts;
+* tax treatment where applicable;
+* and other commercial parameters.
+
+## Payment Intent rule
+
+The Payment Intent may identify the requested commercial object.
+
+The final authoritative commercial snapshot SHALL be established server-side.
+
+## Consequence
+
+A modified browser request cannot simply alter the amount charged by changing client-side price fields.
+
+## Open implementation requirement
+
+The implementation specification must establish the exact product/currency authority chain for the installed WooCommerce/WOOCS environment.
+
+This is an implementation detail, not permission to trust client-side values.
+
+---
+
+# 12. ADR-D006 — Effect-Level Idempotency
+
+## Decision
+
+Idempotency SHALL exist independently at each consequential processing boundary.
+
+At minimum the architecture must account for:
+
+1. Payment Intent creation;
+2. WooCommerce order association;
+3. payment completion;
+4. subscription creation/activation;
+5. Streams entitlement;
+6. AffiliateWP processing;
+7. Jewel Affiliate processing.
+
+## Principle
+
+The system SHALL NOT use:
+
+```text
+one transaction = one global processed flag
+```
+
+as its sole protection.
+
+Instead:
+
+```text
+Payment Intent
+    │
+    ├── Woo effect
+    ├── Subscription effect
+    ├── Streams effect
+    ├── AffiliateWP effect
+    └── Jewel effect
+```
+
+Each effect has its own state and idempotency boundary.
+
+## Consequence
+
+A retry of one failed effect cannot automatically repeat already-completed financial effects.
+
+---
+
+# 13. ADR-D007 — Recovery and Reconciliation
+
+## Decision
+
+Recovery and reconciliation SHALL be first-class architectural capabilities.
+
+The system SHALL support transactions where:
+
+```text
+payment = successful
+fulfilment = incomplete
+```
+
+without treating the transaction as permanently lost.
+
+## Recovery principle
+
+Recovery SHALL identify the missing effect and retry that effect.
+
+It SHALL NOT blindly replay the complete transaction.
+
+## Reconciliation
+
+A reconciliation mechanism SHALL be capable of detecting discrepancies between:
+
+* Payment Intent;
+* WooCommerce order/payment;
+* subscription state;
+* Streams entitlement;
+* AffiliateWP state;
+* Jewel state.
+
+## Consequence
+
+The system becomes eventually consistent across platforms while retaining a durable record of what remains incomplete.
+
+---
+
+# 14. ADR-D008 — AffiliateWP Ownership
+
+## Decision
+
+AffiliateWP SHALL remain a WordPress-side integration.
+
+Existing proven commission behaviour SHALL be preserved.
+
+However, competing payment-bridge trigger paths SHALL NOT independently process the same commission effect.
+
+## Boundary
+
+BZJ-PGB owns orchestration of the AffiliateWP effect.
+
+AffiliateWP remains the domain authority for AffiliateWP referral/commission records.
+
+## Required property
+
+Repeated payment completion events SHALL NOT create duplicate financial commission effects.
+
+## Consequence
+
+The redesign may require consolidation or adaptation of existing AffiliateWP hooks without changing the intended commission semantics.
+
+---
+
+# 15. ADR-D009 — Jewel Affiliate Isolation
+
+## Decision
+
+Jewel Affiliate SHALL be treated as an optional payment integration/addon rather than a core payment primitive.
+
+## Core payment must remain valid if Jewel fails
+
+The following SHALL NOT depend on successful Jewel processing:
+
+* WooCommerce payment;
+* core transaction completion;
+* subscription state;
+* Streams core entitlement.
+
+## Jewel responsibilities
+
+Jewel may process:
+
+* rebate;
+* Jewel-specific role;
+* affiliate-specific entitlement;
+* related business effects.
+
+These effects must have their own idempotency and recovery.
+
+## Consequence
+
+Jewel can evolve independently without destabilising the core payment engine.
+
+---
+
+# 16. ADR-D010 — Controlled Staged Migration
+
+## Decision
+
+The replacement architecture SHALL be introduced through controlled stages.
+
+The migration SHALL NOT be a big-bang replacement.
+
+## Proposed migration sequence
+
+```text
+Architecture approval
+        ↓
+Implementation specification
+        ↓
+Database/migration specification
+        ↓
+Build isolated components
+        ↓
+Unit/integration testing
+        ↓
+Staging
+        ↓
+Controlled payment tests
+        ↓
+Reconciliation
+        ↓
+Controlled activation
+        ↓
+Monitoring
+        ↓
+Legacy-path retirement
+```
+
+## Consequence
+
+The existing bridge can remain available as a controlled fallback during migration until objective retirement criteria are satisfied.
+
+---
+
+# 17. ADR-D011 — Security and Signed Handoff
+
+## Decision
+
+The Streams-to-WordPress transition SHALL use a cryptographically verifiable signed handoff.
+
+The handoff SHALL be:
+
+* server-generated;
+* integrity protected;
+* time-bounded;
+* bound to the Payment Intent;
+* resistant to replay;
+* validated by WordPress;
+* and incapable of changing authoritative commercial values.
+
+## Security requirements
+
+The new architecture SHALL:
+
+* eliminate hardcoded secrets;
+* enforce TLS verification wherever HTTP remains necessary;
+* avoid exposing sensitive payment data in logs;
+* validate intent ownership;
+* validate intent state;
+* reject expired handoffs;
+* reject replayed handoffs;
+* and prevent parameter substitution.
+
+## Consequence
+
+The browser can transport the handoff without becoming trusted as an authority.
+
+---
+
+# 18. ADR-D012 — Dedicated Recovery Worker
+
+## Decision
+
+The architecture SHALL provide a controlled recovery worker capable of processing:
+
+* pending effects;
+* failed effects;
+* retryable effects;
+* reconciliation candidates;
+* expired transactions requiring review;
+* and terminal failures requiring operational attention.
+
+## Scheduler
+
+The exact scheduler implementation remains open pending operational verification.
+
+Candidates may include:
+
+* Action Scheduler;
+* WordPress scheduling;
+* existing Buzzjuice OS-level scheduling;
+* or an explicitly controlled combination.
+
+The architecture requires the worker capability, not a predetermined scheduler technology.
+
+---
+
+# 19. Architecture Boundaries
+
+The following ownership boundaries are mandatory.
+
+| Domain                                | Authority                              |
+| ------------------------------------- | -------------------------------------- |
+| Payment Intent orchestration          | BZJ-PGB / IAPD                         |
+| Payment Intent database               | `koware_iapd_db`                       |
+| Product authority                     | WordPress/WooCommerce                  |
+| Final commercial price                | Server-side WooCommerce/payment engine |
+| WooCommerce order                     | WooCommerce                            |
+| Payment gateway state                 | WooCommerce/payment provider           |
+| Subscription                          | WooCommerce Subscriptions              |
+| Streams entitlement                   | Streams                                |
+| Affiliate referral/commission records | AffiliateWP                            |
+| Jewel-specific effects                | Jewel addon                            |
+| Cross-system recovery                 | BZJ-PGB                                |
+| Reconciliation                        | BZJ-PGB                                |
+| Browser                               | UI/handoff only                        |
+
+---
+
+# 20. Explicit Non-Goals
+
+This ADR does not:
+
+1. redesign WooCommerce;
+2. replace WooCommerce Subscriptions;
+3. replace AffiliateWP;
+4. replace Jewel Affiliate business logic;
+5. redesign Streams' entire payment system;
+6. redesign the Buzzjuice SSO architecture;
+7. establish the final IAPD SQL schema;
+8. establish the final migration SQL;
+9. authorize production deployment;
+10. authorize production code modification.
+
+Those concerns belong to later controlled stages.
+
+---
+
+# 21. Consequences
+
+## 21.1 Positive consequences
+
+### Durable transaction state
+
+Transactions no longer depend on transient PHP requests or browser continuity.
+
+### Reduced network fragility
+
+The primary WooCommerce order-creation path no longer depends on Streams-to-WordPress HTTP.
+
+### Better idempotency
+
+Repeated notifications and retries can be handled safely.
+
+### Recoverability
+
+A payment that succeeds while a downstream effect fails can be recovered.
+
+### Improved auditability
+
+The Payment Intent provides a cross-platform transaction identity.
+
+### Cleaner ownership
+
+WooCommerce, Streams, AffiliateWP and Jewel retain their respective domain responsibilities.
+
+### Safer commercial authority
+
+Client-controlled amounts are removed from the authoritative payment path.
+
+### Controlled migration
+
+The replacement can be introduced incrementally.
+
+---
+
+# 22. Negative Consequences
+
+The new architecture also introduces complexity.
+
+### Additional state
+
+The system gains Payment Intent, effect, retry and reconciliation state.
+
+### Eventual consistency
+
+Not every platform will necessarily update at exactly the same moment.
+
+### Recovery infrastructure
+
+A worker, scheduler and monitoring model must be operated.
+
+### Migration complexity
+
+Existing transactions and legacy state must be accounted for.
+
+### More explicit idempotency
+
+Each effect requires deliberate duplicate protection.
+
+### Operational responsibility
+
+Failed transactions must be monitored rather than silently ignored.
+
+These consequences are accepted because they directly address the reliability failures that motivated the redesign.
+
+---
+
+# 23. Accepted Risks
+
+The architecture accepts:
+
+### R-01 — Payment provider outages
+
+External payment providers remain external dependencies.
+
+### R-02 — Temporary downstream inconsistency
+
+A successful payment may temporarily precede Streams or addon fulfilment.
+
+### R-03 — Recovery latency
+
+A failed effect may require a later retry.
+
+### R-04 — Legacy migration complexity
+
+Existing transactions and historical data cannot be assumed to match the new state model.
+
+### R-05 — Operational dependency
+
+Recovery and reconciliation require monitoring and operational intervention when retries reach terminal failure.
+
+---
+
+# 24. Rejected Alternatives
+
+The following alternatives remain rejected following the Architecture Challenge.
+
+## A1 — Continue REST/cURL as critical path
+
+Rejected because it preserves the architectural network dependency that contributed to the existing failure class.
+
+## A2 — Fix the existing cURL/DNS problem only
+
+Rejected because it treats one symptom while retaining transient HTTP, timeout, duplicate-request and response-loss risks.
+
+## A3 — Browser-controlled amount
+
+Rejected because commercial authority cannot depend on client-controlled data.
+
+## A4 — Browser/thank-you-page fulfilment
+
+Rejected because customer navigation cannot be a prerequisite for financial fulfilment.
+
+## A5 — Single global processed flag
+
+Rejected because independent effects can fail independently.
+
+## A6 — Full transaction replay for recovery
+
+Rejected because it risks repeating completed financial effects.
+
+## A7 — Put all new state into Streams' existing transaction table
+
+Rejected because cross-platform orchestration requires an independent durable boundary.
+
+## A8 — Make Jewel mandatory to payment completion
+
+Rejected because an optional business integration must not control core payment validity.
+
+## A9 — Big-bang migration
+
+Rejected because payment migration must be controlled and reversible.
+
+---
+
+# 25. Acceptance Criteria
+
+The architecture SHALL NOT be considered approved merely because agents agree with it.
+
+Approval requires that the following architectural properties be demonstrable or formally constrained.
+
+## AC-01 — Transaction durability
+
+A Payment Intent exists independently of browser continuity.
+
+## AC-02 — Database boundary
+
+All new BZJ-PGB orchestration tables are designed for `koware_iapd_db`.
+
+## AC-03 — Native order execution
+
+The critical WooCommerce order-creation path does not require Streams-to-WordPress HTTP.
+
+## AC-04 — Commercial authority
+
+Final price/currency/product values are resolved and validated server-side.
+
+## AC-05 — Browser independence
+
+Closing the browser cannot prevent server-side recovery of a confirmed payment.
+
+## AC-06 — Order idempotency
+
+Repeated requests cannot create duplicate WooCommerce orders for the same Payment Intent.
+
+## AC-07 — Effect idempotency
+
+Repeated completion events cannot duplicate downstream financial effects.
+
+## AC-08 — Partial fulfilment
+
+One failed downstream effect does not require replay of already-completed effects.
+
+## AC-09 — Recovery
+
+Retryable failures can be recovered without recharging the customer.
+
+## AC-10 — Reconciliation
+
+The system can identify inconsistent Payment Intent, WooCommerce and downstream states.
+
+## AC-11 — AffiliateWP
+
+Affiliate processing has one controlled effect owner and duplicate protection.
+
+## AC-12 — Jewel isolation
+
+Jewel failure cannot invalidate the core payment transaction.
+
+## AC-13 — Security
+
+Signed handoffs are authenticated, time-bound and replay-resistant.
+
+## AC-14 — Migration
+
+Migration can be staged without requiring an irreversible big-bang switch.
+
+## AC-15 — Rollback
+
+Rollback accounts for transactions already processed by the new architecture.
+
+## AC-16 — Observability
+
+A transaction can be correlated across all relevant components through the Payment Intent identity.
+
+## AC-17 — Production protection
+
+No production code or production database modification occurs before formal approval.
+
+---
+
+# 26. Implementation Strategy
+
+This section defines the intended strategy, not the implementation itself.
+
+The detailed implementation specification belongs to BZJ-PGB-0340.
+
+---
+
+## Phase 0 — ADR review
+
+No code.
+
+Provide this draft to:
+
+* Kilo;
+* GitHub/Copilot;
+* Jules.
+
+Collect independent objections.
+
+---
+
+## Phase 1 — ADR reconciliation
+
+Classify each review finding as:
+
+```text
+ARCHITECTURE BLOCKER
+ARCHITECTURAL REVISION
+IMPLEMENTATION QUESTION
+DOCUMENTATION CLARIFICATION
+NON-BLOCKING RISK
+```
+
+Architecture blockers must be resolved before approval.
+
+---
+
+## Phase 2 — Formal approval
+
+Only after reconciliation:
+
+```text
+PROPOSED
+   ↓
+APPROVED
+```
+
+or:
+
+```text
+PROPOSED
+   ↓
+BLOCKED
+```
+
+If blocked, the architecture returns for revision.
+
+---
+
+## Phase 3 — Implementation specification
+
+After approval:
+
+**BZJ-PGB-0340**
+
+will define:
+
+* components;
+* interfaces;
+* exact state machine;
+* database contracts;
+* WooCommerce integration;
+* subscription integration;
+* AffiliateWP integration;
+* Jewel integration;
+* logging;
+* security;
+* recovery;
+* reconciliation;
+* migration;
+* rollback;
+* testing.
+
+---
+
+## Phase 4 — Database/migration specification
+
+The exact schema for `koware_iapd_db` will be designed and challenged before implementation.
+
+This stage must establish:
+
+* tables;
+* primary keys;
+* unique constraints;
+* indexes;
+* foreign/reference relationships;
+* lifecycle fields;
+* effect state;
+* retry state;
+* event records;
+* migration versioning;
+* integrity checks;
+* rollback considerations.
+
+No filesystem-driven arbitrary table recreation is permitted.
+
+---
+
+## Phase 5 — Task packets
+
+Implementation work will be divided into independently reviewable Task Packets.
+
+Each Task Packet must identify:
+
+* objective;
+* files;
+* interfaces;
+* dependencies;
+* acceptance criteria;
+* tests;
+* rollback;
+* logging;
+* security considerations.
+
+---
+
+## Phase 6 — Build
+
+Implementation occurs only after the previous gates pass.
+
+The target structure remains:
+
+```text
+wp-content/mu-plugins/
+    bzj-payment-gateway.php
+
+shared/payment-gateway/
+    ...
+```
+
+The exact file structure belongs to BZJ-PGB-0340.
+
+---
+
+## Phase 7 — Verification
+
+Testing must include deliberate failure injection.
+
+At minimum:
+
+* duplicate initiation;
+* lost response;
+* browser close;
+* payment success + fulfilment failure;
+* duplicate completion;
+* duplicate subscription processing;
+* duplicate AffiliateWP processing;
+* Jewel failure;
+* recovery;
+* retry exhaustion;
+* reconciliation;
+* expired intent;
+* replayed handoff;
+* invalid signature;
+* currency mismatch;
+* migration interruption;
+* rollback.
+
+---
+
+## Phase 8 — Staging
+
+No production activation until staging demonstrates:
+
+* successful payment;
+* correct commercial amount;
+* correct currency;
+* correct subscription;
+* correct Streams entitlement;
+* correct AffiliateWP effect;
+* correct Jewel behaviour where enabled;
+* duplicate safety;
+* recovery;
+* reconciliation.
+
+---
+
+## Phase 9 — Controlled production activation
+
+Production activation requires a separate approval gate.
+
+The old payment path SHALL NOT be deleted merely because the new path works in staging.
+
+Retirement requires evidence that the replacement has achieved its acceptance criteria.
+
+---
+
+# 27. Rollback Strategy Principle
+
+Rollback must be divided into two categories.
+
+## Code/configuration rollback
+
+Revert the deployed implementation/configuration.
+
+## Transaction rollback
+
+Transactions already processed by the new architecture SHALL NOT simply be replayed through the old architecture.
+
+Instead, transaction state must be reconciled first.
+
+The rollback procedure must therefore answer:
+
+* Which payments were accepted?
+* Which WooCommerce orders exist?
+* Which subscriptions exist?
+* Which Streams entitlements were applied?
+* Which AffiliateWP effects were applied?
+* Which Jewel effects were applied?
+* Which effects remain pending?
+* Which transactions require manual review?
+
+A source-code rollback without transaction reconciliation is not an acceptable payment rollback.
+
+---
+
+# 28. Observability Strategy
+
+Every Payment Intent SHALL have a stable correlation identity.
+
+The principal correlation key is:
+
+`intent_uuid`
+
+Secondary correlation identifiers may include:
+
+* WooCommerce order ID;
+* subscription ID;
+* Streams transaction ID;
+* effect ID;
+* event ID;
+* recovery attempt ID.
+
+Logs SHALL be:
+
+* toggleable;
+* structured;
+* correlated;
+* privacy-conscious;
+* and suitable for forensic reconstruction.
+
+Sensitive values SHALL NOT be logged merely for debugging convenience.
+
+---
+
+# 29. Data Integrity Strategy
+
+The new system SHALL distinguish:
+
+```text
+transaction identity
+commercial snapshot
+payment state
+fulfilment state
+effect state
+recovery state
+```
+
+These must not be collapsed into one mutable status field.
+
+The architecture therefore favours explicit state transitions and durable events/effects rather than relying exclusively on the current value of a single status column.
+
+---
+
+# 30. State Model — Architectural Level
+
+The exact state machine remains subject to BZJ-PGB-0340.
+
+The architectural model is:
+
+```text
+CREATED
+   ↓
+VALIDATED
+   ↓
+HANDOFF_READY
+   ↓
+WC_ORDER_CREATED
+   ↓
+PAYMENT_PENDING
+   ↓
+PAYMENT_CONFIRMED
+   ↓
+FULFILMENT_PENDING
+   ↓
+COMPLETED
+```
+
+With exceptional states including:
+
+```text
+EXPIRED
+CANCELLED
+FAILED
+RECOVERY_REQUIRED
+```
+
+Individual effects maintain independent states.
+
+The ADR intentionally does not prescribe every implementation transition.
+
+---
+
+# 31. Architectural Invariants
+
+The following must always hold.
+
+### INV-01
+
+A browser event cannot alone mark a payment as financially completed.
+
+### INV-02
+
+A client-supplied amount cannot override authoritative server-side commercial data.
+
+### INV-03
+
+A Payment Intent cannot produce more than one authoritative WooCommerce order association.
+
+### INV-04
+
+A downstream effect cannot be applied more than once for the same effect identity.
+
+### INV-05
+
+A failed optional addon cannot invalidate core payment completion.
+
+### INV-06
+
+A completed effect cannot be undone merely because another effect failed.
+
+### INV-07
+
+Recovery cannot recharge a customer merely because fulfilment failed.
+
+### INV-08
+
+Every recoverable transaction remains traceable through its Payment Intent.
+
+### INV-09
+
+New orchestration tables belong in `koware_iapd_db`.
+
+### INV-10
+
+No production implementation occurs before architecture approval.
+
+---
+
+# 32. Open Items Carried Into Implementation Specification
+
+These are deliberately not treated as architecture blockers.
+
+1. Exact IAPD SQL schema.
+2. Exact WooCommerce product/variation authority.
+3. Exact price/currency calculation.
+4. Exact WOOCS interaction.
+5. Exact subscription lifecycle hooks/APIs.
+6. Exact AffiliateWP adapter.
+7. Exact Jewel adapter.
+8. Exact recovery scheduler.
+9. Exact migration procedure.
+10. Exact rollback runbook.
+11. Exact logging file/rotation strategy.
+12. Exact administrative controls.
+13. Exact monitoring/alerting implementation.
+
+Each must be resolved before the corresponding implementation component is built.
+
+---
+
+# 33. Approval Gate
+
+The final BZJ-PGB-0330 decision has only two valid outcomes:
+
+## APPROVED
+
+If:
+
+* all architecture-blocking objections are resolved;
+* the three independent reviews are reconciled;
+* the Decision Ledger is updated;
+* all mandatory acceptance criteria are accepted;
+* and the architecture owner explicitly approves.
+
+Then:
+
+```text
+0330 APPROVED
+      ↓
+0340 Implementation Specification
+      ↓
+0400 Database/Migration Specification
+      ↓
+0500 Task Packets
+      ↓
+0600 Development
+```
+
+## BLOCKED
+
+If any architecture-blocking objection remains:
+
+```text
+0330 BLOCKED
+      ↓
+resolve objection
+      ↓
+revise architecture
+      ↓
+independent review
+      ↓
+approval gate
+```
+
+No implementation may proceed through an informal "mostly approved" state.
+
+---
+
+# 34. Production Protection Statement
+
+This ADR does not authorize:
+
+* modification of production PHP;
+* modification of production database schemas;
+* deletion of existing payment files;
+* activation of the new payment path;
+* replacement of existing hooks;
+* migration of live transactions;
+* or production deployment.
+
+Those actions require later approved stages.
+
+The implementation-readiness gate must continue to include:
+
+**Production code untouched.**
+
+---
+
+# 35. Proposed Decision Summary
+
+The proposed architecture can be summarized as:
+
+```text
+                 BUZZJUICE STREAMS
+                       │
+                       │ request
+                       ▼
+               ┌─────────────────┐
+               │ PAYMENT INTENT  │
+               └────────┬────────┘
+                        │
+                        ▼
+                 koware_iapd_db
+                        │
+                 signed handoff
+                        │
+                        ▼
+                WORDPRESS / MU
+                        │
+                native Woo APIs
+                        │
+                        ▼
+                  WOOCOMMERCE
+                        │
+              payment confirmed
+                        │
+          ┌─────────────┼─────────────┐
+          ▼             ▼             ▼
+       Streams       AffiliateWP     Jewel
+       effect          effect        addon
+          │             │             │
+          └─────────────┼─────────────┘
+                        ▼
+                RECOVERY / RETRY
+                        │
+                        ▼
+                 RECONCILIATION
+```
+
+The central architectural change is therefore:
+
+> **From transient request processing to durable payment orchestration.**
+
+---
+
+# 36. Draft ADR Decision
+
+**Current status: PROPOSED**
+
+The proposed architecture SHALL be considered the candidate architecture for formal BZJ-PGB-0330 approval.
+
+It SHALL NOT be treated as approved until:
+
+1. Kilo completes its independent review;
+2. GitHub/Copilot completes its independent review;
+3. Jules completes its independent adversarial review;
+4. objections are reconciled;
+5. the Decision Ledger is updated;
+6. the architecture approval gate is explicitly passed.
+
+---
+
+# 37. Required Reviewer Outcome
+
+Each independent reviewer must return:
+
+1. **Decision-by-decision assessment**
+2. **Architecture blockers**
+3. **Architectural revisions**
+4. **Implementation questions**
+5. **Missing constraints**
+6. **Contradictions**
+7. **Acceptance-criteria weaknesses**
+8. **Migration/rollback concerns**
+9. **Security concerns**
+10. **Final recommendation: APPROVE or BLOCK**
+
+A reviewer must not treat agreement with another reviewer as evidence.
+
+Each reviewer is expected to independently assess the draft.
