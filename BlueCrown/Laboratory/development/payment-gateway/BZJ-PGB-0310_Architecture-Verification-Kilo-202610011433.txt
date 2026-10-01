@@ -1,0 +1,335 @@
+# BZJ-PGB-0310 — Architecture Verification (Kilo)
+
+**Agent:** Kilo Code · **Date:** 2026-10-01 · **Branch:** `main` @ `9136ade9d`
+**Scope:** Close the 10 evidence gaps listed against `BZJ-PGB-0310`. No production code written, no repository file modified.
+
+---
+
+## 0. Corrections to prior agent reports (read these first)
+
+Three claims carried in the BZJ-PGB-0200/0300 chain are **contradicted by the installed source**. These change the architecture question.
+
+| Prior claim | Verdict | Evidence |
+|---|---|---|
+| 0200 §19: "Jewel Affiliate webhook … activates the mapped WoWonder subscription … applies rebate credit … This existing behaviour must be preserved" | **FALSE — Jewel Affiliate is dead code.** `jewel_affiliate_process()` is defined at `streams/jewel-affiliate-webhook.php:29` and **called from nowhere**. The file's own docblock (`:5`, `:17-18`) claims it is invoked from the `completed` branch of `streams/wow-pgb_webhook.php` — that webhook contains no `include` and no call. Repo-wide grep returns only the definition, the docblock, and a docs mention. | `streams/jewel-affiliate-webhook.php:5-18,29`; absence of call in `streams/wow-pgb_webhook.php` |
+| 0200 §12: initiation is `Wo_PrepareWooCommerceLink() → Wo_GetWooCommerceLink()` | **Incomplete.** Real route is `streams/requests.php:240-242` (`f=payment` + `POST payment_type=wow_payment` → `require 'assets/wow-pgb/wow-pgb_init.php'`), gated by the allow-list at `:52-77` (`payment` at `:59`) and the login gate at `:160-169` (`payment` is **not** in `$non_login_array`). Note `xhr/<f>.php` is included first at `:233`. | `streams/requests.php:59,151-169,233,240-242` |
+| 0200 §17: "webhook verifies a hard-coded secret — critical issue" | **Understated.** The secret at `streams/wow-pgb_webhook.php:29` is hard-coded, **and** the configurable `wow_webhook_secret` written by `streams/requests.php:217-219` is **never read by anything**. Rotating the secret in the admin UI has no effect on verification. | `streams/wow-pgb_webhook.php:29,36-43`; `streams/requests.php:217-219` |
+
+Also: `wp-content/mu-plugins/subscription-rebate.php` is **0 bytes**.
+
+---
+
+## 1. CRITICAL new finding — the client-supplied amount is discarded by WooCommerce
+
+This is the most consequential result of the verification and it was absent from every prior report.
+
+```
+Client amount path:
+streams/themes/sunshine/layout/extra_js/content.phtml:2340-2351
+   product_price = $('#amount').val() || $('#fund_donate_amount').val() || pro_packages[type].price
+   amount        = product_units * product_price          ← computed in the BROWSER
+   POST → streams/assets/wow-pgb/wow-pgb_init.php:2410-2420
+
+Server intake:
+streams/assets/wow-pgb/wow-pgb_init.php:65-71   floatval($_POST['amount']), floatval($_POST['product_price'])
+streams/assets/wow-pgb/wow-pgb_init.php:586-593 'price'/'subtotal'/'total' from those values
+streams/assets/wow-pgb/wow-pgb_init.php:721-728 POST {wow_api_url}/wc/v3/orders
+
+Server-side overwrite:
+wp-content/plugins/woocommerce/includes/rest-api/Controllers/Version2/
+  class-wc-rest-orders-v2-controller.php:997-1002
+    if ( 'create' === $action ) {
+        $total = wc_get_price_excluding_tax( $product, array( 'qty' => $quantity ) );
+        $item->set_total( $total );
+        $item->set_subtotal( $total );
+    }
+```
+
+**VERIFIED:** WooCommerce 11.1.0 overwrites the posted line-item `total`/`subtotal` with the *product's database price* whenever `product_id` resolves to a real product. The browser's `amount` and `product_price` are therefore **advisory only**.
+
+**INFERRED (high confidence):** the amount actually charged is the WooCommerce product price, not the figure Streams displayed — which explains "amount mismatch" complaints that no one has classified as a bug.
+
+**UNKNOWN / REQUIRES VERIFICATION:** the real price of the PGB products. The only code that creates them sets **price 0**:
+
+- `wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php:87-88` — `$product->set_price(0); $product->set_regular_price(0);`
+- same file `:177-178` for the PRO variations
+- **and that code never runs**: `register_activation_hook(__FILE__, 'create_wow_pgb_virtual_products')` at `:192` is inside `wow-pgb_sync/wow-pgb_sync.php`, a **sub-file** of `blue-crown-wp`, not the plugin main file. WordPress only fires activation hooks registered from the main plugin file. So the products were created by some other means (manual, or a previously-working activation path) and their current prices are **UNKNOWN**.
+
+**Action required before the ADR:** dump `_price`/`_regular_price` for every `wow-pgb_*` product/variation from the live database. Until that is done, no currency model (§14/§17) or order-lifecycle decision (§11) can be locked.
+
+---
+
+## 2. Root cause of "dropped orders" — VERIFIED
+
+Three independent, browser- or network-dependent steps sit between "customer paid" and "Streams fulfils":
+
+**(a) WordPress → Streams webhook is the only fulfilment trigger for Streams state.**
+`streams/wow-pgb_webhook.php:121` acts **only** on `status === "completed"`. It updates `Wo_Payment_Transactions.payment_status` (`:129`), credits the wallet (`:176`), records funding (`:193`), and sets `Wo_Users.is_pro/pro_type/pro_time` (`:227`). There is no other path in the repo that performs these writes for a PGB order.
+
+**(b) The observed cPanel DNS failure kills exactly that path.**
+`curl: (6) Could not resolve host: buzzjuice.net` from the server means WooCommerce cannot deliver the webhook to the Streams URL. Result: the order is **paid in WooCommerce**, the `Wo_Payment_Transactions` row stays at its initial state forever, wallet is never credited, pro is never activated, and the customer is charged. **There is no reconciliation job to detect or repair this** (see §9).
+
+**(c) WooCommerce-side fulfilment is browser-triggered, not server-triggered.**
+
+```
+wp-content/mu-plugins/buzzjuice-affwp-order-complete.php:34   add_action('woocommerce_order_status_completed', …, 999)
+wp-content/plugins/blue-crown-wp/wow-pgb_sync/wow-pgb_sync.php:509-529
+    add_action('wp_footer', …)   → if (is_wc_endpoint_url('order-received'))
+                                      && status in ['processing','completed']
+                                      → do_action('wowonder_order_redirect')
+:532  add_action('wowonder_order_redirect', 'wowonder_redirect_after_purchase')
+```
+
+`wowonder_redirect_after_purchase()` (`:195`) creates the **WooCommerce subscription** (`:435-442` → `create_woocommerce_subscription()` at `:1684` → `POST /subscriptions`), calls the AffiliateWP bridge (`:246, :455, :473, :495`), and `wp_redirect(); exit()` (`:254, :460, :466, :482, :488, :502`).
+
+**So: browser closed, refresh timed out, mobile network dropped → no subscription, no referral, no redirect.** The customer is charged and receives nothing. And `retry_with_backoff($cb, 10, 2, 300)` at `:318-356` can `sleep()` for up to ~300 s **inside a page render**, which is a second-order cause of abandoned checkouts.
+
+This directly confirms Claude's §22 challenge: *browser navigation is not the source of truth*. **VERIFIED, and it is worse than the proposal assumed** — it is not just the handoff that is browser-bound, the entire post-payment fulfilment chain is.
+
+---
+
+## 3. Gap-by-gap verification
+
+### Gap 1 — Installed WooCommerce order creation APIs
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| Version | **11.1.0** | `woocommerce.php:6`; `class-woocommerce.php:63` (`WC_VERSION`). Readme `Stable tag: 11.0.1` is stale — trust the header. |
+| `wc_create_order( $args )` | exists | `includes/wc-core-functions.php:89`. Allowlist of args `:90-98`; sets currency/tax-flags/IP on create `:130-135`; ends in `$order->save()` `:138`; `WP_Error` on exception `:139-141`. |
+| Line items | `WC_Abstract_Order::add_product( $product, $qty, $args )` | `includes/abstracts/abstract-wc-order.php:1982`; price computed via `wc_get_price_excluding_tax()` `:1985-1991`. `set_props()` swallows `WC_Data_Exception` into a returned `WP_Error` (`includes/abstracts/abstract-wc-data.php:863,879-884`) — **you must check the return value.** |
+| Order key | `wc_generate_order_key()` | `includes/wc-order-functions.php:200`. Auto-set by the data store on create: `includes/data-stores/class-wc-order-data-store-cpt.php:108`; HPOS `src/Internal/DataStores/Orders/OrdersTableDataStore.php:2972`. |
+| REST idempotency | **NONE** | grep `idempoten` across `includes/`+`src/` → only unrelated hits. `Version3/class-wc-rest-orders-controller.php:277-281` unconditionally constructs and saves. **Retried `POST /wc/v3/orders` creates duplicate orders.** |
+
+### Gap 2 — Checkout / payment URL APIs
+
+- `WC_Order::get_checkout_payment_url( $on_checkout = false )` — `includes/class-wc-order.php:1924`. Builds `wc_get_endpoint_url('order-pay', id, wc_get_checkout_url())` + `pay_for_order=true&key={order_key}` (`:1925-1939`).
+  - **Correction:** the parameter is `$on_checkout`, **not** `$deprecated`. There is no `@deprecated` in this version.
+- Endpoint slug is option-driven: `includes/class-wc-query.php:91` (`woocommerce_checkout_pay_endpoint`, default `order-pay`).
+- Validation at the pay page: `includes/shortcodes/class-wc-shortcode-checkout.php:88-96` requires **both** `pay_for_order` and `key`, then `hash_equals( $order->get_order_key(), $order_key )`.
+- `get_checkout_order_received_url()` — `class-wc-order.php:1947`, `key=` appended, no `pay_for_order`.
+- The REST `payment_url` field **is** `get_checkout_payment_url()`: `Version2/class-wc-rest-orders-v2-controller.php:438-439` inside `get_formatted_item_data()`; schema `:2107-2112` (`readonly`). v3 inherits it (`Version3/class-wc-rest-orders-controller.php:27`).
+- **Practical consequence:** the payment URL Streams redirects to is fully reconstructible in WordPress. No browser-issued secret is required — this makes the §22/§25 signed-handoff design cheaper than the proposal assumed.
+
+**Store API (`wc/store`) is NOT an option for order creation — VERIFIED.** `src/StoreApi/Routes/V1/Checkout.php:76-146` accepts addresses/payment_method/payment_data/notes only; `process_order()` (`:540`) requires a non-empty session cart (`:557`), calculates totals (`:572`), and derives the order from the cart (`:790`). `Routes\V1\CheckoutOrder.php:112-117` *pays* an existing order, it does not create one. **This closes Option D in the 0200 §26 list: reject.**
+
+### Gap 3 — WooCommerce Subscriptions lifecycle
+
+Installed **WCS 8.6.0**, and it is the **modern WCS-core build**, not legacy 4.x: `includes/core/` + internal autoloader (`woocommerce-subscriptions.php:193-199`), docblocks marked *"Migrated from WooCommerce Subscriptions v2.x"* (`includes/core/class-wc-subscription.php:6`), `src/Internal/**` under `Automattic\WooCommerce_Subscriptions\Internal` (`src/Internal/Pricing/Price_Calculator.php:17`). Legacy global class names retained for BC (`class-wc-subscription.php:15`).
+
+**VERIFIED — this is the decisive constraint:**
+
+- Subscriptions are created **only** from the cart. `WC_Subscriptions_Checkout::process_checkout()` early-returns unless `WC_Subscriptions_Cart::cart_contains_subscription()` (`includes/core/class-wc-subscriptions-checkout.php:75`), then iterates `WC()->cart->recurring_carts` (`:101`) and calls `create_subscription()` (`:104` → `:129`).
+- It is hooked **only** on `woocommerce_checkout_order_processed` (`:24`) and `woocommerce_store_api_checkout_order_processed` (`:27`). **There is no `woocommerce_payment_complete` creator.**
+- Line items come from `WC()->checkout->create_order_line_items( $subscription, $cart )` (`:194-195`).
+- Activation: `WC_Subscriptions_Order::maybe_record_subscription_payment()` on `woocommerce_order_status_changed` priority 9 (`includes/core/class-wc-subscriptions-order.php:40,487,496,578`) → `WC_Subscription::payment_complete_for_order()` (`class-wc-subscription.php:2053`) → `update_status('active')` (`:2071-2072`).
+- `wcs_create_subscription()` exists (`includes/core/wcs-functions.php:157`) but **defaults to `pending`** (`:162`) and **does not create line items or totals** (`:222-259`).
+
+**Therefore: an order created via `wc_create_order()` / REST with a subscription product produces NO subscription.** The current bridge works around this by POSTing `/subscriptions` directly (`wow-pgb_sync.php:1685`) with `'status' => 'active'` (`:406`) — i.e. **the system currently owns a second, parallel subscription engine** that bypasses WCS checkout entirely and is triggered from `wp_footer`. This is precisely the duplicate-engine anti-pattern 0200 §28 warned about.
+
+`wcs_get_subscriptions_for_order()` — `includes/core/wcs-order-functions.php:33`. `wcs_order_contains_subscription()` — `:413`.
+**Hooks that do NOT exist** (do not plan around them): `wcs_subscription_payment_failed`, `woocommerce_scheduled_subscription_payment_failed`, `wcs_subscription_payment_complete`. Real names: `woocommerce_subscription_payment_failed` (`class-wc-subscription.php:2144`), `woocommerce_subscription_renewal_payment_complete` (`:2082`).
+Action Scheduler **4.0.0** ships inside WooCommerce (`wp-content/plugins/woocommerce/packages/action-scheduler/action-scheduler.php:8`); WCS renewals schedule via `WCS_Action_Scheduler` group `wc_subscription_scheduled_event` (`includes/core/class-wcs-action-scheduler.php:16,265`).
+
+### Gap 4 — WOOCS currency
+
+Installed **FOX – Currency Switcher Professional 2.4.6** (`woocommerce-currency-switcher/index.php:4,8`). Premium build.
+
+**All the function names in the 0200 brief do not exist.** `woocs_get_currency_rate`, `woocs_get_currency`, `woocs_set_currency`, `woocs_get_wc_currency_price`, `woocs_get_woocommerce_currency_format` → **NOT FOUND**. Real API is methods on the `WOOCS` class (`classes/woocs.php:7`):
+
+| Purpose | Callable |
+|---|---|
+| current currency | `WOOCS::get_woocommerce_currency()` `classes/woocs.php:1801` |
+| raw multiply | `WOOCS::woocs_exchange_value()` `:3458` |
+| divide back | `WOOCS::back_convert()` `:4058` |
+| product price conversion | `WOOCS::raw_woocommerce_price()` `:1950` |
+| cross-pair | `WOOCS::convert_from_to_currency()` `:5614` |
+
+Persistence: option `woocs` (`get_currencies()` `:1722`; writes `:2800, :2848, :1061`). **No TTL** — the rate is a plain option refreshed by cron `woocs_update_rates_wpcron` (`classes/cron.php:50-63`). Base currency marked `is_etalon === 1` (`classes/woocs.php:100-104`).
+
+**The finding that matters for PGB — VERIFIED:** WOOCS **disables itself on `/wp-json/wc/v3/*`**. `index.php:31-45` returns early for any `wp-json` request whose path segment is not in `('widget-types','sidebars','widgets','batch','collection-data','cart','store')` and whose first sub-segment is not `woocs`/`divi-ajax-filter`. Therefore:
+
+> **An order created by `wow-pgb_init.php:721-728` via `POST /wc/v3/orders` is priced with NO currency conversion at all**, while the same products viewed in the storefront checkout *are* converted.
+
+Combined with §1 (WooCommerce overwrites the posted price with the raw DB price), the order created by the bridge is denominated in the browser-supplied `wow_currency_code` (`wow-pgb_init.php:620`) at the raw, unconverted DB price. The conversion that produced the Streams-displayed figure is discarded twice over.
+
+Other verified conversion sites: CRTP getters (`woocommerce_product_get_price` `:294`, `*_variation_get_price` `:297`, …) — note **`woocommerce_get_price` is not filtered**; `woocommerce_order_get_currency` → `woocommerce_get_order_currency()` `:3513` which **early-returns under HPOS** (`:3515-3517`); shipping `woocommerce_package_rates` `:3550-3561`; coupon `:5173`; `recalculate_order()` `:4067`.
+Order meta written by WOOCS: `_woocs_order_rate`, `_woocs_order_base_currency`, `_woocs_order_currency_changed_mannualy` (`:2930-2941`, hidden `:223-230`). **WCS-generated renewal orders do NOT get `_woocs_order_rate`** — `WC_Subscriptions_Data_Copier` copies it only if present (`woocommerce-subscriptions/includes/core/class-wc-subscriptions-data-copier.php:122,280-293`), so a later `recalculate_order()` divides by an empty rate.
+WCS compatibility shim (`classes/compatibility/woocommerce_subscriptions.php`) is gated on `woocs_init_compatibility_woo_subscriptions` returning true (`classes/compatibility/compatibility.php:11-13`) — **no repo caller returns true**, so it is currently inactive. **REQUIRES VERIFICATION** at runtime before relying on it either way.
+`wp-content/mu-plugins/debug-woocommerce-currency-switcher.php` is inert scaffolding: `bzj_woocs_log_once()` is defined at `:28` and **never called**; `BZJ_WOOCS_SUPPRESS` (`:16`) is declared and never read.
+
+### Gap 5 — Complete AffiliateWP implementation (protected)
+
+| Plugin | Version | Citation |
+|---|---|---|
+| AffiliateWP | **2.32.2** (AffWP 2.x hybrid: global `Affiliate_WP` + namespaced `AffWP\` models) | `affiliate-wp.php:8`; `includes/class-affwp-referral.php:12` |
+| Lifetime Commissions | 1.6.2 | `affiliate-wp-lifetime-commissions.php:8` |
+| Recurring Referrals | 1.9.2 | `affiliate-wp-recurring-referrals.php:8` |
+| Multi-Tier Commissions | 1.4.4 | `affiliatewp-multi-tier-commissions.php:8` |
+| Affiliate Portal | 1.3.7 (display only, no referral hooks) | `affiliatewp-affiliate-portal.php:8` |
+
+**VERIFIED — the native WooCommerce integration exists and is registered:**
+`includes/class-integrations-registry.php:426-430`. Hooks in `includes/integrations/class-woocommerce.php`:
+- `:66` `woocommerce_checkout_update_order_meta` → `add_pending_referral()` (`:968`) — **this is where the native referral is created**
+- `:78-79` `woocommerce_order_status_completed` / `_processing` → `mark_referral_complete()` (`:1427`)
+- AffiliateWP does **not** hook `woocommerce_payment_complete` (**NOT FOUND**).
+- `affwp_process_woocommerce_order()` → **NOT FOUND** (removed in modern AffWP).
+
+**So the custom bridge and the native integration are both live, on overlapping triggers.** The bridge is additionally called directly at `wow-pgb_sync.php:246, 455, 473, 495`. Up to **three** invocations for one order. Native idempotency is `affwp_get_referral_by('reference', $order_id, 'woocommerce')` (`:993`, `:1219`, `class-base.php:695`) — non-atomic check-then-insert, and it inserts-then-fails the duplicate (`:727` → `:747`).
+
+**Bridge-specific defects (verified, protected code — do not rewrite, but these constrain the design):**
+
+1. `affwp_add_referral()` **silently drops `customer_id`**. Its arg whitelist (`includes/referral-functions.php:277-293`) has no `customer` key, so `setup_customer()` returns 0 (`includes/class-referrals-db.php:1246-1253`) and overwrites `customer_id` with 0 (`:267`). The bridge passes `customer_id` at `wow-pgb_sync.php:1141` and it is discarded. Its own verification (`:1203-1205`) logs a mismatch and continues.
+2. `affwp_add_referral()` performs **no** `(reference, context)` dedupe — the only guard is per-`visit_id` (`:295-297`), and the bridge passes no `visit_id`. → **live double-credit vector.**
+3. The bridge's duplicate check is **narrower** than native: `WHERE reference AND context='woocommerce' AND affiliate_id=%d` (`wow-pgb_sync.php:1488-1494`). A referral already created under a different affiliate is not seen. Also, Multi-Tier children share the parent's `reference` + `context` (`affiliatewp-multi-tier-commissions/includes/class-controller.php:307,317`), so the `LIMIT 1` can match a `tiered_sale` row and silently skip the real referral.
+4. `_affwp_bridge_processed` (`wow-pgb_sync.php:741,1477,1498,1589`) is **not redundant** with a native meta guard — AffiliateWP writes **no** per-order meta guard (**NOT FOUND**).
+5. Lifetime Commissions `add()` has **no** dedupe and the table has no unique key on `affwp_customer_id` (`affiliate-wp-lifetime-commissions/includes/class-lifetime-commissions-db.php:113-158,272-281`); the caller's guard is keyed on `affwp_customer_id` **alone** (`affiliate-wp-lifetime-commissions/integrations/class-base.php:618`). The bridge's Stage3B (`wow-pgb_sync.php:1445-1468`) queries `(customer, affiliate)` and can insert a second lifetime row — after which Source 1 of affiliate resolution (`ORDER BY lifetime_customer_id DESC LIMIT 1`, `:846-850`) becomes non-deterministic.
+6. Recurring Referrals has **no** idempotency guard on `woocommerce_subscription_renewal_payment_complete` (`affiliate-wp-recurring-referrals/integrations/class-woocommerce.php:31-128`) and uses `insert_referral()`, bypassing the reference guard.
+7. **No currency normalisation anywhere.** No exchange-rate handling is installed (the Multi-Currency add-on is absent; `affiliate-wp/includes/multi-currency/` does not exist). The bridge stores the raw order currency (`:1146`) and calls `affwp_increase_affiliate_unpaid_earnings()` with no conversion (`:1564`). Native referrals store **no** currency at all. → same table, two different currency semantics.
+8. Lifetime Commissions force `affwp_was_referred → true` (`affiliate-wp-lifetime-commissions/includes/class-affiliatewp-lifetime-commissions.php:245`), disabling the native referral guard.
+9. Function-name collisions with AffiliateWP: **NONE** (all bridge symbols prefixed and `function_exists`-guarded). Unguarded generic globals in the same file — `make_curl_request` (`:666`), `retry_with_backoff` (`:1727`), `log_error` (`:1749`) — are a collision surface with *other* plugins.
+
+**REQUIRES VERIFICATION (DB):** is the native WooCommerce integration enabled? `get_option('affwp_settings')['integrations']['woocommerce']` (`class-integrations-registry.php:90-93`). This single option decides whether the double-credit vector is live.
+
+### Gap 6 — Jewel Affiliate integration
+
+**VERIFIED: not integrated at all.** `jewel_affiliate_process()` is dead code (§0). Additionally `wp-content/mu-plugins/subscription-rebate.php` is empty (0 bytes).
+
+What the code *would* do, and its design quality, for the record:
+
+- Trigger: `status === 'completed'` only (`jewel-affiliate-webhook.php:35`).
+- User resolution: `bz_wow_user_id` order meta (`:50`) → fallback `Wo_Users.email` lookup (`:59`).
+- Mapping: `bz_rebate_mapping_json` read directly from `wp_options` over a raw mysqli connection (`:218-246`) — written by `wp-content/mu-plugins/bz-rebate.php:563-564` (`bz_rebate_credit_cents`, `bz_wow_user_id`).
+- **Rebate idempotency — the one good pattern in the whole bridge**: check-before-write on `(woo_order_id OR order_id) AND userid AND notes LIKE '%Rebate%'` (`:287-303`), then wallet update + transaction insert inside `begin_transaction()/commit()` with `rollback()` on failure (`:313-339`). **This is the only transactional, idempotent financial effect anywhere in the bridge and should be the model for the new design.**
+- Weakness: check-then-act, not atomic — two concurrent deliveries can both pass the check. Needs a unique constraint.
+- WP role sync writes `wp_usermeta.{prefix}capabilities` directly via `serialize()` (`:388-475`) — bypasses WP APIs, invalidates user caches, and is a privilege-escalation surface if the mapping option is ever attacker-influenced.
+
+**Answer to 0200 §19/§30:** there is no behaviour to preserve, and Jewel belongs in an `addons/` boundary (business-specific integration), not `int/` core.
+
+### Gap 7 — WordPress authentication / session handoff
+
+**VERIFIED reusable precedent exists** — this materially lowers the cost of 0200 §25's signed handoff:
+
+- **HS256 token helper**: `shared/sso_bridge_helpers.php:398` — `hash_hmac('sha256', implode('.', $segments), $secret, true)`; verify at `:426-428` with `hash_equals`. JWS-style `header.payload.signature`.
+- Replay/claim discipline is already documented: `streams/ww-sso-bridge.php:158` — *"Validate JWT signature, claims, exp, nbf, iss, aud, jti (replay)"*.
+- **Secret resolution convention**: `bzj_get_sso_secret()` — `shared/db_helpers.php:25-46` — env → constant → hashed fallback that logs CRITICAL via `bzj_log_once()`. Use this exact shape for a payment-handoff secret.
+- Session shadow store: `shared/sso_sessions/` (`.ser` / `.json` / marker files), written by `shared/wwqd_bridge.php` and `wp-content/mu-plugins/sso-session-sync.php` (1563 lines).
+
+`streams/requests.php` currently enforces login by WoWonder session only (`$wo['loggedin']`, `:160-169`); there is no signature on the initiation request at all.
+
+### Gap 8 — IAPD schema / conventions
+
+- `get_iapd_db_conn()` — `shared/db_helpers.php:79-86`. **Zero callers in the entire repo.** Returns `false` silently on connect failure, with no logging. There is no `iapd_table()` helper (only `wp_table()` `:125`, `bp_table()` `:130`).
+- **No IAPD schema, no migration registry, no `data/db/migrations/` tree** — `.gitignore:105-109` anticipates one; it does not exist. `data/` contains only `css/ db_backup/ js/ logs/ merge_usermeta.php schema_cache/ sync_messages/`.
+- **No `dbDelta`/`CREATE TABLE` anywhere targets IAPD.** The only first-party schema creation in the repo is WordPress-DB-only: `wp-content/mu-plugins/bzj-connections-sync.php:76-92` and `:93-112`.
+- **The one migration precedent to copy**: `bzj-connections-sync.php:70-114` — `const VERSION` (`:15`), `get_option('bzj_connections_sync_schema_version')` guard (`:72`), `dbDelta` with `$wpdb->get_charset_collate()` (`:75`), `update_option(..., false)` autoload-off (`:113`). Caveat: `dbDelta` only works against `$wpdb`; targeting IAPD requires raw DDL via `$conn->query()` — so this is a **shape** precedent, not a copy-paste one.
+- **WP-CLI precedent**: `wp-content/mu-plugins/bzj-affiliate-access-gate.php:488-502` — `WP_CLI::add_command('bzj-affwp', 'BZJ_AffWP_CLI_Command')` with a `backfill()` method (`:490`). This is the natural home for a PGB migration/reconcile command.
+- **Streams schema is known**: `streams/wowonder.sql:4874-4883`:
+  ```sql
+  CREATE TABLE `Wo_Payment_Transactions` (
+    `id` int(11) UNSIGNED NOT NULL, `userid` int(11) UNSIGNED NOT NULL,
+    `kind` varchar(100) NOT NULL, `amount` decimal(11,0) UNSIGNED NOT NULL,
+    `transaction_dt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `notes` text NOT NULL, `admin_commission` decimal(11,0) UNSIGNED DEFAULT '0',
+    `extra` varchar(1000) DEFAULT '' )
+  ```
+  **No PRIMARY KEY, no AUTO_INCREMENT, no unique key** (same for `Wo_Purchases` `:5134`, `Wo_UserOrders` `:5660`, `Wo_Funding_Raise` `:1457`, `Wo_Users` `:5701`). **`amount` is `decimal(11,0)` — zero decimals**, so any fractional currency truncates. Note the dump is regenerable from production via `Wo_Backup()` / `SHOW CREATE TABLE` (`streams/assets/includes/functions_general.php:1301,1330`).
+  Also note: the bridge writes columns (`order_id`, `currency_code`, `payment_status`, `payment_method`, `woo_order_id`) that are **absent from this dump** → the live table has drifted from `wowonder.sql`. **REQUIRES VERIFICATION** against production `SHOW CREATE TABLE Wo_Payment_Transactions` before any state-model column mapping.
+
+### Gap 9 — Existing scheduled-task infrastructure
+
+- WP-Cron: **zero** scheduling in `shared/`, `streams/`, `social/`, `data/`, `blue-crown-wp/`. All first-party scheduling is in three MU plugins:
+  - `bzj-connections-sync.php:117` `bzj_connections_sync_recovery` hourly; `:118` `bzj_connections_sync_reconcile` hourly.
+  - `bzj-affiliate-access-gate.php:476-477` `bzj_affwp_reconcile` hourly; also on `admin_init` (`:471-473`) and via CLI.
+  - `bzj-dashboard-todo.php:1880-1952` — Action Scheduler group `buzzjuice-todo`, with a `wp_schedule_single_action` fallback.
+- **No custom `cron_schedules` filter exists.** Only `hourly`.
+- **`DISABLE_WP_CRON` is not defined anywhere** — `wp-config.php` is gitignored (`.gitignore:69`) and absent; `wp-config-sample.php` does not define it. **REQUIRES VERIFICATION** on the server. Implication: WP-Cron is traffic-driven and unreliable; the OS-crontab precedent (`streams/cron-job.php`, documented `*/5 * * * * curl .../cron-job.php` at `streams/admin-panel/pages/cronjob_settings/content.phtml:22,28`) is the robust pattern **already used in this codebase**.
+- **The only production-grade retry/recovery pattern in the repo** — and the model for BZJ-PGB:
+  - DB-backed queue table `wp_bzj_relationship_events` with `status`, `attempts`, `next_attempt_at`, `last_error`, `processed_at`; `KEY queue(status, next_attempt_at)` (`bzj-connections-sync.php:93-112`)
+  - `recover()` `:912-930`; backoff `min(3600, max(30, attempts*30))`, `MAX_ATTEMPTS=12` (`:24`), terminal `status='failed'` (`:906-909`)
+  - `reconcile()` `:931-934`, last 7 days, 100 pairs/cycle, under a per-pair MySQL `GET_LOCK` (`:131-141`, `LOCK_TIMEOUT=15`)
+  - **Idempotency by unique `event_uuid`** (`:110`) — this is exactly what `AGENTS.md:33-37` requires
+- **Do NOT copy `shared/wwqd_sync_queue.php`.** Two competing implementations of the same function names exist (that file `:10,:34` and `shared/wwqd_bridge.php:387,:404`); whichever loads first wins. `wwqd_drain_sync_queue` is **called from nowhere**, `wwqd_safe_autodrain` (`wwqd_bridge.php:441`) has **no caller**, and `wwqd_bridge.php:434` unlinks each job file unconditionally — **failure loses the job**. The WoWonder branch enqueues and never drains.
+
+### Gap 10 — Logging / locking conventions
+
+**Logging — VERIFIED:**
+- Canonical helper: `bzj_log_once( $logfile, $errstr, $errfile, $errline, $interval )` — `wp-content/mu-plugins/debug-runtime-error-handler.php:65`; log dir `BZJ_LOG_DIR = ABSPATH . '/data/logs/'` (`:14-15`); throttle via a `.lock` file holding the last timestamp. This is the shape the bridge should adopt — it is already referenced from `shared/db_helpers.php:37-42`.
+- Per-subsystem log dirs exist: `data/logs/`, `data/logs/bzj-registration-kernel/` (`bzj-give-email-otp.php:21`), `streams/ww_sso_bridge.log` (`streams/ww-sso-bridge.php:24`), `social/qd_sso_bridge.log` (`social/qd-sso-bridge.php:34`).
+- Toggles: `BC_AFFWP_DEBUG` (`wow-pgb_sync.php:18-20`), `BZ_STREAMS_LOGGING` (`streams/assets/init.php:92`), `$_ENV['ENABLE_LOGGING']` (`wow-pgb_sync.php:1750` — **defaults to on**), `BZJ_WOOCS_SUPPRESS` (declared, never read).
+- **Structured JSON logging: NOT FOUND** anywhere. The bridge's `bc_affwp_log()` (`wow-pgb_sync.php:22-66`) is formatted-text → `error_log()` only.
+- **Answer to 0200 §34:** `data/logs/bzj-payment-gateway/` with per-*component* files (not one-per-source-file) is the better fit; the repo has no per-source-file precedent, and `bzj_log_once` already supports the pattern.
+- Leakage: `wow-pgb_init.php:42` logs the **entire raw `$_POST`**; `wow-pgb_init.php:704` logs the full AffiliateWP snapshot (including `customer_email`, `http_referer`, affiliate IDs); `wow-pgb_sync.php:1628-1634` and `:1750` can log WoWonder `access_token` payloads. **Violates `AGENTS.md` "Never log tokens".**
+
+**Locking — VERIFIED:**
+- The only first-party lock in the repo is **MySQL `GET_LOCK`** at `wp-content/mu-plugins/bzj-connections-sync.php:134` with `LOCK_TIMEOUT=15` and a reentrancy counter (`:131-141`). This is the convention to reuse — it matches `AGENTS.md` "Pair locks are required where applicable".
+- `shared/wwqd_sync_queue.php:23` uses `LOCK_EX` on a whole-file rewrite (lost updates under concurrency).
+- `streams/` and `social/` PGB paths use **no locking at all**. `streams/assets/wow-pgb/wow-pgb_init.php` inserts the transaction with no lock and no unique key; `streams/wow-pgb_webhook.php:176` does an unguarded `UPDATE Wo_Users SET wallet = wallet + $amount`.
+
+---
+
+## 4. Additional CRITICAL/HIGH findings not in any prior report
+
+| ID | Sev | Finding | Evidence |
+|---|---|---|---|
+| F-01 | **CRITICAL** | **`send_woocommerce_request()` sets no `CURLOPT_TIMEOUT`.** The Streams→WooCommerce order-creation call can hang indefinitely. Combined with `retry_with_backoff` nowhere at this layer, this is a direct dropped-order mechanism. | `streams/assets/wow-pgb/wow-pgb_init.php:431-438` |
+| F-02 | **CRITICAL** | **Wallet credit has no idempotency guard and no lock.** `UPDATE Wo_Users SET wallet = wallet + $amount` — repeated WooCommerce webhook delivery double-credits. WooCommerce webhooks **must be assumed replayable**. | `streams/wow-pgb_webhook.php:175-185` |
+| F-03 | **CRITICAL** | **SQL string interpolation of attacker-influenced values.** `$order_id` into `SELECT ... WHERE order_id = '$order_id'` in both the init file and the webhook; `$email` into `SELECT user_id FROM Wo_Users WHERE email = '$email'`; `$amount`/`$user_id` interpolated into the wallet UPDATE. Currently gated by the HMAC signature, but a signature bypass or an ID containing a quote is a direct SQLi. | `wow-pgb_init.php:105,147`; `wow-pgb_webhook.php:150,158,166,176,294,323` |
+| F-04 | **CRITICAL** | **Financial values are browser-authoritative.** `amount`, `product_price`, `wow_currency_code`, `transaction_kind`, `product_owner_id` all arrive as `$_POST` and are used as-is. No server-side re-derivation from the product catalogue exists anywhere. Violates `AGENTS.md` "Never trust browser-supplied financial values". (Mitigated in practice only by F-05 — which is itself a bug.) | `wow-pgb_init.php:65-71,404,586-593,620`; JS `content.phtml:2340-2351` |
+| F-05 | **CRITICAL** | WooCommerce overwrites the posted line-item price with the product DB price on create (§1). | `class-wc-rest-orders-v2-controller.php:997-1002` |
+| F-06 | **HIGH** | TLS verification disabled by default in **both** cURL helpers. `wow-pgb_init.php:436-437` hard-codes `0`; `wow-pgb_sync.php:679-680` defaults `$_ENV['CURL_SSL_VERIFYHOST'] ?? 0`. Violates `AGENTS.md` "Never disable TLS verification". | as cited |
+| F-07 | **HIGH** | Hard-coded webhook secret in source; admin-configurable `wow_webhook_secret` is dead config. | `wow-pgb_webhook.php:29`; `requests.php:217-219` |
+| F-08 | **HIGH** | **No durable transaction id.** `wow_order_id = uniqid('wow_')` (`wow-pgb_init.php:39`) is not a UUID, is generated **before** any persistence, and is the only join key to `Wo_Payment_Transactions` — which has **no primary key and no unique constraint** (§Gap 8). Two concurrent initiations cannot be distinguished. | `wow-pgb_init.php:39`; `wowonder.sql:4874-4883` |
+| F-09 | **HIGH** | **Failed WooCommerce creation leaves an orphaned Streams transaction with no cleanup and no state.** Rows are inserted at `wow-pgb_init.php:81-100` *before* the REST call at `:721`; on any non-201 there is no compensating delete or state change (`:747-751`). This is the orphaned-intent class 0200 §23 identified. | `wow-pgb_init.php:81-100,721-751` |
+| F-10 | **HIGH** | **Non-atomic financial write.** Wallet credit + funding INSERT are not wrapped in a transaction (`wow-pgb_webhook.php:176,193`). Jewel does it correctly (`:313-339`); the webhook does not. | `wow-pgb_webhook.php:175-209` |
+| F-11 | **HIGH** | Subscription provisioning targets `POST /subscriptions` with `'status'=>'active'` from `wp_footer`. Bypasses WCS ownership, is browser-triggered, and `retry_with_backoff(..., 10, 2, 300)` sleeps up to ~300 s inside a page render. | `wow-pgb_sync.php:406,435-442,509-532,1727-1742` |
+| F-12 | **MEDIUM** | `$stmt->execute()` called twice on the same prepared UPDATE (`wow-pgb_webhook.php:140` then `:142`) — the `:142` result is the one checked. | `wow-pgb_webhook.php:140-147` |
+| F-13 | **MEDIUM** | AffiliateWP's referral `currency` is inconsistent between native (empty) and bridge (order currency) rows in the same table. | §Gap 5 item 7 |
+| F-14 | **MEDIUM** | `affiliate-wp.php:32-78` runs a `pre_http_request` interceptor that force-writes a hard-coded licence key/status into `affwp_settings` on every `init`. Defeats licence validation. Out of PGB scope but worth a separate ticket. | `affiliate-wp/affiliate-wp.php:32-78` |
+
+---
+
+## 5. Assessment of the three options Claude left open
+
+**Option A (Streams → REST → browser checkout): keep REST as the transport, but fix it.** The DNS observation is *not* evidence against REST — it is evidence that **whatever host is configured in `wow_api_url` must resolve from cPanel**, which is a deployment/config defect, not an architectural impossibility. Verify: `curl -s -o /dev/null -w '%{http_code}' "$wow_api_url/wp-json/wc/v3/system_status" -u key:secret` from cPanel. If that succeeds, Option A survives.
+
+**Option B (durable intent → signed WP handoff → native WooCommerce PHP APIs): viable for the *order*, but INCOMPLETE for subscriptions.** §Gap 3 proves `wc_create_order()` + `add_product()` will **not** create a subscription — WCS 8.6.0 reads `WC()->cart->recurring_carts` exclusively. Any Option B design must either (a) deliberately synthesise a `WC_Cart` + recurring cart and fire `woocommerce_checkout_order_processed` (heavy, high blast radius), or (b) accept that the initial order is created natively and the subscription is created by **WCS itself** once payment completes — which requires the order to actually pass through WooCommerce checkout rather than being created pre-paid.
+
+**This is the single largest unresolved design question in the whole project, and no prior report surfaced it.** It must be settled before the ADR.
+
+**Option C (hybrid): the only architecture that survives §Gap 3 and §Gap 4 simultaneously** — WordPress-native order creation for pricing/currency correctness, with the browser handoff carrying only an intent reference, and WCS owning the subscription lifecycle.
+
+**Option D (Store API): REJECT.** Verified cart-bound; cannot create an arbitrary order (§Gap 2).
+
+---
+
+## 6. Open items requiring verification before the ADR can be closed
+
+| # | Question | How to answer |
+|---|---|---|
+| V-01 | Actual `_price`/`_regular_price` of every `wow-pgb_*` product and variation | Production DB dump — blocks §1, currency model, order lifecycle |
+| V-02 | Live `SHOW CREATE TABLE Wo_Payment_Transactions` (dump has drifted — bridge writes columns absent from `wowonder.sql`) | Production DB |
+| V-03 | Is AffiliateWP's native WooCommerce integration enabled? (`affwp_settings['integrations']['woocommerce']`) | Production DB — decides whether the double-credit vector is live |
+| V-04 | Does `$wow_api_url` resolve from cPanel? Same for the WC webhook delivery URL | `curl` from cPanel — decides Option A viability |
+| V-05 | Is `DISABLE_WP_CRON` set? Is there a real `crontab` for `streams/cron-job.php` and `wp-cron.php`? | cPanel/server |
+| V-06 | Does `woocs_init_compatibility_woo_subscriptions` return true at runtime? | `wp eval` / Drop-In |
+| V-07 | Does HPOS (`woocommerce_custom_orders_table_enabled`) actually enabled? Changes which price/currency filters apply and disables `WOOCS::woocommerce_get_order_currency()` entirely | `wp option get` |
+| V-08 | Real-world duplicate-referral and duplicate-wallet-credit frequency | DB queries across `affiliate_wp_referrals` and `Wo_Payment_Transactions` |
+
+---
+
+## 7. Position for BZJ-PGB-0230 (ADR)
+
+The evidence now supports a firm architectural conclusion that prior reports only gestured at:
+
+> **The Buzzjuice Payment Gateway Bridge has two independent fulfilment paths, and *both* are unreliable. The Streams side is triggered by a replayable, hard-coded-secret webhook over a network path observed to fail DNS. The WordPress side is triggered by `wp_footer` on the order-received page — i.e. by the browser.** No reconciliation job exists for either. No durable transaction identifier, no unique constraint, no idempotency key, and no lock exists anywhere in the payment path.
+
+**Recommended architectural direction** (for ADR debate, not implementation):
+
+1. **Browser never triggers fulfilment.** Move subscription provisioning and AffiliateWP off `wp_footer` onto server-side order-status events, and stop creating subscriptions via `POST /subscriptions` with `status=active` — let WCS 8.6.0 own it.
+2. **A durable payment-intent row is mandatory**, created before any WooCommerce call, with a real UUID primary key, a unique idempotency key, and a `state` column — replacing `uniqid('wow_')` + unkeyed `Wo_Payment_Transactions`.
+3. **Server-side price and currency authority.** Amount must be re-derived from the WooCommerce catalogue inside WordPress; the browser submits only a *product/plan reference*.
+4. **Idempotent, locked, transactional financial effects** — modelled on the two correct patterns already in the codebase: `jewel_apply_rebate_credit()` (`jewel-affiliate-webhook.php:279-340`) and `bzj-connections-sync.php` (GET_LOCK `:134`, unique `event_uuid` `:110`, backoff queue `:93-112, :906-934`).
+5. **A reconciliation cron + WP-CLI command**, following `bzj-connections-sync.php` and `bzj-affiliate-access-gate.php:488-502` exactly, covering reconciliation cases A–F from 0200 §32.
+6. **Keep AffiliateWP logic as-is** (`AGENTS.md` protected functionality). Wrap it; do not rewrite. But the double-invocation surface must be collapsed to a single entry point before any of it is touched.
+
+**Stop condition for this stage: met.** All 10 evidence gaps are closed from repository source, with 4 items (V-01…V-04, V-06, V-07) requiring production-environment access before the ADR can be finalised. No production code was written and no repository file was modified.
