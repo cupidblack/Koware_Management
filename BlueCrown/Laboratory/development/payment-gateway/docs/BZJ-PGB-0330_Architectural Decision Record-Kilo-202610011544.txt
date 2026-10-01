@@ -1,0 +1,143 @@
+# BZ-PGB-0330 — Architecture Challenge
+
+**Agent:** Kilo Code · **Date:** 2026-10-01 · **Basis:** BZJ-PGB-0040 Implementation Specification (proposed architecture), challenged against the installed source verified in BZJ-PGB-0310-Kilo.
+
+**Mandate:** attack, not refine. Twelve challenges. Every claim carries a repository citation. Where the proposal is right, that is stated too — a challenge that only finds faults is not a challenge, it is a complaint.
+
+**Verdict up front: the ADR cannot be approved.** Three fatal internal contradictions, one circular dependency, one phantom component. Details below.
+
+---
+
+## C-01 — Challenge the Native WooCommerce approach
+
+**The proposal's claim (§12):** *"WooCommerce owns the final checkout/payment process… The bridge creates or retrieves the appropriate order and sends the customer into the normal WooCommerce payment process."*
+
+**Attack 1 — `order-pay` is not checkout, and the proposal treats it as if it were.**
+A pre-created order is paid at `order-pay`. `order_pay()` (`includes/shortcodes/class-wc-shortcode-checkout.php:88-119`) does exactly four things: `absint`, `hash_equals` the order key, capability-check, and render the payment form. It **never** calls `WC_Checkout::process_checkout()`, never builds a cart, never fires `woocommerce_checkout_order_processed`. The proposal's §13 flow diagram (`Payment Intent → WooCommerce Order / Checkout → WCS → Pending subscription`) is therefore unreachable from §10+§12.
+
+**Attack 2 — the proposal's own §10 step 10 can make the order unpayable.**
+§10 step 10 says the bridge must "calculate authoritative line pricing". If that yields `total = 0`, then `needs_payment()` is false and `order_pay()` **throws** *"This order's status is … it cannot be paid for"* (`:126-129`). This converts my 0310 §1 finding (WooCommerce overwrites the posted price with the catalogue price, `class-wc-rest-orders-v2-controller.php:997-1002`; catalogue price is `0` in the only code that creates these products, `wow-pgb_sync.php:87-88`) from a billing discrepancy into **a payment that cannot be taken at all** — or, if `set_paid`/status differ, one that completes for free.
+
+**Attack 3 — the proposal assumes a WordPress session exists at the payment step. It does not.**
+Streams users authenticate against WoWonder (`streams/requests.php:160-169`). The payment URL is handed to a browser carrying a WoWonder session. At `order-pay`, `class-wc-shortcode-checkout.php:100-107`:
+
+```php
+if ( ! current_user_can( 'pay_for_order', $order_id ) && ! is_user_logged_in() ) {
+    wc_print_notice( … 'Please log in to your account below to continue…' );
+    woocommerce_login_form( … );
+    return;
+}
+```
+
+If SSO has not established a WordPress session on that redirect, **the customer is shown a WordPress login form at the payment step and the flow dies.** This is either (a) already broken in production, or (b) carried by SSO behaviour that appears **nowhere** in BZJ-PGB-0040. The proposal does not mention it, does not require it, and does not test for it.
+
+**Attack 4 — an unfatal but real silent-drop path the proposal inherits.**
+`wow-pgb_init.php:479-503` resolves `wp_user_id` and, on failure, **only calls `error_log` and continues** — `$wordpress_user_id` is then undefined/empty, `customer_id` is garbage, and `billing_email` cannot be populated. Fulfilment downstream (`streams/wow-pgb_webhook.php:50,122` → `getUserIdByEmail()`) then returns null and the customer is charged with nothing delivered. §10 step 4 says "authenticate/bind the user" but does not say *abort* on failure.
+
+**Where the proposal is right:** creating the order in WordPress rather than over REST is correct — REST forces server-side price overwrite (`v2-controller.php:997-1002`) and disables WOOCS (`woocommerce-currency-switcher/index.php:31-45`). That part of the direction survives intact.
+
+---
+
+## C-02 — Challenge the Payment Intent state model
+
+**Attack 1 — eight unconstrained status columns with no transition table.**
+§3 specifies `intent_status`, `payment_status`, `fulfilment_status`, `redirect_status`, `subscription_status`, `affiliate_status`, `jewel_affiliate_status`, `streams_fulfilment_status`. **No enum, no transition table, no invariant, and no statement of which column the recovery process reads.** Eight mutually unconstrained status fields will drift; that is not a risk, it is a certainty.
+
+Compare the repo's only working precedent, which uses **one** `status` column on one queue table plus a separate ledger: `wp-content/mu-plugins/bzj-connections-sync.php:93-112`.
+
+**Attack 2 — `intent_status` and `payment_status` are not separable as specified.**
+`intent_status=COMPLETED` with `payment_status=PAID` versus `FULFILLED` is undefined. §28's `RECOVERY_REQUIRED` is introduced in the *recovery* section without being placed in the `intent_status` domain. The state machine is incomplete.
+
+**Attack 3 — `redirect_status` is a category error as named.**
+§18 puts `Redirect: Pending` in a **customer-facing status line**; §22-23 describe it becoming `READY`. The only defensible reading is "a redirect target is now available", i.e. `redirect_ready_at` — a timestamp. As written, `redirect_status` invites an implementer to persist "did the browser follow the link", which the server **cannot observe**. `wow-pgb_sync.php:509` observes it only incidentally, by `wp_footer` executing. Persisting an unobservable event produces a column that is permanently, structurally wrong. It must be renamed and semantically pinned before schema approval.
+
+**Attack 4 — §2 and §27 directly contradict each other.**
+§2 makes IAPD placement **non-negotiable**. §27 says the effect store *"may use a dedicated effect table or equivalent durable mechanism… must be decided during final schema review."* The table that would carry the entire state machine is **explicitly deferred**, while the database that must contain it is **explicitly mandated**. The schema is undefined at the exact point the specification declares it fixed.
+
+**Attack 5 — the timestamps imply a lifecycle the state machine does not implement.**
+`validated_at, handoff_at, order_created_at, payment_completed_at, fulfilment_completed_at, completed_at` presuppose each stage is separately observable. `handoff_at` in particular is observable only if the server issues the handoff — which it does not today (`streams/assets/wow-pgb/wow-pgb_init.php:741` returns `payment_url` to the browser). There is no server-side record that a handoff *reached anyone*.
+
+---
+
+## C-03 — Challenge the `koware_iapd_db` schema concept
+
+**Attack 1 — the mandated connection helper has never been exercised and fails silently.**
+§2.2 mandates `get_iapd_db_conn()`. Verified: **zero callers in the entire repository.** Its implementation (`shared/db_helpers.php:79-86`):
+
+```php
+$conn = new mysqli( IAPD_DB_HOST, … );
+if ($conn->connect_errno) return false;   // silent, no throw, no log
+```
+
+The most durable component of the entire proposed payment architecture rests on a helper that **has never run**, cannot be tested from the repository, and hands back `false` indistinguishable from a connection object to any caller that does not check. Compare `jewel-affiliate-webhook.php:212-216` and `wow-pgb_sync.php:364-368`, which do check — but §31's "parameterized queries through the approved DB helper" is not a safety property while the helper can return `false`.
+
+**Attack 2 — §33 is unimplementable as written.**
+§33 requires "versioned, reviewed, explicit, idempotent, migration-controlled" schema changes, and correctly forbids filesystem-driven rebuilds. But the **only** first-party migration precedent is `bzj-connections-sync.php:70-114`, which uses `dbDelta` — and **`dbDelta` operates on `$wpdb` and cannot target IAPD**. Verified: no `dbDelta`/`CREATE TABLE` anywhere in the repo targets `IAPD_DB_NAME`. There is no migration runner, no schema-version registry, and `data/db/migrations/` does not exist (only anticipated at `.gitignore:105-109`). §33 therefore mandates a control the project must build from zero, with no precedent, before any of it can be relied on.
+
+**Attack 3 — cross-database atomicity is impossible and the specification never addresses it.**
+The intent lives in IAPD. The order lives in the WordPress database. Fulfilment writes to the WoWonder database. **MySQL provides no distributed transaction.** §10 step 8 — "associate the order with the intent" — is a write to WordPress that must be atomic with an IAPD write. The proposal contains no ordering rule, no compensating-action rule, and no statement of which write is authoritative when the second fails.
+
+**Attack 4 — §2 introduces a new single point of failure into the payment path.**
+Today a payment needs the WordPress database. Under §2 it needs WordPress **and** IAPD. If IAPD is unreachable, `get_iapd_db_conn()` returns `false`, §10 step 2 ("locate the payment intent") cannot proceed, and **all payments halt** — with a silent failure and no log. A clause declared "non-negotiable" is simultaneously the largest new availability risk in the design.
+
+**Attack 5 — the lock in §10 step 5 cannot span the required critical section.**
+The only first-party lock is MySQL `GET_LOCK` with `LOCK_TIMEOUT=15` (`bzj-connections-sync.php:131-141`). `GET_LOCK` is scoped to **one MySQL server connection**. The critical section spans an IAPD write and a WordPress order creation on a different connection — and if IAPD is on a different host, on a different server. **`GET_LOCK` cannot provide mutual exclusion across that boundary.** Whether IAPD is co-hosted with the WordPress database is **UNKNOWN** and unasked.
+
+---
+
+## C-04 — Challenge currency / price authority
+
+**Attack 1 — §7.4's "mathematically correct cross-rate" is not achievable with WOOCS's data model.**
+§7.5 permits using GHS as the mathematical bridge currency. Verified: WOOCS stores **only base-relative rates** (`classes/woocs.php:100-104, :2800`, base marked `is_etalon`). A ZAR→EUR cross-rate through GHS is valid **only if both rates come from the same snapshot**. WOOCS has **no TTL** — rates are a plain option rewritten by `woocs_update_rates_wpcron` (`classes/cron.php:50-63`), so the two legs can straddle a refresh. Worse, the `woocs_currency_data_manipulation` filter (`index.php:205-220`) applies a `rate_plus` markup **to the rate itself**, which means `WOOCS::back_convert()` (`:4058`) is **not the inverse** of `woocs_exchange_value()` (`:3458`). §8 demands a recorded `effective_rate` and `rate_timestamp`; there is no such thing as *a* rate timestamp in WOOCS.
+
+**Attack 2 — §10 step 9 relocates currency selection from the customer to Streams.**
+§12 assigns the payment process to WooCommerce, but for a pre-created order **there is no checkout session**, therefore no customer-selected currency. The intent's asserted currency becomes the order currency. That is a **behavioural regression presented as a correctness fix**, and §8's promise that "the final WooCommerce order currency must correspond to the currency actually presented/charged at checkout" is unachievable when the customer never reaches a checkout that can change currency.
+
+**Attack 3 — the price-authority rule is never actually stated.**
+§6 says the server must not trust the browser's amount. §10 step 10 says the bridge must "calculate authoritative line pricing". **But nowhere does the specification say which price wins when the server-derived catalogue price differs from the Streams product price.** Given `class-wc-rest-orders-v2-controller.php:997-1002` shows WooCommerce itself defaults to the catalogue price, the honest position is: the customer is charged the catalogue price and Streams must reconcile the difference. §6 does not say this. Until the catalogue prices are read (V-01, still outstanding), **no currency or pricing statement in the proposal can be evaluated at all.**
+
+**Attack 4 — the proposal's currency model is undefined for renewals, which is where subscription revenue recurs.**
+§7 addresses the initial order only. WCS builds renewal orders by copying subscription line items **verbatim** (`woocommerce-subscriptions/includes/core/wcs-order-functions.php:248-269`), and those orders receive **no `_woocs_order_rate`** (`class-wc-subscriptions-data-copier.php:122,280-293`). A later `WOOCS::recalculate_order()` on such an order divides by an empty rate (`classes/woocs.php:4100`). The proposal is silent on renewals entirely.
+
+**Attack 5 — behaviour differs by deployment state the proposal does not capture.**
+WOOCS is **disabled on `/wp-json/wc/v3/*`** (`index.php:31-45`) but **allowed on `/wp-json/wc/store/*`**. `WOOCS::woocommerce_get_order_currency()` **early-returns under HPOS** (`classes/woocs.php:3515-3517`) and only acts on non-AJAX front-end requests (`:3519`). Whether HPOS is enabled is **UNKNOWN** (V-07). The proposal's currency behaviour is therefore **not deterministic across deployments**.
+
+---
+
+## C-05 — Challenge subscription lifecycle
+
+**This is the fatal contradiction.**
+
+**Attack 1 — §13 asserts a behaviour that only occurs on a path §10 forbids.**
+§13: *"When a subscription product is purchased through checkout, WooCommerce Subscriptions creates the pending subscription associated with the parent order before payment."* **True — but only for orders created by WooCommerce checkout.** Verified in the installed WCS 8.6.0:
+
+- `WC_Subscriptions_Checkout::process_checkout()` early-returns unless `WC_Subscriptions_Cart::cart_contains_subscription()` — `includes/core/class-wc-subscriptions-checkout.php:75`
+- iterates `WC()->cart->recurring_carts` — `:101`
+- line items come from `WC()->checkout->create_order_line_items()` — `:194-195`
+- hooked **only** on `woocommerce_checkout_order_processed` (`:24`) and `woocommerce_store_api_checkout_order_processed` (`:27`)
+
+§10 instructs the MU bridge to **create the order**. That path never fires either hook. **Therefore §13's flow diagram is unreachable, and no subscription is ever created.** This is not a refinement opportunity; it is a logical impossibility in the current specification.
+
+**Attack 2 — §14's hooks exist but will not fire.**
+`subscriptions_created_for_order` is fired at `class-wc-subscriptions-checkout.php:116`; `woocommerce_subscription_payment_complete` at `class-wc-subscription.php:2077`. Both are on the cart/checkout path. Under §10+§12 neither fires. The proposal names correct hooks for a flow it has excluded.
+
+**Attack 3 — all three escape routes are worse than the problem.**
+- **Synthesise a cart and fire `woocommerce_checkout_order_processed`:** fires *every* integration attached to that hook — including AffiliateWP's native `add_pending_referral()` (`includes/integrations/class-woocommerce.php:66`) and Recurring Referrals. It would create a second referral path and a duplicate order. Blast radius unacceptable.
+- **`wcs_create_subscription()` directly** (`includes/core/wcs-functions.php:157`): defaults to **`pending`** (`:162`) and creates **no line items and no totals** (`:222-259`). A subscription with no recurring totals cannot renew correctly.
+- **Keep `POST /subscriptions`** (`wow-pgb_sync.php:1685`) with `'status' => 'active'` (`:406`): this is the browser-triggered parallel subscription engine (§C-11, Attack 4) that the proposal claims to eliminate.
+
+**Attack 4 — the proposal has not chosen, and each choice has a different blast radius.** The ADR must choose explicitly. Silence here is not safe.
+
+---
+
+## C-06 — Challenge AffiliateWP trigger ownership
+
+**Attack 1 — §15 and §26 are in direct conflict.**
+§15: existing AffiliateWP behaviour is protected, including "duplicate prevention, processing marker". §26/§27: post-payment is independent effects keyed on `affiliate:{intent_uuid}`.
+
+The existing duplicate prevention is `_affwp_bridge_processed` order meta (`wow-pgb_sync.php:741`) plus a SQL check scoped to `reference AND context AND affiliate_id` (`:1488-1494`). **`intent_uuid` does not exist in the AffiliateWP schema, and the referrals table has no unique key on `(reference, context)`** — verified `includes/class-referrals-db.php:1318-1342`: only `PRIMARY KEY (referral_id)` and `KEY affiliate_id`. So `affiliate:{intent_uuid}` **cannot be enforced by AffiliateWP**. Either the new guard replaces the protected mechanism — violating §15 — or the two coexist as competing authorities. The proposal must choose.
+
+**Attack 2 — the native integration collision is entirely unaddressed.**
+`Affiliate_WP_WooCommerce` registers `woocommerce_checkout_update_order_meta` (`:66`) and `woocommerce_order_status_completed` / `_processing` (`:78-79`) independently. The bridge registers `woocommerce_order_status_completed` at priority 999 (`wp-content/mu-plugins/buzzjuice-affwp-order-complete.php:34`) **and** is called inline four times (`wow-pgb_sync.php:246, :455, :473, :495`). Up to three invocations per order. §29's Cases D–F detect **"AffiliateWP missing"**. **There is no Case for "AffiliateWP present twice."** A reconciliation design that cannot detect double-credit is not a reconciliation design.
+
+**Attack 3 — retrying is itself a financial hazard here, and the proposal assumes it is safe
