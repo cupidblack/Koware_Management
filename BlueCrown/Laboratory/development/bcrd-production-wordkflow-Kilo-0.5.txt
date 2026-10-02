@@ -1,0 +1,1563 @@
+<<START RESPONSE 2>>
+
+KOWARE GROUP / BLUE CROWN LABORATORY
+DEVELOPER TEMPLATE — PRODUCTION WORKFLOW INFRASTRUCTURE (VERSION 0.5)
+
+================================================================================
+DOCUMENT IDENTITY
+================================================================================
+  Document ................ bcrd-production-wordkflow-Jules-0.5.txt
+  Series version .......... 0.5 (supersedes 0.1, 0.2, 0.3, 0.4)
+  Project identifier ...... BZJ-PGB
+  Project name ............ Buzzjuice Payment Gateway Bridge
+  Home section ............ BZJ-[PROJECT]-1004.3 Workflow Infrastructure Template
+                            and Prompt Pack Standard
+  Legacy identifier ....... BZJ-PGB-0100 Development Workflow Review
+  Template status ......... PROPOSED — adoption requires the human authority at
+                            BZJ-[PROJECT]-6013.3
+  Template revision ....... 1.0
+  Prepared by ............. Google Jules (Independent Reliability / CI Review
+                            role) at the request of the Koware project authority
+
+================================================================================
+HOW TO READ AND REUSE THIS DOCUMENT
+================================================================================
+  THIS IS A GENERIC TEMPLATE.
+
+  Every identifier in this document is written as:
+
+      BZJ-[PROJECT]-<S><KK><P>.<SS>
+
+  BZJ-[PROJECT] is a placeholder for the project's short identifier. Substitute
+  the real prefix before use. One worked example is carried throughout for
+  readability:
+
+      CONCRETE INSTANCE USED AS THE WORKED EXAMPLE IN THIS DOCUMENT
+        Short identifier ......... BZJ-PGB
+        Project name ............. Buzzjuice Payment Gateway Bridge
+        Example section .......... BZJ-[PROJECT]-4004.31
+        Becomes .................. BZJ-PGB-4004.31
+
+  To retarget this template at another project, replace "BZJ-[PROJECT]" with the
+  new prefix and replace the worked-example references with the new project.
+  Nothing else in the grammar, the ladder or the protocols is project specific.
+
+  Note on the filename. The misspelling "wordkflow" is retained so that this
+  document stays discoverable by the same series prefix as 0.1 to 0.4. Correct
+  it only when the entire series is renamed together, at closure
+  (BZJ-[PROJECT]-9004.73).
+
+================================================================================
+PRECEDING VERSIONS — the engineering record, retained not deleted
+================================================================================
+  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.4.txt
+  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.3.txt
+  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.2.txt
+  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.1.txt
+
+  Two divergent generations of this guide also exist in the repository and must
+  be reconciled at closure (see defect D10):
+    BlueCrown/development-workflow-guide.md
+    BlueCrown/Laboratory/development/development-workflow-guide.md
+  Two further references cited by the earlier versions are not present in the
+  current tree and are recorded as missing provenance:
+    BlueCrown/production-wordkflow-trial.txt
+    BlueCrown/Developer Workflow Implementation Guide.md
+
+
+================================================================================
+PART 0 — REVIEW OF THE LEGACY WORKFLOW AND DIAGNOSIS
+================================================================================
+
+0.1 WHAT THE LEGACY WORKFLOW ACTUALLY IS
+
+  The legacy production workflow, as used in practice, is:
+
+    1. I create a prompt then share with ChatGPT.
+    2. Review ChatGPT's response to develop the prompt.
+    3. Share the updated prompt with ChatGPT and GitHub.
+    4. Share the prompt with ChatGPT including GitHub's response.
+    5. Update the prompt if necessary then share the prompt including ChatGPT's
+       response with GitHub.
+    6. Repeat the process of updating and sharing prompts and responses between
+       ChatGPT and GitHub until a working solution is obtained.
+
+  Versions 0.1 to 0.4 are the record of how that workflow was progressively
+  hardened. Version 0.4 already contains genuine, high quality engineering
+  output: an initial architectural analysis, a multi-agent brief analysis, an
+  evidence verification pass, an architecture challenge, a challenge closure
+  record, an architecture decision record, an implementation specification, a
+  database and migration specification, and task packet and review branch
+  scaffolding. That content is production evidence and is preserved by this
+  revision. What was missing is the infrastructure that makes the workflow
+  repeatable, resumable, auditable, and independent of whoever relays the text.
+
+0.2 THE STRUCTURAL DEFECTS FOUND
+
+  D1 — THE HUMAN IS THE MESSAGE ROUTER.
+       Every defect, design question, review finding and code fragment passes
+       through one person by manual copy and paste. The single point of failure
+       is not the tooling, it is the relay. This caps throughput, burns context,
+       and makes the process unusable by anyone other than the originator.
+
+  D2 — NO DURABLE TASK STATE.
+       "Repeat until a working solution is obtained" has no definition of done,
+       no exit condition, no list of outstanding findings, and nowhere to write
+       the state of the work down. If the session dies, the state dies with it.
+
+  D3 — CONTEXT DEGRADATION AND DRIFT.
+       Each relay rewrites the prompt. After four relays the prompt no longer
+       says what was originally asked for. Two agents solve slightly different
+       problems and neither notices.
+
+  D4 — NO INDEPENDENCE CONTROL.
+       When the same platform family authors, reviews and approves, the review
+       inherits the author's assumptions. The role separation now fixed in
+       PART 2.1 is the remedy: a role is assigned to exactly one platform, and
+       no platform holds two roles in the same gate.
+
+  D5 — IDENTIFIERS THAT LIE.
+       The identifiers in use do not encode project stage. The clearest example
+       is "BZJ-[PROJECT]-0620 COPILOT PR REVIEW": 0620 sits in the initiation
+       band, but a pull request review is a late execution quality activity. A
+       developer scanning the identifier list cannot tell where the project
+       actually is. This template repairs it by re-sequencing every review, code
+       check and test activity into the Executing (6000s) or Monitoring and
+       Controlling (8000s) ranges — see PART 1.4 and PART 7.
+
+  D6 — TRANSCRIPT AS ENGINEERING RECORD.
+       Chat transcripts are copied into text files by hand. They are not
+       diffable, not reviewable, not linkable to a commit, and cannot be shown
+       to be unmodified. There is no authoritative, version controlled
+       statement of what was decided and why.
+
+  D7 — NO DETERMINISTIC FLOOR.
+       Nothing in the legacy workflow guarantees that code compiles, lints,
+       passes static analysis and passes tests before an agent or a human reads
+       it. Agent review is being asked to compensate for the absence of
+       mechanical checking.
+
+  D8 — NO STOP CONDITIONS OR SCOPE CONTROL AT A KNOWN POINT.
+       The buzzjuice.net AGENTS.md mandates explicit stop conditions, single
+       phase scope and "understand before modifying", but the workflow template
+       provided no slot in which those rules are exercised at a known place in
+       the sequence.
+
+  D9 — A THIRD IDENTIFIER FAMILY IS IN CIRCULATION.
+       Alongside the two-band scheme, a flat family exists with no band and no
+       knowledge area: BZJ-PGB-001, BZJ-PGB-002, BZJ-PGB-003. These appear in
+       the codebase AGENTS.md as docs/payment-gateway/BZJ-PGB-001-architecture.md,
+       BZJ-PGB-002-implementation-specification.md and as a named scope control
+       "BZJ-PGB-003". They cannot be sequenced against the ladder and they break
+       the band-clock reading. Mapped in PART 7 and flagged for reconciliation.
+
+  D10 — TWO DIVERGENT COPIES OF THE GUIDE.
+       BlueCrown/development-workflow-guide.md and
+       BlueCrown/Laboratory/development/development-workflow-guide.md carry the
+       same material at different generations with different section numbers
+       (0100/0200/... versus 0010/0020/...). There is no stated canonical path,
+       so a reader cannot tell which numbering is current. Must be resolved at
+       closure.
+
+0.3 THE TWO COMPETING NUMBERING RULES, AND THE RULING
+
+  RULE A, stated at legacy BZJ-PGB-0210:
+    "BZJ-PGB-4324 means subsection 24 of section 43"
+    Four digits, digit 2 is the section counter, digits 3 and 4 are the
+    subsection counter. Purely ordinal. Carries no process meaning.
+
+  RULE B, stated in the same version and in the review request:
+    "BZJ-PGB-0004.1 Develop Project Charter" through "BZJ-PGB-9004.7 Close
+    Project or Phase". The 49 PM processes, each prefixed by a band digit so
+    that the lifecycle sequence is preserved. Carries knowledge area and stage
+    meaning.
+
+  RULING: Rule B is adopted. Rule A is retired. An identifier that carries no
+  process meaning cannot satisfy the requirement that a project manager can
+  relate a section to one or more project management processes, and cannot
+  satisfy the requirement that a developer can read project progress off the
+  leading digit. Rule B satisfies both, which is the whole point of the scheme.
+
+0.4 WHAT THIS REVISION CHANGES, IN ONE LINE
+
+  It converts a human-relayed prompt conversation into a repository-hosted,
+  identifier-addressed engineering pipeline in which the human is the decision
+  gate rather than the message router, and every section has an entry condition,
+  an evidence record, a definition of done, and an explicit stop condition.
+
+
+================================================================================
+PART 1 — IDENTIFIER GRAMMAR, ORDERING RULE, BANDS, KNOWLEDGE AREAS, GATES
+================================================================================
+
+1.1 THE IDENTIFIER
+
+      BZJ-[PROJECT] - <S><KK><P> . <SS>
+
+      BZJ-[PROJECT]  project prefix, fixed for the life of the project
+      S              stage band, 1 digit, the project progress clock
+      KK             PMBOK knowledge area, 2 digits
+      P              section position within that knowledge area, 1 digit
+      SS             sub-section, 2 digits, zero padded
+
+  EXAMPLES
+      BZJ-[PROJECT]-0004.1    band 0, Integration (04), position 1
+      BZJ-[PROJECT]-0005.00   band 0, Scope (05), position 0, sub 00   [custom]
+      BZJ-[PROJECT]-4004.31   band 4, Integration (04), position 3, sub 31
+      BZJ-[PROJECT]-8008.34   band 8, Quality (08), position 3, sub 34
+      BZJ-[PROJECT]-9004.7    band 9, Integration (04), position 7
+      BZJ-[PROJECT]-9999.9    reserved contingency slot
+
+1.2 THE ORDERING RULE (this is what keeps the lifecycle in exact sequence)
+
+  Sections are ordered by:
+
+      1. stage band digit, ascending
+      2. knowledge area digits, ascending
+      3. section position digit, ascending
+      4. sub-section, as a zero-padded two-digit integer, ascending
+
+  PM anchor identifiers keep their native one-digit form. For ordering only, a
+  one-digit form is read as zero-padded. Therefore:
+
+      4004.4  is read as 4004.04
+      4004.31 is read as 4004.31
+      and 4004.04 sorts BEFORE 4004.31, which is correct: Direct and Manage
+      Project Work begins before its own sub-phases finish, and Manage Project
+      Knowledge (4004.4) is a continuous activity that closes the band.
+
+  This single rule is what allows custom sections such as 0005.00, 1004.3,
+  4006.1, 6004.3, 6013.31, 7004.61, 8008.34 and 9004.73 to be inserted into
+  logical positions between the PM process numbers while the whole ladder still
+  sorts into exact numerical sequence from band 0 to band 9.
+
+  CHECK YOUR LADDER: sort the whole ladder by this rule and confirm it is
+  strictly ascending with no inversions. Any inversion means a section was
+  numbered in the wrong band and must be renumbered, not re-described.
+
+1.3 THE TWO REQUIRED READINGS (the design that satisfies both audiences)
+
+  A PROJECT MANAGER reads the knowledge area and the PM process:
+
+      0004.1   ->  PMBOK 4, Project Integration Management, process 4.1
+                  "Develop Project Charter". Where the PMBOK process name is
+                  used, a workflow subtitle is added beside it.
+      8011.7   ->  PMBOK 11, Project Risk Management, process 11.7
+                  "Monitor Risks".
+
+  A DEVELOPER reads the stage band digit only:
+
+      0xxxx   INITIATION              project is being chartered
+      1xxxx   PLANNING A              control plane, scope, schedule frame
+      2xxxx   PLANNING B              schedule, cost, quality, resource,
+                                      communications and risk plans
+      3xxxx   PLANNING C              risk analysis, procurement, engagement
+      4xxxx   EXECUTION A             analysis, decisions, specifications,
+                                      dispatch — the design spine
+      5xxxx   EXECUTION B             deliverable quality and resources
+      6xxxx   EXECUTION C             implementation, code checks, testing,
+                                      team, communications, risk response,
+                                      procurement, human approval
+      7xxxx   MONITORING AND CONTROL A   work, change control, scope
+      8xxxx   MONITORING AND CONTROL B   schedule, cost, quality, resources,
+                                      communications, risk, procurement,
+                                      stakeholders, independent review
+      9xxxx   CLOSING
+
+      The Koware band convention is confirmed here: "6009.4 means just passed
+      half way through the project" is the intended meaning of the leading
+      digit, and it is preserved.
+
+  RULE: the band digit dominates. If a proposed section does not belong to the
+  stage its band implies, the number is wrong, not the description.
+
+  CORRECTION RECORDED — the review request offers "BZJ-PGB-0010.9 Architecture
+  Brief Quality Monitoring" and observes that it would represent a Project
+  Quality Management item in a Monitoring & Controlling or Closing process
+  group. A quality monitoring item cannot sit in band 0; band 0 means
+  Initiation. The same concern, correctly numbered, is
+
+      BZJ-[PROJECT]-8008.03  Architecture Brief Quality Monitoring
+                            band 8 = Monitoring & Controlling, KA 08 = Quality
+
+  and it exists in this ladder as a sub-section of 8008.3. Rule for
+  sub-sections: the knowledge area digits stay fixed inside a parent section;
+  the band digit advances only when the activity genuinely matures into a later
+  stage; the position digit never changes within a knowledge area.
+
+1.4 RE-SEQUENCING RULE FOR REVIEWS, CODE CHECKS AND TESTS
+
+  Every review, code check, test run and merge-readiness activity is re-sequenced
+  out of the planning and early design bands and into the Executing or
+  Monitoring and Controlling ranges. Concretely:
+
+      KINDS OF ACTIVITY                          WHERE THEY NOW LIVE
+      ------------------------------------------  ------------------------------
+      implementation / build                     6004.3
+      automated code checks (lint, static        6004.31
+        analysis, style, security scan)
+      automated test execution (unit,            6004.32
+        integration, regression, concurrency)
+      staged migration and dry run               6004.33
+      production deployment                      6004.34
+      post-deployment reconciliation             6004.35
+      pull request review coordination and       6013.31
+        automated pull request review
+      merge readiness and pull request closure   6013.32
+      release readiness review                   7004.61
+      independent reliability and CI review      8008.31
+        (Jules role)
+      control quality / quality metrics          8008.3
+      architecture brief quality monitoring      8008.32
+      adversarial architecture and security      8008.33
+        review (Claude Code role)
+      finding register, severity triage,         8008.34
+        closure evidence
+      reviewer and sign-off tracking             8013.41
+
+  This is the direct repair of the 0620 COPILOT PR REVIEW defect. The activity
+  is no longer numbered in the initiation band; it is numbered where it
+  actually occurs.
+
+1.5 KNOWLEDGE AREA DIGIT MAP
+
+      04  Project Integration Management
+      05  Project Scope Management
+      06  Project Schedule Management
+      07  Project Cost Management
+      08  Project Quality Management
+      09  Project Resource Management
+      10  Project Communications Management
+      11  Project Risk Management
+      12  Project Procurement Management
+      13  Project Stakeholder Management
+
+1.6 SECTION POSITION DIGIT
+
+  P is the workflow's own subdivision of the knowledge area. It is not a PMBOK
+  process number. It is assigned once, in ladder order, and never reused. This
+  is precisely why the ladder may contain more, or fewer, sections than the 49
+  PM processes: P subdivides, it does not pretend to reproduce. Where P equals
+  a real PMBOK process number, the PM process is cited as the subtitle anchor and
+  the workflow name carries the coding meaning.
+
+1.7 SUB-SECTION NUMBERING
+
+  Sub-sections are always two digits, zero padded. Legacy forms .00, .03, .05,
+  .13, .23, .25, .31, .32, .35 are already two digits and are adopted unchanged.
+  The single digit form .9 normalises to .09. Legacy identifiers .31, .32, .35
+  migrate into 4004.31, 4004.32, 4004.35 without renumbering.
+
+1.8 GATES
+
+  A gate is a named approval point aligned one-to-one with stage bands, so that
+  "we are at band 6" and "we are at gate G6" mean the same thing.
+
+      G0  Charter Gate                 end of band 0
+      G1  Planning Frame Gate           end of band 1
+      G2  Planning Complete Gate        end of band 2
+      G3  Plan Approval Gate            end of band 3
+      G4  Design Approved Gate          end of band 4
+      G5  Deliverable Quality Gate      end of band 5
+      G6  Human Authorisation Gate      end of band 6
+      G7  Control Gate                  end of band 7
+      G8  Assurance Gate                end of band 8
+      G9  Closure Gate                  end of band 9
+
+  No gate may be passed by an AI agent. Every gate requires the named human
+  authority recorded in BZJ-[PROJECT]-0013.2.
+
+
+================================================================================
+PART 2 — ROLES, PLATFORMS AND TOOLS
+================================================================================
+
+2.1 ASSIGNED ROLES (one job per platform; no platform holds two jobs in the same
+    gate)
+
+  PLATFORM              ASSIGNED ROLE                             MUST NOT
+  -------------------  ----------------------------------------  ------------------------
+  ChatGPT / Codex      ARCHITECTURE AND STRATEGY. Owns initial    Implement production code
+                        analysis, evidence framing, the            without an approved
+                        architecture challenge, the Architecture   implementation
+                        Decision Record, the implementation         specification
+                        specification and migration specification,
+                        task packets, and the synthesis of all
+                        findings. It is the author of the design.
+
+  GitHub Copilot       IMPLEMENTATION. Writes and changes code       Architecture authority;
+                        strictly inside an approved specification   author of its own
+                        and a dispatched task packet. Owns the        specification
+                        pull request, its description, its test
+                        evidence and its response to review.
+
+  Google Jules         INDEPENDENT RELIABILITY AND CI REVIEW.        Author of the code it
+                        Reads the committed specification and         reviews; a party to
+                        implementation cold, without the author's   the review conversation
+                        reasoning chain. Owns the reliability
+                        opinion, the CI adequacy opinion, and the
+                        test sufficiency opinion.
+
+  Claude Code          ADVERSARIAL AND SECURITY REVIEW. Attacks     Author of the
+                        the proposal, the implementation and the     implementation it
+                        controls rather than refining them. Owns     attacks; final approver
+                        the security objection set and the
+                        failure-mode objection set.
+
+  Kilo Code            ORCHESTRATION AND EXECUTION SUPPORT.        Final approver
+                        Session orchestration, branch and worktree
+                        management, mechanical check dispatch,
+                        finding intake and response routing, and
+                        the running of this template. Where it also
+                        implements, it does so only under a packet
+                        dispatched by ChatGPT / Codex and it does not
+                        review its own implementation.
+
+  GitHub (Issues,     CONTROL PLANE AND ENGINEERING RECORD.        Nothing else.
+  Projects, PRs,
+  Actions, Rulesets)
+
+  INDEPENDENCE RULE: for any artifact, the author, the reliability reviewer and
+  the adversarial reviewer must be three different platforms. This is a
+  structural control, not a preference. It is checked at every gate.
+
+  ROLE-COVERAGE CHECK before any packet is dispatched: confirm that the named
+  agent for the role is available, and if not, record the gap in the section
+  evidence rather than silently collapsing two roles onto one platform. A
+  collapsed role is a finding against the section.
+
+2.2 TOOL EVALUATION
+
+  TIER 0 — RETAIN (already in use)
+    - GitHub Issues, Projects, Pull Requests
+    - GitHub Actions for CI
+    - AGENTS.md (buzzjuice.net) as the engineering constitution
+    - Architecture Decision Records plus a Decision Ledger
+    - Per-task branches
+
+  TIER 1 — ADD NOW (highest return per unit of effort)
+    - Branch protection / rulesets on the main branch. This is the cheapest
+      enforcement in the whole workflow: it makes an unapproved merge
+      impossible rather than merely discouraged.
+    - CODEOWNERS, so each evidence folder has a named reviewer.
+    - Required status checks wired into those rulesets.
+    - Issue templates: one for a task packet, one for a finding. A single
+      canonical issue template carrying the section identifier turns the issue
+      tracker into the live section ladder.
+    - A CI matrix for PHP covering lint, static analysis and unit tests.
+    - Secret scanning (gitleaks or GitHub native) and dependency auditing
+      (Composer audit, npm audit).
+    - Pre-commit hooks, so formatting drift never consumes reviewer attention.
+
+  TIER 2 — ADD NEXT (the quality floor)
+    - PHPUnit or Pest for unit and integration tests.
+    - PHPStan at level max, or Psalm, for static analysis.
+    - PHP_CodeSniffer with WordPress Coding Standards, plus WordPress VIP
+      Coding Standards for security-relevant sniffs.
+    - Semgrep with the WordPress and PHP security rulesets, plus a custom rule
+      set encoding the payment bridge invariants (idempotency key present,
+      state transition legality, no browser-supplied amount trusted).
+    - ESLint and Prettier for JavaScript under shared/payment-gateway/js.
+    - Mutation testing, restricted to the payment state machine.
+
+  TIER 3 — ADD FOR PRODUCTION INTELLIGENCE
+    - Structured logging carrying the correlation id that already exists as a
+      column in the payment intent schema, so a log line and a database row can
+      be joined by an investigator.
+    - An error and exception tracker for production PHP.
+    - A reconciliation worker that selects intents where payment_status is
+      COMPLETED and fulfilment_status is not, and raises a work item rather
+      than retrying silently forever.
+    - A scheduled controlled low-value synthetic end-to-end order against
+      staging, so that the bridge is proven by observation and not only by
+      unit tests.
+
+  TIER 4 — CONSIDER, NOT YET RECOMMENDED
+    - Additional AI coding platforms. Four assigned roles plus orchestration is
+      already at or past the point of diminishing returns. A fifth agent adds
+      cost and review burden without adding a control that a deterministic check
+      or a cold reader would not supply better.
+
+2.3 WHAT IS REPLACED, AND BY WHAT
+
+  MANUAL PROMPT RELAY BETWEEN CHATGPT AND GITHUB
+    replaced by GitHub Issues as transport. The task packet is committed to the
+    repository and agents read the committed packet. No copy-paste relay.
+
+  CHAT TRANSCRIPTS AS THE ENGINEERING RECORD
+    replaced by markdown and ADR artifacts in the repository, committed,
+    diffable, reviewable, and linkable to a commit.
+
+  LONG-LIVED PER-AGENT BRANCHES
+    replaced by per-task branches. Evidence branches may be long lived; code
+    branches are not.
+
+  AGENT OPINION AS PROOF OF CORRECTNESS
+    replaced by an evidence register. A claim without a file, a line, a log
+  line, a test or a command output is an opinion.
+
+  "IT WORKS ON MY MACHINE"
+    replaced by a CI run URL recorded on the issue.
+
+  READING AN ADR TO LEARN THE RULES
+    replaced by a machine-readable constraints block that agents can be required
+    to load, so that a rule cannot be forgotten in transit.
+
+
+================================================================================
+PART 3 — THE PRODUCTION PIPELINE (BZJ-EPP)
+================================================================================
+
+  BZJ-EPP is the replacement for legacy steps 1 to 6. Six relay steps become
+  nine controlled stages, each with a durable record at its boundary.
+
+  STAGE 1  SECTION SELECTION
+           One section of the ladder is selected and its identifier is copied
+           into the issue title as [BZJ-[PROJECT]-<id>]. No two sections are
+           worked concurrently inside one branch.
+
+  STAGE 2  TASK PACKET AUTHORING
+           ChatGPT / Codex, in its architecture and strategy role, writes a task
+           packet to the standard in PART 4.2 and commits it before any agent is
+           contacted.
+
+  STAGE 3  DISPATCH AND FAN-OUT
+           The packet is dispatched to the agents named in the section. Each
+           produces an independent response. Agents do not see each other's
+           responses at this stage; independence is the point.
+
+  STAGE 4  EVIDENCE ASSEMBLY
+           Responses are filed as artifacts under the naming standard at
+           2010.2, inside the section's evidence folder. Every response separates
+           FACT (with a file, line, log or command output) from INFERENCE and
+           from RECOMMENDATION.
+
+  STAGE 5  MECHANICAL CHECK
+           Where the section produces code or schema, CI runs lint, static
+           analysis, unit tests and security scanning under 6004.31 and 6004.32.
+           A red CI stops the section. No agent reviews code that has not passed
+           the mechanical floor.
+
+  STAGE 6  PULL REQUEST REVIEW
+           GitHub Copilot, as implementer and pull request author, opens the
+           pull request against the task branch. Automated pull request review
+           runs under 6013.31. Merge readiness is assessed under 6013.32.
+
+  STAGE 7  INDEPENDENT AND ADVERSARIAL REVIEW
+           Jules performs independent reliability and CI review under 8008.31.
+           Claude Code performs adversarial architecture and security review
+           under 8008.33. ChatGPT / Codex synthesises. Findings enter the
+           Finding Register at 8008.34 with a severity.
+
+  STAGE 8  RESOLUTION AND CLOSURE EVIDENCE
+           Every CRITICAL and HIGH finding is resolved by a code change or an
+           explicit accepted-risk record, each with a regression test where a
+           test is meaningful. The resolution is recorded against the finding,
+           not merely in a commit message.
+
+  STAGE 9  HUMAN GATE
+           The named authority approves. The issue closes, the section is
+           marked complete in the GitHub Project, the Decision Ledger is
+           updated if a decision was made, and the successor section's
+           predecessor condition is now satisfiable.
+
+  BAND RECONCILIATION
+           At the close of a band, the sections in that band are reviewed
+           together for cumulative drift under 7004.5.
+
+  WHAT THE HUMAN NO LONGER DOES
+    - interprets and rewrites prompts between platforms
+    - compares responses line by line to find the difference
+    - remembers which findings are still open
+    - decides unilaterally when a section is finished
+
+  WHAT THE HUMAN STILL DOES
+    - sets intent and priority
+    - is the sole approver at every gate
+    - resolves genuine ambiguity and business decisions
+    - accepts residual risk
+
+
+================================================================================
+PART 4 — STANDING PROTOCOLS
+================================================================================
+
+4.1 THE SECTION BLOCK FORMAT (used by every section in PART 6)
+
+      =====================================================================
+      BZJ-[PROJECT]-<id> <Title>
+      Subtitle ........ <workflow subtitle>  (PMBOK <n.n> <PM process name>)
+      Knowledge Area ... <PMBOK knowledge area>
+      Process Group .... <Initiating | Planning | Executing |
+                           Monitoring & Controlling | Closing>
+      Stage Band ....... <n> — <band name>
+      Owner ............ <named human authority>
+      Roles ............ <platform and assigned role>
+      Gate ............. <G0..G9>
+      Predecessor ...... <section id> or NONE
+      =====================================================================
+      PURPOSE
+      INPUTS
+      ACTIVITIES
+      NOTES
+      [PROMPT TO SHARE WITH AGENTS]  — one block per named platform, in that
+        platform's assigned role
+      ATTACH WITH THIS PROMPT
+      <<START BZJ-[PROJECT]-<id>_<Artifact>_<AGENT>_<YYYYMMDDHHMM>>>
+      {{paste the agent response here, or insert the committed repository link}}
+      <<STOP ...>>
+      EVIDENCE AND DELIVERABLES
+      EXIT CRITERIA / DEFINITION OF DONE
+      STOP CONDITIONS
+      =====================================================================
+
+4.2 TASK PACKET STANDARD (BZJ-EPP stage 2)
+
+  Every task packet contains, in this order:
+    1. SECTION IDENTIFIER and section title
+    2. WHY NOW — the predecessor condition now satisfied
+    3. SCOPE IN / SCOPE OUT — explicit, testable statements
+    4. INPUTS — artifact links, never pasted text
+    5. CONSTRAINTS — the AGENTS.md rules that bind this work
+    6. THE QUESTION OR THE DELIVERABLE — stated once, unambiguously
+    7. EVIDENCE RULES — what counts as proof for this section
+    8. STOP CONDITIONS — when to stop and report instead of guessing
+    9. DELIVERABLE FORMAT — exactly what the response must contain
+   10. ARTIFACT NAME the response must be filed under
+
+  A task packet that cannot answer item 6 in one sentence is not ready to send.
+  Filename:
+      BZJ-[PROJECT]-<id>_Task-Packet_<SERIAL>-<YYYYMMDDHHMM>.md
+  Location:
+      BlueCrown/Laboratory/development/<project>/task-packets/
+
+4.3 BRANCH STANDARD
+
+  Code branches are per task and per pull request:
+      pgb/bzj-pgb-6004-3-implementation
+      pgb/bzj-pgb-6004-3-s1-fix-idempotency
+      fix/pgb-6004-3-currency-rounding
+
+  Evidence branches, where an agent must commit its response document:
+      evidence/bzj-pgb-8008-31-<agent>
+
+  RECONCILIATION NOTE. Legacy item BZJ-PGB-0210.2 proposed long-lived branches of
+  the form main/buzzjuice-market/bzj-pgb/<agent>. That is superseded. A
+  long-lived branch per agent invites two agents to change the same branch and
+  makes bisect meaningless. The agent name moves into the branch name and the
+  task identifier leads, so `git log --oneline --graph` on any branch already
+  answers which section produced a change.
+
+  The naming in the buzzjuice.net AGENTS.md (pgb/bzj-pgb-003) migrates to
+  pgb/bzj-pgb-6004-3 under the crosswalk in PART 7.
+
+4.4 ARTIFACT NAMING AND FILING STANDARD
+
+  Filename:
+      BZJ-[PROJECT]-<id>_<Artifact-Slug>_<AGENT>_<YYYYMMDDHHMM>.<ext>
+
+  Rules:
+    - Artifact slug in Title-Case-Dash-Case. NO parentheses. The legacy file
+      BZJ-PGB-0335_Architectural-Decision-Record-(ADR)-Codex-202610012318.txt
+      violated this and produced a filename that requires URL escaping.
+    - Agent in Title-Case-Dash-Case: ChatGPT-Codex, GitHub-Copilot, Jules,
+      Claude-Code, Kilo-Code.
+    - Timestamp is UTC, YYYYMMDDHHMM, zero padded.
+    - Every artifact is committed. Nothing of consequence lives only in a chat
+      window.
+
+  Folder layout:
+      BlueCrown/Laboratory/development/<project>/
+        docs/                            index and cross-cutting records
+        docs/<BZJ-[PROJECT]-<id>/       per-section evidence folders
+        docs/architecture/              ADR set and Decision Ledger
+        task-packets/                   committed task packets
+        findings/                       Finding Register exports
+
+4.5 EVIDENCE RULES
+
+  A response may state a FACT only when it carries one of:
+      - file path plus line number
+      - log line plus correlation id
+      - command plus its output
+      - test name plus result
+      - link to a committed artifact
+
+  Everything else is labelled INFERENCE or RECOMMENDATION. Two agents agreeing
+  on an inference does not upgrade it to a fact.
+
+4.6 SEVERITY AND TRIAGE
+
+      CRITICAL  money movement, identity, authorization, data loss, replay,
+                credential exposure, irreversible schema destruction
+      HIGH      dropped or duplicated orders, state machine violation, currency
+                or rounding error, missing idempotency
+      MEDIUM    maintainability, missing logging, dead code, naming
+      LOW       cosmetic, documentation wording
+
+  Rule: all CRITICAL and all HIGH findings must be resolved, or explicitly
+  accepted by the human authority, before a gate is passed. MEDIUM and LOW may
+  be carried forward only if recorded in the section's evidence with a named
+  owner and a target section.
+
+  Rule: a finding may never be closed by the agent that raised it without
+  either a second reader or a passing test as closure evidence.
+
+4.7 STANDING STOP CONDITIONS (apply to every section unless overridden)
+
+  STOP AND REPORT, do not guess, when:
+    - the architecture decision is contradictory
+    - required credentials or environment access are unavailable
+    - the database schema is unclear, or a destructive migration appears necessary
+    - a payment lifecycle assumption cannot be verified against code
+    - an existing production behaviour would have to change unexpectedly
+    - a security control would have to be weakened to make something work
+    - the requested change exceeds the section's declared scope
+    - two agents' responses disagree on a FACT (not on a preference)
+    - the mechanical checks cannot be run
+    - the role named for a required independence check is unavailable
+
+  A stopped section is a valid outcome. A guessed section is not.
+
+4.8 DEFINITION OF DONE (a section is done only when all are true)
+
+    [ ] every activity executed, or explicitly waived with a recorded reason
+    [ ] every deliverable exists as a committed artifact
+    [ ] evidence rules satisfied; no unlabelled claims
+    [ ] mechanical checks green, or formally unavailable and recorded as such
+    [ ] author, reliability reviewer and adversarial reviewer were three
+        different platforms
+    [ ] CRITICAL and HIGH findings closed, or accepted by the human authority
+    [ ] stop conditions reviewed and none triggered
+    [ ] Decision Ledger updated if a decision was made
+    [ ] section marked complete in the GitHub Project
+    [ ] successor section's predecessor condition is now satisfiable
+
+
+================================================================================
+PART 5 — THE SECTION LADDER
+================================================================================
+
+  LABELS
+    [PM]    a section anchored on one of the 49 PMBOK processes
+    [CUS]   a custom workflow section, inserted at a position that preserves
+            exact numerical sequence between its PM neighbours
+
+  SORTED BY THE PART 1.2 ORDERING RULE. VERIFY WITH A SORT BEFORE USE.
+
+  BAND 0 — INITIATION
+  [PM]  0004.1    Project Charter and Workflow Mandate ............ G0
+  [CUS] 0005.00   Initial Project Proposal and Problem Statement . G0
+  [PM]  0013.1    Identify Agents, Reviewers and Stakeholders ..... G0
+  [CUS] 0013.2    Human Decision Gate and Authority Register ...... G0
+
+  BAND 1 — PLANNING A
+  [PM]  1004.2    Engineering Control Plane Bootstrap ............. G1
+  [CUS] 1004.3    Workflow Template and Prompt Pack Standard ...... G1
+  [PM]  1005.1    Plan Scope Management: Scope Control Plan ........ G1
+  [PM]  1005.2    Collect Requirements: Evidence Collection ........ G1
+  [PM]  1005.3    Define Scope: Scope Statement and Boundary ....... G1
+  [PM]  1005.4    Create WBS: Section Ladder and Work Packages ...... G1
+  [PM]  1006.1    Plan Schedule Management: Turnaround Cadence ..... G1
+  [PM]  1006.2    Define Activities: Discovery Activity Set ........ G1
+  [PM]  1006.3    Sequence Activities: Dependency Chain ............ G1
+
+  BAND 2 — PLANNING B
+  [PM]  2006.4    Estimate Activity Durations: Agent Turn Budget .. G2
+  [PM]  2006.5    Develop Schedule: Milestone Map .................. G2
+  [PM]  2007.1    Plan Cost Management: Agent and Tooling Spend ... G2
+  [PM]  2007.2    Estimate Costs: Compute and Review Budget ....... G2
+  [PM]  2007.3    Determine Budget and Approval Thresholds ......... G2
+  [PM]  2008.1    Plan Quality Management: Deliverable Rubric ...... G2
+  [CUS] 2008.2    Agent Evidence Integrity Standard ................ G2
+  [PM]  2009.1    Plan Resource Management: Capability and Context . G2
+  [PM]  2009.2    Estimate Activity Resources: Context Budget ..... G2
+  [PM]  2010.1    Plan Communications: Agent Exchange Protocol ..... G2
+  [CUS] 2010.2    Artifact Naming, Filing and Link Standard ....... G2
+  [PM]  2011.1    Plan Risk Management and Standing Stop Conditions  G2
+
+  BAND 3 — PLANNING C
+  [PM]  3011.2    Identify Risks: Project Risk Register ............. G3
+  [PM]  3011.3    Qualitative Risk Analysis: Probability/Impact ... G3
+  [PM]  3011.4    Quantitative Risk Analysis: Failure Budget ....... G3
+  [PM]  3011.5    Plan Risk Responses and Challenge Before Build ... G3
+  [PM]  3012.1    Plan Procurement Management: Tool Acquisition .... G3
+  [PM]  3013.2    Plan Stakeholder Engagement: Engagement Matrix ... G3
+
+  BAND 4 — EXECUTION A (design spine)
+  [PM]  4004.3    Direct and Manage Project Work: Spine Control ..... G4
+  [CUS] 4004.31   Initial Architectural Analysis and Discovery ..... G4
+  [CUS] 4004.32   Architecture Evidence Verification: Evidence Lock . G4
+  [CUS] 4004.33   Architecture Challenge and Challenge Closure ....... G4
+  [CUS] 4004.34   Architecture Decision Record and Decision Ledger . G4
+  [CUS] 4004.35   Implementation and Data Migration Specification . G4
+  [CUS] 4004.36   Task Packet Decomposition and Dispatch ............ G4
+  [PM]  4004.4    Manage Project Knowledge: Register and Ledger .... G4
+  [CUS] 4006.1    Delivery Sequencing and Release Train Plan ....... G4
+
+  BAND 5 — EXECUTION B (deliverable quality and resources)
+  [PM]  5008.2    Manage Quality: Agent Deliverable Assurance ....... G5
+  [CUS] 5008.21   Multi-Agent Brief Analysis: Independent Fan-Out ... G5
+  [CUS] 5008.22   Deliverable Evidence Integrity Check ............. G5
+  [PM]  5009.3    Acquire Resources: Environment and Credentials .... G5
+
+  BAND 6 — EXECUTION C (implementation, checks, testing, approval)
+  [CUS] 6004.3    Implementation Build .............................. G6
+  [CUS] 6004.31   Automated Code Check Layer ....................... G6
+  [CUS] 6004.32   Automated Test Execution Layer .................... G6
+  [CUS] 6004.33   Staging, Migration and Dry-Run Verification ....... G6
+  [CUS] 6004.34   Production Deployment Execution ................... G6
+  [CUS] 6004.35   Post-Deployment Reconciliation and Recovery ...... G6
+  [PM]  6009.4    Develop Team: Capability Onboarding ............... G6
+  [PM]  6009.5    Manage Team: Queuing, Branch Isolation, Turns ..... G6
+  [PM]  6010.2    Manage Communications: Dispatch and Collection .... G6
+  [PM]  6011.6    Implement Risk Responses: Stop Conditions ........ G6
+  [PM]  6012.2    Conduct Procurements: Tool Trials and Cost Gate .. G6
+  [PM]  6013.3    Manage Stakeholder Engagement: Approval Gates ..... G6
+  [CUS] 6013.31   Pull Request Review Coordination ................. G6
+  [CUS] 6013.32   Merge Readiness and Pull Request Closure ......... G6
+
+  BAND 7 — MONITORING AND CONTROL A
+  [PM]  7004.5    Monitor and Control Project Work: Telemetry ...... G7
+  [PM]  7004.6    Perform Integrated Change Control ................ G7
+  [CUS] 7004.61   Release Readiness Review ......................... G7
+  [PM]  7005.5    Validate Scope ................................... G7
+  [PM]  7005.6    Control Scope: Creep Control and Backlog ......... G7
+
+  BAND 8 — MONITORING AND CONTROL B
+  [PM]  8006.6    Control Schedule .................................. G8
+  [PM]  8007.4    Control Costs ..................................... G8
+  [PM]  8008.3    Control Quality ................................... G8
+  [CUS] 8008.31   Independent Reliability and CI Review (Jules) ..... G8
+  [CUS] 8008.32   Architecture Brief Quality Monitoring ............ G8
+  [CUS] 8008.33   Adversarial Architecture and Security Review ..... G8
+                  (Claude Code)
+  [CUS] 8008.34   Finding Register, Severity Triage and Closure ..... G8
+  [PM]  8009.6    Control Resources: Access and Secrets ............. G8
+  [PM]  8010.3    Monitor Communications ............................ G8
+  [PM]  8011.7    Monitor Risks ..................................... G8
+  [PM]  8012.3    Control Procurements .............................. G8
+  [PM]  8013.4    Monitor Stakeholder Engagement .................... G8
+  [CUS] 8013.41   Reviewer and Sign-off Tracking .................... G8
+
+  BAND 9 — CLOSING
+  [PM]  9004.7    Close Project or Phase ............................ G9
+  [CUS] 9004.71   Lessons Learned Register .......................... G9
+  [CUS] 9004.72   Workflow Template Improvement Backlog ............. G9
+  [CUS] 9004.73   Artifact Archive, Handover and Ledger Freeze ...... G9
+
+  RESERVED
+  [CUS] 9999.9    Reserved Contingency and Exceptional Escalation Slot
+
+  TALLY: 78 sections. 49 of them anchored on PMBOK processes, 29 custom. Custom
+  sections never displace a PM anchor; they occupy the positions between
+  anchors where the workflow genuinely has work that PMBOK compresses into one
+  process name. The user's rule that the ladder need not contain exactly 49
+  sections is satisfied by construction.
+
+<<STOP RESPONSE 2>>
+
+<<START RESPONSE 1>>
+
++KOWARE GROUP / BLUE CROWN LABORATORY
++DEVELOPER TEMPLATE — PRODUCTION WORKFLOW INFRASTRUCTURE
++
++DOCUMENT IDENTITY
++  Document ................. bcrd-production-wordkflow-0.5.txt
++  Series version ........... 0.5 (supersedes 0.1, 0.2, 0.3, 0.4)
++  Project identifier ........ BZJ-PGB
++  Project name .............. Buzzjuice Payment Gateway Bridge
++  Authorising section ....... BZJ-PGB-1004.3 Workflow Infrastructure Template and Prompt Pack Standard
++  Produced by section ....... BZJ-PGB-0100 Development Workflow Review (legacy) -> BZJ-PGB-1004.3 (this revision)
++  Template status ........... PROPOSED — requires human adoption per BZJ-PGB-6013.3
++  Template revision ......... 1.0
++
++PRECEDING VERSIONS (do not delete; they remain the historical engineering record)
++  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.1.txt
++  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.2.txt
++  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.3.txt
++  https://github.com/cupidblack/Koware_Management/blob/main/BlueCrown/Laboratory/development/bcrd-production-wordkflow-0.4.txt
++
++NOTE ON THE FILENAME
++  The misspelling "wordkflow" is retained deliberately so that the 0.5 document
++  remains discoverable by the same series prefix as 0.1 to 0.4. Correct the
++  spelling only when the whole series is renamed at once (BZJ-PGB-9004.73).
++
++
++================================================================================
++PART 0 — REVIEW OF THE LEGACY WORKFLOW AND DIAGNOSIS
++================================================================================
++
++0.1 WHAT THE LEGACY WORKFLOW ACTUALLY IS
++
++  The legacy production workflow, as used in practice, is:
++
++    1. I create a prompt then share with ChatGPT.
++    2. Review ChatGPT's response to develop the prompt.
++    3. Share the updated prompt with ChatGPT and GitHub.
++    4. Share the prompt with ChatGPT including GitHub's response.
++    5. Update the prompt if necessary then share the prompt including ChatGPT's
++       response with GitHub.
++    6. Repeat the process of updating and sharing prompts and responses between
++       ChatGPT and GitHub until a working solution is obtained.
++
++  Versions 0.1 to 0.4 of this document are the record of how that workflow was
++  progressively hardened. Version 0.4 already contains genuine, high quality
++  engineering output: an initial architectural analysis, a multi-agent brief
++  analysis, an evidence verification pass, an architecture challenge, an
++  architecture challenge closure record, an architecture decision record, an
++  implementation specification and a database/migration specification, plus task
++  packet and review-branch scaffolding. That content is production evidence and
++  is preserved. What is missing is the infrastructure that makes the workflow
++  repeatable, resumable, auditable and independent of the person relaying text.
++
++0.2 THE EIGHT STRUCTURAL DEFECTS FOUND
++
++  D1 — THE HUMAN IS THE MESSAGE ROUTER.
++       Every defect, design question, review finding and code fragment passes
++       through one person by manual copy and paste. The single point of failure
++       is not the tooling; it is the relay. This caps throughput, burns context,
++       and makes the process unusable by anyone other than the originator.
++
++  D2 — NO DURABLE TASK STATE.
++       "Repeat until a working solution is obtained" has no definition of done,
++       no exit condition, no list of outstanding findings and no place where the
++       state of the work is written down. If the session dies, the state is lost.
++
++  D3 — CONTEXT DEGRADATION AND DRIFT.
++       Each relay rewrites the prompt. After four relays the prompt no longer
++       says what the customer asked for. Two agents frequently solve slightly
++       different problems and neither notices.
++
++  D4 — NO INDEPENDENCE CONTROL.
++       When the same platform family authors, reviews and approves, the review
++       inherits the author's assumptions. Version 0.4 records the point where
++       Claude was replaced by Kilo Code on this project; that substitution
++       improved continuity but it also consolidated architecture authorship and
++       challenge in one agent lineage. Independence must be re-established by
++       construction, not by accident.
++
++  D5 — IDENTIFIERS THAT LIE.
++       The section identifiers in use do not encode project stage. The clearest
++       example is "BZJ-PGB-0620 COPILOT PR REVIEW", where 0620 sits in the
++       initiation band but the activity is a late execution quality gate. A
++       developer scanning a list of identifiers cannot tell where the project
++       actually is. Two different numbering rules are also in circulation at
++       once (see 0.3).
++
++  D6 — TRANSCRIPT AS ENGINEERING RECORD.
++       Chat transcripts are copied into text files by hand. They are not
++       diffable, not reviewable, not linkable to a commit, and cannot be
++       verified as unmodified. There is no authoritative, version controlled
++       statement of what was decided and why.
++
++  D7 — NO DETERMINISTIC FLOOR.
++       Nothing in the legacy workflow guarantees that the code compiles, lints,
++       passes static analysis or passes tests before an agent or a human looks
++       at it. Agent review is being asked to compensate for the absence of
++       mechanical checking.
++
++  D8 — NO STOP CONDITIONS OR SCOPE CONTROL.
++       The AGENTS.md for buzzjuice.net mandates explicit stop conditions, single
++       phase scope and "understand before modifying", but the workflow template
++       provides no slot in which those rules are exercised at a known point in
++       the sequence.
++
++0.3 THE TWO COMPETING NUMBERING RULES FOUND (AND HOW THEY WERE RESOLVED)
++
++  Rule A, stated in version 0.4, section BZJ-PGB-0210:
++    "BZJ-PGB-4324 means subsection 24 of section 43"
++    i.e. 4 digits, digit 2 is the section counter, digits 3 and 4 are the
++    subsection counter. Purely ordinal. Carries no process meaning at all.
++
++  Rule B, stated in the same version and in the review request:
++    "BZJ-PGB-0004.1 Develop Project Charter" to "BZJ-PGB-9004.7 Close Project"
++    i.e. the 49 PM processes, each prefixed by a band digit so that the sequence
++    is preserved. Carries knowledge area and stage meaning.
++
++  Rule B is adopted. Rule A is retired because an identifier that carries no
++  process meaning cannot satisfy the stated requirement that a project manager
++  can relate a section to one or more project management processes, and cannot
++  satisfy the requirement that a developer can read project progress off the
++  leading digit.
++
++  The full grammar is defined in PART 1.
++
++0.4 WHAT THIS REVISION CHANGES, IN ONE LINE
++
++  It converts a human-relayed prompt conversation into a GitHub-hosted,
++  identifier-addressed engineering pipeline in which the human is the decision
++  gate rather than the message router, and every section has an entry condition,
++  an evidence record, a definition of done and an explicit stop condition.
++
++
++================================================================================
++PART 1 — IDENTIFIER GRAMMAR, STAGE BANDS AND KNOWLEDGE AREA MAPPING
++================================================================================
++
++1.1 THE IDENTIFIER
++
++      BZJ-PGB - <S><KK><P> . <SS>
++
++      BZJ-PGB   project prefix, fixed for the life of the project
++      S         stage band, 1 digit, the project progress clock
++      KK        PMBOK knowledge area, 2 digits
++      P         section position within that knowledge area, 1 digit
++      SS        sub-section, 2 digits, zero padded
++
++  Examples
++      BZJ-PGB-0004.1   stage band 0, Integration (04), position 1, no sub
++      BZJ-PGB-4004.33  stage band 4, Integration (04), position 3, sub 33
++      BZJ-PGB-8008.3   stage band 8, Quality (08), position 3, no sub
++      BZJ-PGB-9999.9   reserved contingency slot
++
++1.2 THE TWO REQUIRED READINGS (this is the design that satisfies both audiences)
++
++  A PROJECT MANAGER reads the knowledge area and the PM process:
++
++      0004.1   ->   PMBOK 4 Project Integration Management, process 4.1
++                    "Develop Project Charter" is authorised to be renamed, so the
++                    workflow name is used with the PM process cited as subtitle.
++
++      8011.7   ->   PMBOK 11 Project Risk Management, process 11.7
++                    "Monitor Risks".
++
++  A DEVELOPER reads the stage band digit only:
++
++      0xxxx    ->   INITIATION            (project is being chartered)
++      1xxxx    ->   PLANNING A            (control plane, scope, schedule frame)
++      2xxxx    ->   PLANNING B            (schedule, cost, quality, resource,
++                                           communications, risk plan)
++      3xxxx    ->   PLANNING C            (risk analysis, procurement, engagement)
++      4xxxx    ->   EXECUTION A           (engineering production spine)
++      5xxxx    ->   EXECUTION B           (quality assurance, resources)
++      6xxxx    ->   EXECUTION C           (team, communications, risk response,
++                                           procurement, approval gates)
++      7xxxx    ->   MONITORING & CONTROL A (work, release readiness, change,
++                                           scope)
++      8xxxx    ->   MONITORING & CONTROL B (schedule, cost, quality, resources,
++                                           communications, risk, procurement,
++                                           stakeholders)
++      9xxxx    ->   CLOSING
++
++      The Koware band convention retains the "6009.4 means just passed half way
++      through the project" reading, which is confirmed here as the intended
++      semantics of the leading digit.
++
++  RULE: the band digit dominates. If a proposed section does not belong to the
++  stage its band implies, the number is wrong, not the description.
++
++  CONSEQUENCE, recorded here because it corrects the example in the review
++  request. The review request offers "BZJ-PGB-0010.9 Architecture Brief Quality
++  Monitoring" and notes that it would represent a Project Quality Management item
++  in a Monitoring & Controlling or Closing process group. Quality monitoring in
++  band 0 contradicts the band. The same concern, correctly numbered, is
++
++      BZJ-PGB-8008.03  Architecture Brief Quality Monitoring
++                       (band 8 = Monitoring & Controlling, KA 08 = Quality)
++
++  and it exists in this ladder as a sub-section of BZJ-PGB-8008.3.
++
++  The general rule for sub-sections: the knowledge area digits stay fixed inside
++  a parent section, the band digit may advance as the activity matures, and the
++  section position digit does not change within a knowledge area.
++
++1.3 KNOWLEDGE AREA DIGIT MAP
++
++      04  Project Integration Management
++      05  Project Scope Management
++      06  Project Schedule Management
++      07  Project Cost Management
++      08  Project Quality Management
++      09  Project Resource Management
++      10  Project Communications Management
++      11  Project Risk Management
++      12  Project Procurement Management
++      13  Project Stakeholder Management
++
++1.4 SECTION POSITION DIGIT
++
++  The position digit P is the workflow's own subdivision of the knowledge area.
++  It is not a PMBOK process number. It is assigned once, in ladder order, and it
++  is never reused. This is why the ladder may legitimately contain more or fewer
++  sections than the 49 PM processes: P subdivides, it does not pretend to
++  reproduce.
++
++1.5 SUB-SECTION NUMBERING
++
++  Sub-sections are always two digits, zero padded. The legacy forms .00, .03,
++  .05, .13, .23, .25, .31, .32, .35 are all already two digits and are adopted
++  unchanged. The single digit form .9 is normalised to .09.
++
++1.6 GATES
++
++  A gate is a named approval point. Gates align one-to-one with stage bands so
++  that "we are at band 5" and "we are at gate G5" mean the same thing.
++
++      G0  Charter Gate              end of band 0
++      G1  Planning Frame Gate        end of band 1
++      G2  Planning Complete Gate     end of band 2
++      G3  Plan Approval Gate         end of band 3
++      G4  Architecture Approved Gate end of band 4 (pre-build)
++      G5  Build Quality Gate         end of band 5
++      G6  Human Authorisation Gate   end of band 6
++      G7  Control Gate               end of band 7
++      G8  Assurance Gate             end of band 8
++      G9  Closure Gate               end of band 9
++
++  No gate may be passed by an AI agent. Every gate requires the named human
++  authority recorded in BZJ-PGB-0013.2.
++
++
++================================================================================
++PART 2 — ROLES, PLATFORMS AND TOOLS: RETAIN, AUGMENT, REPLACE
++================================================================================
++
++2.1 ROLE DEFINITION (one job per platform; no platform holds two jobs in the
++    same gate)
++
++  PLATFORM            ROLE IN THE PIPELINE                      MUST NOT
++  ------------------  ----------------------------------------  -------------------------
++  Kilo Code           Orchestrator and primary engineering       Final approver
++                      agent. Authors the task packet, holds
++                      the working session, maintains the
++                      Decision Ledger draft, performs
++                      implementation and self-review.
++
++  GitHub Copilot      Pull-request level implementation and     Architecture authority
++                      automated review. Writes code inside
++                      an already approved specification only.
++
++  Google Jules        Independent engineering verification.     Author of the code
++                      Reads the merged specification and
++                      implementation cold. Does not receive
++                      the author's reasoning chain.
++
++  ChatGPT / Codex     Lead architect and specification         Implementer
++                      author. Owns the analysis, the
++                      challenge framing, the ADR, the
++                      implementation specification and the
++                      synthesis of all findings.
++
++  GitHub (Issues,     Control plane and engineering record.    Nothing else.
++  Projects, PRs,
++  Actions, Rulesets)
++
++  NOTE ON CLAUDE. Version 0.4 records that Kilo Code was adopted to replace
++  Claude on this project. That decision is retained. The consequence recorded in
++  defect D4 is that architecture authorship and adversarial challenge would
++  otherwise sit in one lineage, so the adversarial function is re-anchored to
++  three independent mechanisms that are not the author: Jules cold review,
++  GitHub Copilot automated review, and deterministic security scanning
++  (CodeQL / Semgrep). If a Claude-class adversary is available at any point,
++  it is a bonus layer at BZJ-PGB-5008.22, never the primary reviewer.
++
++2.2 TOOL EVALUATION
++
++  TIER 0 — RETAIN (already in use, keep)
++    - GitHub Issues, Projects, Pull Requests
++    - GitHub Actions (CI)
++    - AGENTS.md (buzzjuice.net) as the engineering constitution
++    - Architecture Decision Records + Decision Ledger
++    - Per-agent task branches
++
++  TIER 1 — ADD NOW (highest return per unit of effort)
++    - Branch protection / rulesets on the main branch. This is the single
++      cheapest enforcement of the whole workflow: it makes an unapproved merge
++      impossible rather than merely discouraged.
++    - CODEOWNERS so that each evidence folder has a named reviewer.
++    - Required status checks wired into the ruleset.
++    - Issue templates for a task packet and for a finding.
++    - A CI workflow matrix for PHP: lint, static analysis, unit tests.
++    - Secret scanning (gitleaks or GitHub native) and dependency auditing
++      (Composer audit / npm audit).
++    - Pre-commit hooks (lint-staged equivalent) to catch formatting drift before
++      review consumes attention on it.
++    - A single canonical issue template that carries the section identifier, so
++      the issue tracker becomes the live section ladder.
++
++  TIER 2 — ADD NEXT (quality floor)
++    - PHPUnit or Pest for unit and integration tests.
++    - PHPStan (level max) or Psalm for static analysis.
++    - PHP_CodeSniffer with WordPress Coding Standards, plus WordPress VIP
++      Coding Standards for security-relevant sniffs.
++    - Semgrep with the WordPress and PHP security rulesets, and optionally a
++      custom rule set for the payment bridge invariants.
++    - ESLint and Prettier for the JavaScript under shared/payment-gateway/js.
++    - Mutation testing on the payment state machine only, if budget allows.
++
++  TIER 3 — ADD FOR PRODUCTION INTELLIGENCE
++    - Structured logging with correlation IDs matching the payment intent
++      correlation_id column already defined in the implementation
++      specification, so a log line and a database row can be joined.
++    - An error/exception tracker for production PHP.
++    - A reconciliation cron that reads intents where payment_status is
++      COMPLETED and fulfilment_status is not COMPLETED, and raises work rather
++      than silently retrying forever.
++    - Synthetic order test (a controlled low-value end-to-end order) run on a
++      schedule against staging.
++
++  TIER 4 — CONSIDER, NOT YET RECOMMENDED
++    - Additional AI coding platforms. Four is already at or above the point of
++      diminishing returns for a single project; a fifth agent adds cost and
++      review burden without adding an independent control that a deterministic
++      check or a cold reader would not provide better.
++
++2.3 WHAT IS REPLACED
++
++  REPLACED BY WHAT
++
++  Manual prompt relay between ChatGPT     GitHub Issues as transport. The task
++  and GitHub                              packet is committed to the
++                                          repository; agents read the committed
++                                          packet. No copy-paste relay.
++
++  Chat transcripts as the engineering     Markdown/ADR artifacts in the
++  record                                   repository, committed, diffable,
++                                          reviewable and linkable to a commit.
++
++  Per-agent long-lived branches            Per-task branches. Evidence branches
++                                          may be long lived; code branches are
++                                          not.
++
++  Agent opinion as proof of correctness    Evidence register. A claim without a
++                                          file, line, log line, test or command
++                                          output is an opinion.
++
++  "It works on my machine"                 A CI run URL recorded on the issue.
++
++  Reading an ADR to know the rules         A machine-readable constraints block
++                                          that agents can be required to load.
++
++
++================================================================================
++PART 3 — THE PRODUCTION PIPELINE (BZJ-EPP)
++================================================================================
++
++  BZJ-EPP is the replacement for legacy steps 1 to 6. Six relay steps become
++  eight controlled stages with a durable record at every stage boundary.
++
++  STAGE 1  SECTION SELECTION
++           One section of the ladder is selected. Its identifier is copied into
++           the issue title as [BZJ-PGB-<id>]. No two sections are worked at once
++           inside one branch.
++
++  STAGE 2  TASK PACKET AUTHORING
++           The lead architect (ChatGPT / Codex) writes a task packet containing
++           scope, inputs, constraints, attachments, stop conditions, deliverable
++           definition and the definition of done. The packet is committed to
++           the repository before any agent is contacted.
++
++  STAGE 3  DISPATCH AND FAN-OUT
++           The packet is dispatched to the agents named in the section. Each
++           agent produces an independent response. Agents do not see each other's
++           responses at this stage; independence is the point.
++
++  STAGE 4  EVIDENCE ASSEMBLY
++           Responses are filed as artifacts under the naming standard in
++           BZJ-PGB-2010.2, inside the section's evidence folder. Every response
++           must separate FACT (with a file, line, log or command output) from
++           INFERENCE and from RECOMMENDATION.
++
++  STAGE 5  MECHANICAL CHECK (only when the section produces code or schema)
++           CI runs lint, static analysis, unit tests and security scanning. A
++           red CI stops the section; agents do not review code that has not
++           passed the mechanical floor.
++
++  STAGE 6  ADVERSARIAL AND COLD REVIEW
++           Jules performs cold engineering verification. Kilo Code performs
++           adversarial architecture and security review. Copilot performs
++           pull-request review. Codex synthesises. Findings enter the Finding
++           Register at BZJ-PGB-5008.24 with a severity.
++
++  STAGE 7  RESOLUTION AND CLOSURE EVIDENCE
++           Every Critical and High finding is resolved with a code change or an
++           explicit accepted-risk record, and each resolution ships with a
++           regression test where a test is meaningful. The resolution and its
++           evidence are recorded against the finding, not just in a commit
++           message.
++
++  STAGE 8  HUMAN GATE
++           The named human authority approves. The issue is closed, the section
++           is marked complete in the GitHub Project, the Decision Ledger is
++           updated if a decision was made, and the next section's predecessor
++           condition is now satisfied.
++
++  STAGE 9  RECONCILE (phase level, not section level)
++           At the close of a band, the sections in that band are reviewed
++           together for cumulative drift (see BZJ-PGB-7004.5).
++
++  WHAT THE HUMAN NO LONGER DOES
++           - interprets and rewrites prompts between platforms
++           - compares responses line by line to find the difference
++           - remembers which findings are still open
++           - decides when a section is "finished"
++
++  WHAT THE HUMAN STILL DOES
++           - sets intent and priority
++           - is the sole approver at every gate
++           - resolves genuine ambiguity and business decisions
++           - accepts residual risk
++
++
++================================================================================
++PART 4 — STANDING PROTOCOLS
++================================================================================
++
++4.1 THE SECTION BLOCK FORMAT (used by every section in PART 6)
++
++      =====================================================================
++      BZJ-PGB-<id> <Title>
++      Subtitle ........ <workflow subtitle> (PMBOK <n.n> <PM process name>)
++      Knowledge Area ... <PMBOK knowledge area>
++      Process Group .... <Initiating | Planning | Executing |
++                           Monitoring & Controlling | Closing>
++      Stage Band ....... <n> — <band name>
++      Owner ............ <named human authority>
++      Agents ........... <platform and role>
++      Gate ............. <G0..G9>
++      Predecessor ...... <section id> or NONE
++      =====================================================================
++      PURPOSE
++      INPUTS
++      ACTIVITIES
++      NOTES
++      [PROMPT TO SHARE WITH AGENTS] (one block per named agent)
++      ATTACH WITH THIS PROMPT
++      <<START BZJ-PGB-<id>-<ARTIFACT>-<AGENT>-<YYYYMMDDHHMM>>>
++      {{paste the agent response here, or insert the repository link}}
++      <<STOP ...>>
++      EVIDENCE AND DELIVERABLES
++      EXIT CRITERIA / DEFINITION OF DONE
++      STOP CONDITIONS
++      =====================================================================
++
++4.2 TASK PACKET STANDARD (BZJ-EPP stage 2)
++
++  Every task packet contains, in this order:
++    1. SECTION IDENTIFIER and section title
++    2. WHY NOW — the predecessor condition that is now satisfied
++    3. SCOPE IN / SCOPE OUT — explicit, testable statements
++    4. INPUTS — artifact links, not pasted text
++    5. CONSTRAINTS — the rules from AGENTS.md that bind this work
++    6. THE QUESTION OR THE DELIVERABLE — stated once, unambiguously
++    7. EVIDENCE RULES — what counts as proof for this section
++    8. STOP CONDITIONS — when to stop and report instead of guessing
++    9. DELIVERABLE FORMAT — exactly what the response must contain
++   10. ARTIFACT NAME the response must be filed under
++
++  A task packet that cannot answer item 6 in one sentence is not ready.
++
++4.3 BRANCH STANDARD
++
++  Code branches are per task and per PR:
++      pgb/bzj-pgb-4004-37-implementation
++      pgb/bzj-pgb-4004-37-s1-fix-idempotency
++      fix/pgb-4004-37-currency-rounding
++
++  Evidence branches, where an agent must commit its response document, are named:
++      evidence/bzj-pgb-4004-33-<agent>
++
++  RECONCILIATION NOTE. Legacy note BZJ-PGB-0210 item 2.ii proposed long-lived
++  branches of the form main/buzzjuice-market/bzj-pgb/<agent>. That is superseded.
++  A long-lived branch per agent invites two agents to change the same branch and
++  makes bisect meaningless. The agent name moves into the branch name and the
++  task identifier leads, so that `git log --oneline --graph` on any branch
++  already answers "which section produced this change".
++
++4.4 ARTIFACT NAMING AND FILING STANDARD
++
++  Filename:
++      BZJ-PGB-<id>_<Artifact-Slug>_<Agent>_<YYYYMMDDHHMM>.<ext>
++
++  Rules:
++    - Artifact slug in Title-Case-Dash-Case, no parentheses (legacy
++      BZJ-PGB-0335_Architectural-Decision-Record-(ADR)-Codex-... violated this
++      and produced a filename that needed URL escaping).
++    - Agent in Title-Case-Dash-Case.
++    - Timestamp is UTC, YYYYMMDDHHMM, zero padded.
++    - Every artifact is committed. Nothing lives only in a chat window.
++
++  Folder layout:
++      BlueCrown/Laboratory/development/payment-gateway/
++        docs/                                  index and cross-cutting records
++        docs/<BZJ-PGB-id>/                     per-section evidence folders
++        docs/architecture/                     ADR and Decision Ledger
++        task-packets/                          committed task packets
++        findings/                             Finding Register exports
++
++4.5 EVIDENCE RULES
++
++  A response may state a FACT only when it carries one of:
++      - file path plus line number
++      - log line with correlation id
++      - command plus its output
++      - test name plus result
++      - link to a committed artifact
++
++  Everything else is labelled INFERENCE or RECOMMENDATION. Two agents agreeing
++  on an inference does not upgrade it to a fact.
++
++4.6 SEVERITY AND TRIAGE
++
++      CRITICAL   money movement, identity, authorization, data loss, replay,
++                 credential exposure, irreversible schema destruction
++      HIGH       dropped or duplicated orders, state machine violation,
++                 currency or rounding error, missing idempotency
++      MEDIUM     maintainability, missing logging, dead code, naming
++      LOW        cosmetic, documentation wording
++
++  Rule: all CRITICAL and all HIGH findings must be resolved or explicitly
++  accepted by the human authority before a gate is passed. MEDIUM and LOW may
++  be carried forward only if recorded in the section's evidence with an owner.
++
++  Rule: a finding may never be closed by the agent that raised it without a
++  second reader or a passing test as closure evidence.
++
++4.7 STANDING STOP CONDITIONS (apply to every section unless overridden)
++
++  STOP AND REPORT — do not guess — when:
++    - the architecture decision is contradictory
++    - required credentials or environment access are unavailable
++    - the database schema is unclear or a destructive migration appears necessary
++    - a payment lifecycle assumption cannot be verified against code
++    - an existing production behaviour would have to change unexpectedly
++    - a security control would have to be weakened to make something work
++    - the requested change exceeds the section's declared scope
++    - two agents' responses disagree on a FACT (not on a preference)
++    - the mechanical checks cannot be run
++
++  A stopped section is a valid outcome. A guessed section is not.
++
++4.8 DEFINITION OF DONE (a section is done when all are true)
++
++    [ ] every activity has been executed or explicitly waived with a reason
++    [ ] every deliverable exists as a committed artifact
++    [ ] evidence rules satisfied; no unlabelled claims
++    [ ] mechanical checks green, or formally unavailable and recorded
++    [ ] CRITICAL and HIGH findings closed or accepted by the human authority
++    [ ] stop conditions reviewed and none triggered
++    [ ] Decision Ledger updated if a decision was made
++    [ ] section marked complete in the GitHub Project
++    [ ] successor section's predecessor condition is now satisfiable
++
++
++================================================================================
++PART 5 — THE SECTION LADDER
++================================================================================
++
++  Reading: [id] title -- subtitle (PMBOK anchor) -- gate
++
++  BAND 0 — INITIATION
++  [0004.1]   Project Charter and Workflow Mandate -- Integration (4.2 PM) -- G0
++  [0005.0]   Initial Project Proposal and Problem Statement -- Scope (Initiating) -- G0
++  [0013.1]   Agent, Reviewer and Stakeholder Registry -- Stakeholder (13.1) -- G0
++  [0013.2]   Human Decision Gate and Authority Register -- Stakeholder (13.3) -- G0
++
++  BAND 1 — PLANNING A
++  [1004.2]   Engineering Control Plane Bootstrap -- Integration (4.2) -- G1
++  [1004.3]   Workflow Infrastructure Template and Prompt Pack Standard -- Integration (4.2) -- G1
++  [1005.1]   Scope Control Plan -- Scope (5.1) -- G1
++  [1005.2]   Evidence Collection and Evidence Register -- Scope (5.2) -- G1
++  [1005.3]   Scope Statement and In/Out Boundary -- Scope (5.3) -- G1
++  [1005.4]   Work Breakdown Structure and Section Ladder -- Scope (5.4) -- G1
++  [1006.1]   Schedule Management Plan and Agent Turnaround Cadence -- Schedule (6.1) -- G1
++  [1006.2]   Define Activities: Discovery Activity Set -- Schedule (6.2) -- G1
++  [1006.3]   Sequence Activities: Discovery Dependency Chain -- Schedule (6.3) -- G1
++
++  BAND 2 — PLANNING B
++  [2006.4]   Estimate Activity Durations: Agent Turn Budget -- Schedule (6.4) -- G2
++  [2006.5]   Project Schedule and Milestone Map -- Schedule (6.5) -- G2
++  [2007.1]   Cost Management Plan: Agent and Tooling Spend Control -- Cost (7.1) -- G2
++  [2007.2]   Estimate Activity Costs -- Cost (7.2) -- G2
++  [2007.3]   Determine Budget and Spend Approval Thresholds -- Cost (7.3) -- G2
++  [2008.1]   Quality Management Plan and Agent Deliverable Rubric -- Quality (8.1) -- G2
++  [2009.1]   Resource Management Plan: Agent Capability and Context Budget -- Resource (9.1) -- G2
++  [2009.2]   Estimate Activity Resources: Context Budget per Task Packet -- Resource (9.2) -- G2
++  [2010.1]   Communications Management Plan: Agent Exchange Protocol -- Comms (10.1) -- G2
++  [2010.2]   Artifact Naming, Filing and Link Standard -- Comms (10.1) -- G2
++  [2011.1]   Risk Management Plan and Standing Stop Conditions -- Risk (11.1) -- G2
++
++  BAND 3 — PLANNING C
++  [3011.2]   Identify Risks: Project Risk Register -- Risk (11.2) -- G3
++  [3011.3]   Qualitative Risk Analysis: Probability and Impact Matrix -- Risk (11.3) -- G3
++  [3011.4]   Quantitative Risk Analysis: Rework and Failure Budget -- Risk (11.4) -- G3
++  [3011.5]   Plan Risk Responses and Challenge Before Build Gate -- Risk (11.5) -- G3
++  [3012.1]   Procurement Management Plan: Tool and Service Acquisition -- Procurement (12.1) -- G3
++  [3013.2]   Stakeholder Engagement Plan: Agent Engagement Matrix -- Stakeholder (13.2) -- G3
++
++  BAND 4 — EXECUTION A (engineering production spine)
++  [4004.3]   Direct and Manage Project Work: Production Execution Control -- Integration (4.3) -- G4
++  [4004.31]  Initial Architectural Analysis and System Discovery -- Integration (4.3) -- G4
++  [4004.32]  Architecture Evidence Verification: Evidence Lock -- Integration (4.3) -- G4
++  [4004.33]  Architecture Challenge and Challenge Closure Record -- Integration (4.3) -- G4
++  [4004.34]  Architecture Decision Record and Decision Ledger -- Integration (4.3) -- G4
++  [4004.35]  Implementation Specification and Data Migration Specification -- Integration (4.3) -- G4
++  [4004.36]  Task Packet Decomposition and Dispatch -- Integration (4.3) -- G4
++  [4004.37]  Implementation Build and Automated Test Execution -- Integration (4.3) -- G4
++  [4004.38]  Staging, Migration and Dry-Run Verification -- Integration (4.3) -- G4
++  [4004.39]  Production Deployment Execution -- Integration (4.3) -- G4
++  [4004.40]  Post-Deployment Reconciliation and Fulfilment Recovery -- Integration (4.3) -- G4
++  [4004.4]   Manage Project Knowledge: Evidence Register and Ledger Upkeep -- Integration (4.4) -- G4
++
++  BAND 5 — EXECUTION B (quality assurance and resources)
++  [5008.2]   Manage Quality: Agent Deliverable Assurance -- Quality (8.2) -- G5
++  [5008.21]  Multi-Agent Brief Analysis: Independent First-Pass Fan-Out -- Quality (8.2) -- G5
++  [5008.22]  Adversarial Architecture and Security Review -- Quality (8.2) -- G5
++  [5008.23]  Independent Engineering Verification: Cold Reader Pass -- Quality (8.2) -- G5
++  [5008.24]  Finding Register, Severity Triage and Closure Evidence -- Quality (8.2) -- G5
++  [5008.25]  Automated Pull Request Review Layer -- Quality (8.2) -- G5
++  [5009.3]   Acquire Resources: Environment, Credentials, Dependencies -- Resource (9.3) -- G5
++
++  BAND 6 — EXECUTION C
++  [6009.4]   Develop Team: Agent Capability Onboarding and Assignment -- Resource (9.4) -- G6
++  [6009.5]   Manage Team: Work Queuing, Branch Isolation, Turn Management -- Resource (9.5) -- G6
++  [6010.2]   Manage Communications: Dispatch, Collection, Context Handoff -- Comms (10.2) -- G6
++  [6011.6]   Implement Risk Responses: Stop Conditions in Practice -- Risk (11.6) -- G6
++  [6012.2]   Conduct Procurements: Tool Trials and Cost Gate -- Procurement (12.2) -- G6
++  [6013.3]   Manage Stakeholder Engagement: Human Approval Gates -- Stakeholder (13.3) -- G6
++
++  BAND 7 — MONITORING AND CONTROL A
++  [7004.5]   Monitor and Control Project Work: Execution Telemetry -- Integration (4.5) -- G7
++  [7004.51]  Release Readiness Review -- Integration (4.5) -- G7
++  [7004.6]   Perform Integrated Change Control -- Integration (4.6) -- G7
++  [7005.5]   Validate Scope -- Scope (5.5) -- G7
++  [7005.6]   Control Scope: Creep Control and Backlog -- Scope (5.6) -- G7
++
++  BAND 8 — MONITORING AND CONTROL B
++  [8006.6]   Control Schedule -- Schedule (6.6) -- G8
++  [8007.4]   Control Costs -- Cost (7.4) -- G8
++  [8008.3]   Control Quality: Architecture Brief Quality Monitoring -- Quality (8.3) -- G8
++  [8009.6]   Control Resources: Environment, Access and Secrets -- Resource (9.6) -- G8
++  [8010.3]   Monitor Communications -- Comms (10.3) -- G8
++  [8011.7]   Monitor Risks -- Risk (11.7) -- G8
++  [8012.3]   Control Procurements -- Procurement (12.3) -- G8
++  [8013.4]   Monitor Stakeholder Engagement -- Stakeholder (13.4) -- G8
++
++  BAND 9 — CLOSING
++  [9004.7]   Close Project or Phase -- Integration (4.7) -- G9
++  [9004.71]  Lessons Learned Register -- Integration (4.7) -- G9
++  [9004.72]  Workflow Template Improvement Backlog -- Integration (4.7) -- G9
++  [9004.73]  Artifact Archive, Handover and Ledger Freeze -- Integration (4.7) -- G9
++
++  RESERVED
++  [9999.9]   Reserved Contingency and Exceptional Escalation Slot
++
++  Count: 73 sections across 49 anchored PMBOK processes. Sections exceeding 49 is
++  deliberate and permitted: the PM processes are the anchors, the workflow
++  sections are the working granularity.
++
++
++================================================================================
++PART 6 — SECTION BLOCKS
++================================================================================
++
++  HOW TO USE THIS PART
++  Each block below is a working template. When a section is opened, the person
++  or agent running it fills the placeholders, commits the task packet, dispatches
++  the prompt blocks, and pastes or links the responses between the
++  <<START ...>> / <<STOP ...>> markers. A block that is still full of
++  {{placeholders}} is a template. A block with content is a record. Do not
++  overwrite a record; supersede it with a new dated artifact.
+
+<<STOP RESPONSE 1>>
