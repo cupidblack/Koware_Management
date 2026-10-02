@@ -558,17 +558,13 @@ Develop Initial Project Proposal
 
 
 
+13\. Agents should be able to push their responses directly to the project's development 'docs' folder. Not the project's production folder.
+
+
+
+14\. Implementation code can be pushed to the project's production folder on the agent's assigned branch.
+
+
+
 #### **<<STOP NOTES>>**
-
-
-
-
-
-{{
-
-The following notes must remain in future developments
-
-'\[KOWARE-IAPD-PMO-BZJ-PGBD-0004.01] - PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT' can always be developed whenever appropriate
-
-}}
 
