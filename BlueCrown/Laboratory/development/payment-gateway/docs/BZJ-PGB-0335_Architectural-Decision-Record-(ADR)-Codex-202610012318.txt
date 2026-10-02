@@ -1,0 +1,559 @@
+# BZJ-PGB-0030 — Buzzjuice Payment Gateway Bridge
+
+## Architecture Decision & Approval
+
+**Date:** 30 September 2026
+**Status:** ARCHITECTURE APPROVED — IMPLEMENTATION SPECIFICATION GATED
+**Scope:** Buzzjuice Streams (WoWonder) → WordPress/WooCommerce Payment Gateway Bridge
+
+---
+
+## 1. Decision Summary
+
+The existing Payment Gateway Bridge shall be redesigned around a **durable payment-intent architecture**.
+
+The approved target flow is:
+
+```text
+
+Buzzjuice Streams
+
+\&#x20;   ↓
+
+Server-side validation
+
+\&#x20;   ↓
+
+Durable Payment Intent
+
+\&#x20;   ↓
+
+Signed browser handoff
+
+\&#x20;   ↓
+
+WordPress/MU Plugin
+
+\&#x20;   ↓
+
+Native WooCommerce PHP APIs
+
+\&#x20;   ↓
+
+WooCommerce Order
+
+\&#x20;   ↓
+
+Native WooCommerce Checkout / Payment Gateway
+
+\&#x20;   ↓
+
+WooCommerce Payment Lifecycle
+
+\&#x20;   ↓
+
+Post-Payment Fulfilment
+
+\&#x20;   ├── WooCommerce Subscriptions
+
+\&#x20;   ├── AffiliateWP
+
+\&#x20;   ├── Jewel Affiliate
+
+\&#x20;   └── Streams Entitlements
+
+\&#x20;   ↓
+
+Durable Reconciliation / Recovery
+
+```
+
+The browser is a transport mechanism, not a financial authority.
+
+Streams initiates the transaction, WooCommerce owns the order/payment lifecycle, and the Buzzjuice bridge orchestrates durable synchronization between systems.
+
+---
+
+## 2. Architecture Decisions
+
+### ADR-001 — Transaction Authority
+
+**Approved**
+
+Streams is the originating business system for the payment request.
+
+WooCommerce is authoritative for:
+
+* WooCommerce order
+* payment status
+* payment gateway lifecycle
+* checkout
+* subscription lifecycle where WooCommerce Subscriptions applies
+
+The bridge owns orchestration and cross-system synchronization.
+
+---
+
+### ADR-002 — Handoff Architecture
+
+**Approved**
+
+Use:
+
+```text
+
+Streams
+
+\&#x20;→ durable payment intent
+
+\&#x20;→ signed browser handoff
+
+\&#x20;→ WordPress endpoint
+
+\&#x20;→ native WooCommerce PHP APIs
+
+\&#x20;→ WooCommerce payment URL
+
+```
+
+The new design shall not depend on a server-side HTTP request from Streams back to the same WordPress installation for the primary transaction path.
+
+The existing REST/cURL path shall remain available only during migration and rollback.
+
+---
+
+### ADR-003 — Durable Payment Intent
+
+**Approved**
+
+Every new transaction must receive a durable unique transaction/payment-intent identifier.
+
+The intent must contain sufficient information to reconstruct and reconcile the transaction without relying on browser state.
+
+At minimum:
+
+* intent UUID
+* transaction kind
+* Streams user ID
+* WordPress user ID
+* authoritative product/plan reference
+* authoritative amount
+* source currency
+* WooCommerce currency
+* WooCommerce order ID
+* status
+* idempotency key
+* timestamps
+* expiry
+* retry/recovery information
+* correlation identifier
+
+The exact schema remains subject to the Implementation Specification.
+
+---
+
+### ADR-004 — Server-Side Commercial Authority
+
+**Approved**
+
+The client shall not be trusted to determine:
+
+* final price
+* final amount
+* product price
+* subscription price
+* entitlement
+* affiliate attribution
+* final currency conversion
+
+Streams must resolve authoritative commercial information before creating the payment intent.
+
+---
+
+### ADR-005 — WooCommerce Order Authority
+
+**Approved**
+
+When WordPress receives a valid payment intent, it shall use native WooCommerce PHP APIs where available.
+
+The bridge shall:
+
+1. validate the intent;
+2. verify user identity;
+3. resolve the WooCommerce product/variation;
+4. resolve authoritative pricing;
+5. create or retrieve the WooCommerce order;
+6. attach the intent/correlation metadata;
+7. generate the WooCommerce payment URL;
+8. return/redirect the customer to the payment screen.
+
+Repeated handoff of the same intent must return the existing order rather than create another order.
+
+---
+
+### ADR-006 — WooCommerce Subscriptions Authority
+
+**Approved with verification gate**
+
+WooCommerce Subscriptions remains authoritative for subscription lifecycle.
+
+The bridge shall not manually mark a subscription active merely because a payment intent was created.
+
+Subscription creation, activation, renewal and failed-payment behavior must be validated against the actual deployed WooCommerce Subscriptions configuration before implementation.
+
+---
+
+### ADR-007 — AffiliateWP Protection
+
+**Approved**
+
+The existing AffiliateWP behavior is a protected subsystem.
+
+The redesign must preserve:
+
+* attribution contract;
+* context snapshot;
+* customer resolution;
+* affiliate resolution;
+* commission calculation;
+* duplicate referral protection;
+* `\\\_affwp\\\_bridge\\\_processed` behavior;
+* retry-on-failure behavior.
+
+Refactoring the file location is permitted.
+
+Changing business behavior requires a separate decision and regression evidence.
+
+---
+
+### ADR-008 — Post-Payment Fulfilment
+
+**Approved**
+
+Payment success and downstream fulfilment are separate states.
+
+A successful WooCommerce payment must never be treated as equivalent to successful Buzzjuice synchronization.
+
+The system must support:
+
+```text
+
+PAYMENT\\\_SUCCESS
+
+\&#x20;      ↓
+
+FULFILMENT
+
+\&#x20;      ├── Streams
+
+\&#x20;      ├── Subscription
+
+\&#x20;      ├── AffiliateWP
+
+\&#x20;      └── Jewel Affiliate
+
+\&#x20;      ↓
+
+COMPLETED
+
+```
+
+If any downstream operation fails after payment, the transaction enters a recoverable state rather than being lost.
+
+---
+
+### ADR-009 — Idempotency
+
+**MANDATORY**
+
+Idempotency must exist at multiple boundaries:
+
+1. payment-intent creation;
+2. WordPress handoff;
+3. WooCommerce order creation;
+4. payment callbacks/webhooks;
+5. order completion;
+6. subscription processing;
+7. Streams entitlement updates;
+8. AffiliateWP referral processing;
+9. Jewel Affiliate rebate processing.
+
+A single global `processed` flag is insufficient.
+
+---
+
+### ADR-010 — Transaction State Machine
+
+**Approved conceptually**
+
+The minimum lifecycle shall support:
+
+```text
+
+CREATED
+
+\&#x20;  ↓
+
+VALIDATED
+
+\&#x20;  ↓
+
+HANDOFF\\\_PENDING
+
+\&#x20;  ↓
+
+WC\\\_ORDER\\\_CREATED
+
+\&#x20;  ↓
+
+PAYMENT\\\_PENDING
+
+\&#x20;  ↓
+
+PAYMENT\\\_PROCESSING
+
+\&#x20;  ↓
+
+PAYMENT\\\_COMPLETED
+
+\&#x20;  ↓
+
+POST\\\_PAYMENT\\\_SYNC
+
+\&#x20;  ↓
+
+COMPLETED
+
+```
+
+Recovery states:
+
+```text
+
+FAILED
+
+CANCELLED
+
+EXPIRED
+
+RECOVERY\\\_REQUIRED
+
+```
+
+The exact transition rules shall be finalized in the Implementation Specification.
+
+---
+
+### ADR-011 — Dedicated Transaction Storage
+
+**Approved conceptually**
+
+A dedicated Buzzjuice payment-intent/transaction table is justified.
+
+It must not replace or corrupt existing WoWonder payment records.
+
+The new table becomes the bridge's durable orchestration record while existing WoWonder tables remain compatibility/integration records where required.
+
+Schema, indexes, uniqueness constraints and migration strategy require implementation-specification approval.
+
+---
+
+### ADR-012 — Reconciliation
+
+**MANDATORY**
+
+The new bridge must support recovery of:
+
+* payment intents without WooCommerce orders;
+* WooCommerce orders without linked payment intents;
+* paid orders without Streams fulfilment;
+* subscriptions without synchronized Streams entitlement;
+* missing AffiliateWP commissions;
+* missing Jewel Affiliate processing;
+* stale pending transactions;
+* duplicate webhook deliveries.
+
+Recovery must be retryable and observable.
+
+---
+
+### ADR-013 — Observability
+
+**Approved**
+
+All transaction stages must share:
+
+* intent UUID;
+* correlation ID;
+* WooCommerce order ID where available;
+* transaction kind;
+* state;
+* transition;
+* processing attempt;
+* outcome;
+* error code.
+
+Logs must be toggleable and must not expose:
+
+* passwords;
+* session tokens;
+* API secrets;
+* webhook secrets;
+* payment credentials;
+* complete POST bodies;
+* unnecessary personal information.
+
+---
+
+### ADR-014 — Legacy Migration
+
+**Approved**
+
+The existing bridge shall not be deleted immediately.
+
+Migration shall proceed through controlled stages:
+
+```text
+
+Evidence
+
+\&#x20; ↓
+
+Instrumentation
+
+\&#x20; ↓
+
+Reliability/security hardening
+
+\&#x20; ↓
+
+Shadow payment-intent creation
+
+\&#x20; ↓
+
+Controlled cutover
+
+\&#x20; ↓
+
+Verification
+
+\&#x20; ↓
+
+Legacy retirement
+
+```
+
+Existing in-flight transactions must remain serviceable during migration.
+
+---
+
+### ADR-015 — Filesystem Architecture
+
+**Approved conceptually**
+
+The target should have one primary MU entry point:
+
+```text
+
+wp-content/mu-plugins/bzj-payment-gateway.php
+
+```
+
+Supporting implementation should live under:
+
+```text
+
+shared/payment-gateway/
+
+```
+
+The exact module structure must remain intentionally small and responsibility-driven.
+
+The architecture must not become a large framework merely for the sake of abstraction.
+
+---
+
+## 3. Explicit Rejections
+
+The following are NOT approved:
+
+### R-001
+
+Rebuilding database tables automatically whenever plugin/addon files change.
+
+### R-002
+
+Deleting the existing payment bridge before migration and regression verification.
+
+### R-003
+
+Trusting browser-supplied amount, price or currency.
+
+### R-004
+
+Creating/activating subscriptions prematurely outside the WooCommerce Subscriptions lifecycle.
+
+### R-005
+
+Using server-to-self REST/cURL as the primary new transaction path.
+
+### R-006
+
+Replacing working AffiliateWP business logic merely to simplify the new architecture.
+
+### R-007
+
+Treating a successful payment as proof that every downstream fulfilment step succeeded.
+
+---
+
+## 4. Mandatory Verification Gates Before Coding
+
+The following must be resolved before implementation begins:
+
+1. Confirm deployed code versus GitHub `main`.
+2. Confirm active WooCommerce payment gateway(s).
+3. Confirm deployed WooCommerce Subscriptions version/configuration.
+4. Confirm actual subscription product/variation types.
+5. Confirm WOOCS/currency behavior in the deployed environment.
+6. Confirm PHP web-SAPI DNS/loopback behavior separately from CLI cURL.
+7. Confirm WordPress authentication/session behavior when entering from Streams.
+8. Confirm existing WooCommerce order metadata contract.
+9. Confirm all current WooCommerce webhooks and delivery behavior.
+10. Map legacy `Wo\\\_Payment\\\_Transactions` usage before modifying it.
+11. Confirm Jewel Affiliate's actual production invocation path.
+12. Confirm current AffiliateWP behavior against a real test order.
+13. Confirm whether the deployed bridge differs materially from repository `main`.
+14. Determine whether existing production orders/subscriptions require backward compatibility handling.
+
+---
+
+## 5. Implementation Rule
+
+No production code is approved by this document.
+
+The next artifact must be:
+
+**BZJ-PGB-002 — Implementation Specification**
+
+It must define:
+
+* exact database schema;
+* exact state machine;
+* exact files;
+* exact classes/functions;
+* exact hooks;
+* exact endpoints;
+* exact authentication/signing mechanism;
+* exact WooCommerce order creation procedure;
+* exact subscription integration;
+* exact AffiliateWP preservation mechanism;
+* exact Jewel Affiliate integration;
+* exact reconciliation mechanism;
+* exact logging switches;
+* exact migration flags;
+* exact rollback procedure;
+* unit/integration/failure tests;
+* deployment sequence.
+
+Only after BZJ-PGB-002 is approved should Codex/Jules/Claude begin implementation work.
