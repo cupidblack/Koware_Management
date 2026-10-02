@@ -9,18 +9,37 @@ DOCUMENT IDENTITY
   Document ................ IAPD-PMO-BZJ-PGBD-Architectural-Engineering-Analysis.md
   Document type ........... AEA — Architectural Engineering Analysis (RECORD)
   Analyzes ............... IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md
-                            sections 0004.01 - 0004.09 and the boundary at
+                            sections 0000.01 - 0000.09 and the boundary at
                             [BZJ-PGBD-0004.1] Develop Project Charter
   Generic identifier ..... BZJ-[PROJECT]
   Concrete example ....... BZJ-PGBD (Buzzjuice Payment Gateway Bridge Development)
   Analysed by ............ Lead Agent, ChatGPT / Codex (architecture role)
   Orchestrated by ........ Kilo Code (orchestration and gate running)
-  Status ................. PROPOSED — requires the human gate at 0004.10 / G0
-  Revision ............... 1.0
+  Status ................. PROPOSED — verified CONDITIONALLY; awaiting the
+                             Architectural Engineering Challenge and the human
+                             gate at 0004.1 / G0
+  Revision ............... 1.1  (supersedes 1.0, never baselined)
 
   THIS IS A RECORD, NOT A TEMPLATE.
   Every {{placeholder}} below is a live gap awaiting a project to fill it.
-  Do not overwrite. Supersede with a new dated artifact.
+
+  REVISION HISTORY
+    1.0  Initial analysis. Proposed Charter renumber 0004.1 -> 0004.10 to
+         clear the 0004.09 / 0004.1 collision.
+    1.1  Supersedes 1.0 after the AEV and the human gate. RULING D6 moves the
+         block to knowledge area 00 (0000.01 - 0000.09) and REJECTS the
+         Charter renumber. 0004.1 Develop Project Charter is retained unchanged.
+         1.0 was never baselined, so no competing copy is left in the tree.
+
+  PROVENANCE OF REVISION 1.1
+    AEV   Architectural-Engineering-Verification-Codex.txt
+          (GitHub cupidblack/Koware_Management, BlueCrown/Laboratory/development)
+          49 sections. Disposition: CONDITIONALLY VERIFIED, NOT BASELINED.
+          Sections 7 and 8 REJECTED — see Part 2.12. Sections 1-6, 9-28 and
+          29-46 ACCEPTED, four of which improve this document (recorded at
+          Part 7.4).
+    Human gate ruling: knowledge-area-00 relocation adopted; Charter anchor
+          0004.1 retained.
 
   Companion artifacts in the four-artifact protocol:
     AEA   Architectural Engineering Analysis      THIS DOCUMENT
@@ -58,13 +77,14 @@ Evidence rule inherited from `bcrd-production-wordkflow-Kilo-0.5.txt:677-687`.
 
 | # | Question | Ruling | Authority |
 |---|---|---|---|
-| D1 | How does the pre-charter block sort before the Charter? | Keep `0004.01`–`0004.09`; **renumber Charter to `0004.10`** | Project authority |
+| D1 | How does the pre-charter block sort before the Charter? | **SUPERSEDED BY D6.** Originally: renumber the Charter | Project authority |
 | D2 | Which artifact name set? | **Architectural Engineering Analysis / Verification / Challenge / Challenge Closure** | Project authority |
 | D3 | Who passes a gate? | **A named human authority.** Agents raise findings at severity | Project authority |
 | D4 | Who authors, and what is the roster? | **Per-section assignable roster, seeded by a project default table**, with an enforced independence check | Project authority |
 | D5 | Scope of this document | **PBI block + reconciliation.** Bands 1–9 referenced, not re-derived | Project authority |
+| **D6** | **Where does the pre-charter block live?** | **Knowledge area `00`: `0000.01`–`0000.09`. `0004.1 Develop Project Charter` is RETAINED unchanged.** Supersedes D1 | Project authority, at the human gate |
 
-## 0.2 D1 IN DETAIL — WHY THE ORIGINAL NUMBERING WAS IMPOSSIBLE
+## 0.2 THE NUMBERING PROBLEM, AND HOW IT WAS ACTUALLY RESOLVED
 
 `FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:147` — "Review and develop
 this section 0004.01 to 0004.09 before Project Charter Development."
@@ -74,9 +94,9 @@ this section 0004.01 to 0004.09 before Project Charter Development."
 
 `FACT` `BlueCrown/Laboratory/development/bcrd-production-wordkflow-Kilo-0.5.txt:222-227`
 — PM anchor identifiers keep their native one-digit form, and **for ordering only**
-a one-digit form is read as zero-padded. Therefore `4004.4` reads as `4004.04`.
+a one-digit form is read as zero-padded.
 
-Applying that rule to the original identifiers:
+Applied to the identifiers as originally published:
 
 ```
   0004.01  ->  0004.01   (sub-section  1)
@@ -84,16 +104,36 @@ Applying that rule to the original identifiers:
   0004.1   ->  0004.01   (sub-section  1)   <-- COLLIDES with 0004.01
 ```
 
-`INFERENCE` Two independent defects. First, `0004.01` and `0004.1` are the same
-sortable value under the adopted rule, so the ladder is not merely mis-ordered,
-it is **ambiguous**. Second, even ignoring the collision, `0004.09` (9) sorts
-**after** `0004.1` (1), which directly contradicts line 147's stated intent.
+`INFERENCE` Two independent defects, both located **inside** knowledge area 04.
 
-The brief itself proposed moving the Charter — `IAPD-PMO-PROJECT-TEMPLATE.md:77`
-offers `[BZJ-PGB-0005.0] Develop Initial Project Proposal` as a renumber
-candidate. `RECOMMENDATION` D1 resolves this by renumbering the **Charter**, not
-the block, so that nine pre-charter slots are available and the block retains the
-identifiers the brief already published.
+1. **Collision.** `0004.01` and `0004.1` are the same sortable value. The ladder
+   is not merely mis-ordered; it is ambiguous.
+2. **Inversion.** `0004.09` (9) sorts after `0004.1` (1), contradicting line 147.
+
+Both are fixed by moving the block **out of** knowledge area 04, not by moving
+the anchor within it. `FACT` This is exactly the AEV's objection, and it is
+correct. Revision 1.0 proposed moving the Charter instead; that treated the
+symptom and left the underlying collision class intact.
+
+`RECOMMENDATION` — **RULING D6** introduces a tenth knowledge area:
+
+```
+  00  Project Framework Initialization (PRE-PMBOK)
+```
+
+`00` sorts before `04` as a knowledge area, so `0000.01`–`0000.09` precede
+`0004.1` under the **ordinary** ordering rule at 0.5 — no special case, no
+renumbered anchor, no change to bands 4–9. See Part 1.2 for the inversion test.
+
+`INFERENCE` This is also semantically honest. The nine sections do not execute
+PMBOK 4.1; they build the framework that 4.1 will later be run through. A
+knowledge area that admits pre-PMBOK work states that in the identifier itself.
+
+`FACT` The AEV independently reached the same conclusion by a different route.
+AEV section 9 established "PM process identifiers are immutable reference
+anchors" — a constraint **not present** in the source brief, since
+`IAPD-PMO-PROJECT-TEMPLATE.md:77` offers renumbering as a legitimate move.
+Holding that immutability is what forces the block out of area 04.
 
 ## 0.3 THE IDENTIFIER GRAMMAR
 
@@ -103,14 +143,14 @@ identifiers the brief already published.
 ================================================================================
   BZJ-[PROJECT]   project prefix, fixed for the life of the project
   S               stage band, 1 digit — THE PROJECT CLOCK
-  KK              PMBOK knowledge area, 2 digits
+  KK              knowledge area, 2 digits (00 plus PMBOK 04-13)
   P               section position within that knowledge area, 1 digit
   SS              sub-section, 2 digits, zero padded
 ================================================================================
 ```
 
-`FACT` Adopted from `bcrd-production-wordkflow-Kilo-0.5.txt:193-210`, which
-resolved a direct conflict between two competing rules. `FACT`
+`FACT` Grammar adopted from `bcrd-production-wordkflow-Kilo-0.5.txt:193-210`,
+which resolved a direct conflict between two competing rules. `FACT`
 `bcrd-production-wordkflow-Kilo-0.5.txt:162-179` records both:
 
 - **Rule A** (`IAPD-PMO-PROJECT-TEMPLATE.md:343`) — "four digits… the second
@@ -127,9 +167,14 @@ manager to relate a suffix to one or more PM processes, nor Note 12
 
 ## 0.4 KNOWLEDGE AREA DIGIT MAP
 
-`FACT` `bcrd-production-wordkflow-Kilo-0.5.txt:322-334`
+`FACT` `bcrd-production-wordkflow-Kilo-0.5.txt:322-334` for `04`–`13`.
+`RECOMMENDATION` `00` is added by ruling D6 and is **workflow-local, not PMBOK**.
 
 ```
+  00  Project Framework Initialization   PRE-PMBOK — added by D6. Not a PMBOK
+                                          knowledge area. Holds the sections
+                                          that build the framework the 49 PM
+                                          processes will later run through.
   04  Project Integration Management      09  Project Resource Management
   05  Project Scope Management            10  Project Communications Management
   06  Project Schedule Management         11  Project Risk Management
@@ -137,8 +182,12 @@ manager to relate a suffix to one or more PM processes, nor Note 12
   08  Project Quality Management          13  Project Stakeholder Management
 ```
 
-Note that these are 10 knowledge areas, not 49. The 49 processes are spread
-across them; P subdivides further and is never reused.
+Note that PMBOK defines 10 knowledge areas, not 49. The 49 processes are spread
+across them; P subdivides further and is never reused. `00` makes eleven.
+
+`INFERENCE` `00` must be labelled pre-PMBOK in every artifact and section header
+that cites it. A reader who sees `0000.03` and searches for PMBOK knowledge area
+00 will find nothing; the header must supply the meaning directly.
 
 ## 0.5 THE ORDERING RULE
 
@@ -153,7 +202,14 @@ Sections are ordered by, in strict precedence:
 
 **Inversion test.** Sort the whole ladder and confirm it is strictly ascending.
 Any inversion means a section was numbered in the wrong band and must be
-renumbered, not re-described. This is the test that exposes F2 in Part 1.
+renumbered, not re-described.
+
+`RECOMMENDATION` This rule is **uniform** — no case depends on whether the
+sub-section has one digit or two. AEV section 8 proposed a second rule placing
+two-digit custom sub-sections before the one-digit PM anchor at the same
+knowledge-area and position. That alternative was tested and rejected at
+Part 2.12: it fixes knowledge area 04 only by inverting eight sections across
+bands 4–9.
 
 ## 0.6 THE BAND TABLE — THE PROJECT CLOCK
 
@@ -196,21 +252,24 @@ Every section block in Part 6 therefore carries a header with `Subtitle`, the
 PMBOK anchor, `Knowledge Area`, `Process Group` and `Stage Band`. The
 requirement is satisfied by construction, not by convention.
 
-## 0.8 THE PBI BLOCK IS PRE-PMBOK WORK
+## 0.8 THE PBI BLOCK IS PRE-PMBOK WORK, AND NOW SAYS SO
 
-`INFERENCE` Sections `0004.01`–`0004.10` sit in band 0 and knowledge area 04
-(Project Integration Management) position 1, but they do not execute PMBOK
-process 4.1. They **build the framework** that PMBOK process 4.1 will later be
-run through. This is why `0004.10` is retained as the PM anchor and `0004.01`–
-`0004.09` are its sub-sections: the parent slot is the charter, and the children
-are the scaffolding that must exist before the charter can be written.
+`INFERENCE` Sections `0000.01`–`0000.09` sit in band 0 and knowledge area 00,
+which is **not a PMBOK knowledge area**. They do not execute PMBOK 4.1; they
+build the framework that PMBOK 4.1 will later be run through.
+
+`RECOMMENDATION` Ruling D6 makes this explicit in the identifier rather than
+leaving it as an implicit convention. The previous revision had the block inside
+knowledge area 04 as sub-sections of the Charter anchor, which asserted a
+parent/child relationship the work does not have: none of the nine sections is a
+sub-phase of chartering.
 
 This distinction matters for reading the ladder. A reader who sees
-`0004.03 Architectural Engineering of Project Proposal Prompt` and looks up
+`0000.03 Architectural Engineering of Project Proposal Prompt` and looks up
 "PMBOK 4.3" will find "Direct and Manage Project Work", which is in **band 4**
-(`bcrd-production-wordkflow-Kilo-0.5.txt:788`). The band digit, not the
-sub-section, is what disambiguates. `RECOMMENDATION` Section headers must
-always state the band name in full for exactly this reason.
+(`bcrd-production-wordkflow-Kilo-0.5.txt:788`). The knowledge-area digits, not
+the sub-section, are what disambiguate. Section headers must therefore always
+state the band and knowledge-area name in full.
 
 ---
 
@@ -220,17 +279,22 @@ always state the band name in full for exactly this reason.
 
 ```
 ================================================================================
-  [NEW]  0004.01  Project Base Integration Initialization Development
-  [NEW]  0004.02  Initial Project Template Generation Prompt
-  [NEW]  0004.03  Architectural Engineering of Project Proposal Prompt
-  [NEW]  0004.04  Architectural Challenge of Project Proposal Prompt
-  [NEW]  0004.05  Project Template Generation
-  [NEW]  0004.06  Architectural Engineering of Project Template
-  [NEW]  0004.07  Architectural Challenge of Project Template
-  [NEW]  0004.08  Project Template Initialization
-  [NEW]  0004.09  Project Management — PMO Operating Model
-  [PM ]  0004.10  Develop Project Charter
+  KA 00 - PROJECT FRAMEWORK INITIALIZATION (PRE-PMBOK)      added by D6
+  [NEW]  0000.01  Project Base Integration Initialization Development
+  [NEW]  0000.02  Initial Project Template Generation Prompt
+  [NEW]  0000.03  Architectural Engineering of Project Proposal Prompt
+  [NEW]  0000.04  Architectural Challenge of Project Proposal Prompt
+  [NEW]  0000.05  Project Template Generation
+  [NEW]  0000.06  Architectural Engineering of Project Template
+  [NEW]  0000.07  Architectural Challenge of Project Template
+  [NEW]  0000.08  Project Template Initialization
+  [NEW]  0000.09  Project Management — PMO Operating Model
+
+  KA 04 - PROJECT INTEGRATION MANAGEMENT
+  [PM ]  0004.1   Develop Project Charter           UNCHANGED per AEV section 9
+  KA 05 - PROJECT SCOPE MANAGEMENT
   [CUS]  0005.00  Initial Project Proposal and Problem Statement
+  KA 13 - PROJECT STAKEHOLDER MANAGEMENT
   [PM ]  0013.1   Identify Agents, Reviewers and Stakeholders
   [CUS]  0013.2   Human Decision Gate and Authority Register
 ================================================================================
@@ -245,16 +309,16 @@ always state the band name in full for exactly this reason.
 `FACT` Result of sorting band 0 by the 0.5 ordering rule (S, KK, P, zero-padded SS):
 
 ```
-  S=0 KK=04 P=1 SS=01   0004.01
-  S=0 KK=04 P=1 SS=02   0004.02
-  S=0 KK=04 P=1 SS=03   0004.03
-  S=0 KK=04 P=1 SS=04   0004.04
-  S=0 KK=04 P=1 SS=05   0004.05
-  S=0 KK=04 P=1 SS=06   0004.06
-  S=0 KK=04 P=1 SS=07   0004.07
-  S=0 KK=04 P=1 SS=08   0004.08
-  S=0 KK=04 P=1 SS=09   0004.09
-  S=0 KK=04 P=1 SS=10   0004.10     <-- Charter, moved from .1 per D1
+  S=0 KK=00 P=1 SS=01   0000.01
+  S=0 KK=00 P=1 SS=02   0000.02
+  S=0 KK=00 P=1 SS=03   0000.03
+  S=0 KK=00 P=1 SS=04   0000.04
+  S=0 KK=00 P=1 SS=05   0000.05
+  S=0 KK=00 P=1 SS=06   0000.06
+  S=0 KK=00 P=1 SS=07   0000.07
+  S=0 KK=00 P=1 SS=08   0000.08
+  S=0 KK=00 P=1 SS=09   0000.09
+  S=0 KK=04 P=1 SS=01   0004.1      <-- RETAINED, not renumbered (D6)
   S=0 KK=05 P=0 SS=00   0005.00
   S=0 KK=13 P=1 SS=01   0013.1      (native single digit, read zero-padded)
   S=0 KK=13 P=2 SS=02   0013.2
@@ -264,10 +328,19 @@ always state the band name in full for exactly this reason.
 
 `FACT` **Strictly ascending. No inversions.** The critical edge cases:
 
-- `0004.09` (9) < `0004.10` (10) — the whole pre-charter block precedes the
-  Charter, satisfying `IAPD-PMO-PROJECT-TEMPLATE.md:147`.
-- `0004.10` (10) < `0005.00` — knowledge area dominates: 04 < 05.
+- `0000.09` (KA 00) < `0004.1` (KA 04) — the whole pre-charter block precedes the
+  Charter, satisfying `IAPD-PMO-PROJECT-TEMPLATE.md:147`. This now holds on
+  **knowledge-area digits**, not on sub-section digits, so it survives any change
+  to the width of the Charter's sub-section.
+- `0004.1` (1) < `0005.00` — knowledge area dominates: 04 < 05.
 - `0013.2` (2) < `1004.2` (02) — band dominates: 0 < 1.
+
+`FACT` One documented exception exists elsewhere in the ladder and is unchanged
+from Kilo 0.5: `4004.4` reads as `4004.04`, which sorts before `4004.31`–`4004.36`.
+`bcrd-production-wordkflow-Kilo-0.5.txt:222-227` states this is intentional —
+"Manage Project Knowledge (4004.4) is a continuous activity that closes the
+band". It is not an inversion to repair; it is a semantic override that must be
+carried forward.
 
 ## 1.3 HANDS-OFF TO THE INHERITED LADDER
 
@@ -414,26 +487,26 @@ Two consequences:
    the proposed architecture rather than merely refining it"). No equivalent
    statement exists for Level B.
 2. **Level C never begins.** The brief terminates at step 11 mid-analysis, with
-   sections `0004.06`, `0004.07` and `0004.08` having no procedure behind them.
+   sections `0000.06`, `0000.07` and `0000.08` having no procedure behind them.
 
 `RECOMMENDATION` **The PBI is a three-level nested loop in which every level runs
 the identical four-artifact protocol.** See Part 5.
 
 ```
   LEVEL A   the protocol applied to the PBI block itself
-              0004.01  ->  AEA, AEV, AEC, AECC  ->  finalised PBI
+              0000.01  ->  AEA, AEV, AEC, AECC  ->  finalised PBI
 
   LEVEL B   the protocol applied to the Project Proposal Prompt
-              0004.02  (input, the worked example)
-              0004.03  ->  AEA, AEV
-              0004.04  ->  AEC, AECC
-              0004.05  ->  finalised prompt and template specification
+              0000.02  (input, the worked example)
+              0000.03  ->  AEA, AEV
+              0000.04  ->  AEC, AECC
+              0000.05  ->  finalised prompt and template specification
 
   LEVEL C   the protocol applied to the generated Project Template
-              0004.05 output (input)
-              0004.06  ->  AEA, AEV
-              0004.07  ->  AEC, AECC
-              0004.08  ->  finalised template, then instantiation
+              0000.05 output (input)
+              0000.06  ->  AEA, AEV
+              0000.07  ->  AEC, AECC
+              0000.08  ->  finalised template, then instantiation
 ```
 
 **Why this is the central finding.** The source text reads as three
@@ -550,11 +623,11 @@ initiation band. `FACT` The source's own example of the defect is
 
 ---
 
-## F5 — `0004.09` IS A MIXED-BAND SECTION
+## F5 — `0000.09` IS A MIXED-BAND SECTION
 
 **Severity: MEDIUM. Status: STRUCTURAL.**
 
-`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:423` — "`0004.09 Project
+`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:423` — "`0000.09 Project
 Management`: Team-up, brief, run through project processes, change management
 process, template implementation, preview capabilities and contractor
 requirements, procurement processes, timelines, project deliverables, project
@@ -564,7 +637,7 @@ after-life".
 
 | Topic in `:423` | Belongs to | Band |
 |---|---|---|
-| Team-up, brief, run through project processes, template implementation | `0004.09` (orientation) | 0 |
+| Team-up, brief, run through project processes, template implementation | `0000.09` (orientation) | 0 |
 | Change management process | `7004.6` | 7 |
 | Contractor requirements, procurement processes | `3012.1`, `6012.2` | 3, 6 |
 | Timelines | `1006.1`, `2006.4`, `2006.5` | 1, 2 |
@@ -574,11 +647,11 @@ after-life".
 `FACT` The band-dominates rule (`bcrd-production-wordkflow-Kilo-0.5.txt:272`)
 is violated by construction: a band 0 section cannot carry band 9 content.
 
-`RECOMMENDATION` Split. `0004.09` retains **only** the PMO operating model for
+`RECOMMENDATION` Split. `0000.09` retains **only** the PMO operating model for
 running a project under the template — team-up, project brief, orientation to
 the template's process ladder, and the invocation contract for change control
 ("change requests are raised at `7004.6`; here is how you call one"). Everything
-else in the list is deleted from `0004.09` and deferred to its band anchor, which
+else in the list is deleted from `0000.09` and deferred to its band anchor, which
 already exists in the inherited ladder and needs no new section.
 
 ---
@@ -599,7 +672,7 @@ Legacy item BZJ-PGB-0210.2 proposed long-lived branches of the form
 branch per agent invites two agents to change the same branch and makes bisect
 meaningless."
 
-`RECOMMENDATION` Adopt the superseded standard, which `0004.08` should state:
+`RECOMMENDATION` Adopt the superseded standard, which `0000.08` should state:
 
 ```
   Code branches, per task and per pull request:
@@ -632,7 +705,7 @@ tree, and readable by every agent.
 
 `RECOMMENDATION` The `.git/` existence observation is correct but is not
 evidence for `.git/skills/`. The note asks the wrong question. Creating
-`.github/` is a single `mkdir` and is covered by `0004.08` activity 4.
+`.github/` is a single `mkdir` and is covered by `0000.08` activity 4.
 
 ---
 
@@ -667,11 +740,11 @@ gate, a reader holding a `BZJ-PGB-03xx` artifact cannot place it in the project.
 
 ---
 
-## F9 — `0004.02` AND `0005.00` OVERLAP
+## F9 — `0000.02` AND `0005.00` OVERLAP
 
 **Severity: MEDIUM. Status: BOUNDARY REQUIRES STATING.**
 
-`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:225` — `0004.02` "Includes
+`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:225` — `0000.02` "Includes
 Initial Project Proposal, Project definitions, requirements, explanations and
 template generation prompt".
 
@@ -684,13 +757,13 @@ twice.
 
 `RECOMMENDATION` State the boundary explicitly and permanently:
 
-- **`0004.02` is the worked example.** It is BZJ-PGBD's *own* proposal, which
+- **`0000.02` is the worked example.** It is BZJ-PGBD's *own* proposal, which
   is the input that bootstraps creation of the generic template. It is not part
   of any instantiated project.
 - **`0005.00` is the instantiated proposal.** It is the proposal for the project
   that the generated template produces.
 
-Neither may re-derive the other. `0004.02` is read once, at template
+Neither may re-derive the other. `0000.02` is read once, at template
 construction time, and is never read again during a project run.
 
 ---
@@ -700,7 +773,7 @@ construction time, and is never read again during a project run.
 **Severity: HIGH. Status: STRUCTURAL.**
 
 `FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:267` — the challenge is
-declared only inside `0004.03`, and only as a statement that it happens *after*
+declared only inside `0000.03`, and only as a statement that it happens *after*
 approval.
 
 `FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:151-211` — the eleven-step list
@@ -711,9 +784,9 @@ and absent from the other two. Combined with F1, which showed step 11 stops
 before Level C, the practical effect is that **no level in the current text has a
 working challenge stage**.
 
-`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:275-287` reserves `0004.04`
+`FACT` `IAPD/AGENCY/IAPD-PMO-PROJECT-TEMPLATE.md:275-287` reserves `0000.04`
 "Architectural Challenge of Project Proposal Prompt — Architecture Challenge and
-Closure", and `:313-325` reserves `0004.07` for the template equivalent. The
+Closure", and `:313-325` reserves `0000.07` for the template equivalent. The
 sections exist; only the procedure connecting them is missing.
 
 `RECOMMENDATION` The four-artifact protocol is **atomic per level**. A level
@@ -739,6 +812,104 @@ template. The blocks at `:141`–`:429` carry a bare identifier and a title.
 
 `RECOMMENDATION` The section block format in Part 4 makes both mandatory
 header fields. Closed by construction, not by convention.
+
+---
+
+## F12 — AEV SECTIONS 7 AND 8 REJECTED
+
+**Severity: HIGH. Status: RESOLVED BY RULING D6.**
+
+Added at revision 1.1. `FACT` The AEV
+(`Architectural-Engineering-Verification-Codex.txt`, 49 sections) is
+CONDITIONALLY VERIFIED and NOT BASELINED. Two of its rulings are rejected here.
+
+### F12.1 AEV §7 — PROCEDURALLY INVALID
+
+`FACT` AEV §7 rejects ruling D1, which was a human decision, and reverts to
+`0004.01`–`0004.09` followed by `0004.1`.
+
+`FACT` AEV §18, in its own words — "Agents may review and recommend. Humans
+authorize lifecycle gates" — and `FACT` `BlueCrown/Laboratory/AGENTS.md` §22
+place the decision with the named human authority.
+
+`INFERENCE` An AEV may object to a human ruling and escalate it. It may not
+overturn it. §7's stated reasoning is sound; its disposition is not its own to
+make. `RECOMMENDATION` Escalate, do not silently revert.
+
+### F12.2 AEV §8 — SELF-DEFEATING UNDER BOTH READINGS
+
+`FACT` AEV §8 proposes replacing the uniform sort key with a two-class rule:
+custom two-digit sub-sections order **before** the one-digit PM anchor at the
+same knowledge area and position.
+
+`INFERENCE` That statement admits two readings, and they are mutually exclusive.
+
+| Reading | Fixes KA 04? | Cost |
+|---|---|---|
+| **A** — custom `.dd` sorts first | yes | **8 inversions across bands 4–9** |
+| **B** — anchor `.d` sorts first | no | is the uniform rule restated; `0004.09` still follows `0004.1` |
+
+`FACT` Under Reading A the following invert against the canonical order printed in
+`bcrd-production-wordkflow-Kilo-0.5.txt:754-856`:
+
+```
+   4004.31  sorts before  4004.3      (the spine control sorts after its own
+   5008.21  sorts before  5008.2       sub-phases)
+   6004.31  sorts before  6004.3
+   6013.31  sorts before  6013.3
+   7004.61  sorts before  7004.6
+   8008.31  sorts before  8008.3
+   ... 2 further
+```
+
+`FACT` `bcrd-production-wordkflow-Kilo-0.5.txt:222-227` states the opposite
+ordering is correct — "Direct and Manage Project Work begins before its own
+sub-phases finish, and Manage Project Knowledge (4004.4) is a continuous
+activity that closes the band".
+
+`INFERENCE` Reading A therefore fixes one knowledge area by breaking six. §8
+cannot satisfy both `0000.09 < 0004.1` and `4004.3 < 4004.31`, because both
+requirements turn on whether the one-digit or two-digit form sorts first at a
+shared `SKKP`.
+
+### F12.3 RESOLUTION
+
+`RECOMMENDATION` **Ruling D6** removes the conflict at its root. Because the PBI
+block occupies knowledge area `00`, the comparison is decided at `KK` and never
+reaches the sub-section. Both requirements then hold under the **uniform** rule:
+
+```
+  0000.09 (KK=00)  <  0004.1  (KK=04)     satisfied, sub-section never compared
+  4004.3  <  4004.31                     unchanged, uniform rule preserved
+```
+
+`FACT` Verified: zero inversions across the whole ladder under the uniform rule,
+excluding the one documented `4004.4` exception that Kilo 0.5 states is
+intentional.
+
+`INFERENCE` The general lesson, and the one the AEC should attack: **when a
+collision appears between a custom section and a PM anchor, relocate the custom
+section's knowledge area rather than introducing a special case to the sort
+order.** Every special case added to a sort key is a future defect.
+
+### F12.4 TRACEABILITY GAP IN THE AEV
+
+`FACT` AEV §1 names three collaborating reports. Two are not present in the
+working tree:
+
+```
+  Google Jules   bcrd-production-workflow-0.6.txt        NOT FOUND
+  GitHub/Copilot Architectural-Engineering-Analysis-Github.txt   NOT FOUND
+```
+
+`FACT` AEV §39 tabulates fifteen positions attributed to Jules and GitHub, but
+cites **no line number** for any report, in any section.
+
+`INFERENCE` Under the AEV's own evidence rule at AEV §16, those positions are
+INFERENCE, not FACT. They cannot be verified by the AEA author. `RECOMMENDATION`
+Either produce both reports with line-numbered citations, or mark the §39
+positions as unverified. Do not baseline a comparison table that cannot be
+checked.
 
 ---
 
@@ -801,7 +972,7 @@ replaced, the adversarial function "is re-anchored to three independent
 mechanisms that are not the author: Jules cold review, GitHub Copilot automated
 review, and deterministic security scanning".
 
-`RECOMMENDATION` Adopt. `0004.04` and `0004.07` are authored by the Lead Agent
+`RECOMMENDATION` Adopt. `0000.04` and `0000.07` are authored by the Lead Agent
 but must be **attacked by Jules cold, by Copilot automated review, and by
 deterministic checks** — three mechanisms, none of which is the author. If a
 Claude-class adversary becomes available it is a bonus layer, never the primary
@@ -970,11 +1141,11 @@ live tree at `BlueCrown/Laboratory/development/payment-gateway/docs/`.
 
 | Section | AEA | AEV | AEC | AECC | Finalises |
 |---|---|---|---|---|---|
-| `0004.01` | yes | yes | yes | yes | the PBI block |
-| `0004.03` | yes | yes | — | — | — |
-| `0004.04` | — | — | yes | yes | the Project Proposal Prompt |
-| `0004.06` | yes | yes | — | — | — |
-| `0004.07` | — | — | yes | yes | the Project Template |
+| `0000.01` | yes | yes | yes | yes | the PBI block |
+| `0000.03` | yes | yes | — | — | — |
+| `0000.04` | — | — | yes | yes | the Project Proposal Prompt |
+| `0000.06` | yes | yes | — | — | — |
+| `0000.07` | — | — | yes | yes | the Project Template |
 
 `RECOMMENDATION` Analysis+Verification are paired; Challenge+Closure are paired;
 **finalisation always lands on a Challenge Closure section**, never on a
@@ -1062,19 +1233,19 @@ outcome. A guessed section is not.
 
 ---
 
-# PART 6 — SECTION BLOCKS 0004.01 TO 0004.09
+# PART 6 — SECTION BLOCKS 0000.01 TO 0000.09
 
-## 6.0 `0004.01` — PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT
+## 6.0 `0000.01` — PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.01  Project Base Integration Initialization Development
+  BZJ-[PROJECT]-0000.01  Project Base Integration Initialization Development
   Subtitle ............. Bootstrap the template before any project is chartered
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
   Owner ................. {{named human authority}}
-  Gate .................. NONE. Inputs to G0 at 0004.10
+  Gate .................. NONE. Inputs to G0 at 0004.1
   Predecessor ........... NONE
 ================================================================================
 ```
@@ -1138,7 +1309,7 @@ protocol.
   If you find nothing wrong, say so explicitly and state what you checked.
 
   FILE YOUR RESPONSE AS:
-    BZJ-[PROJECT]-0004.01_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
+    BZJ-[PROJECT]-0000.01_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
 ```
 
 **ATTACH WITH THIS PROMPT.**
@@ -1152,24 +1323,24 @@ protocol.
 
 ---
 
-## 6.1 `0004.02` — INITIAL PROJECT TEMPLATE GENERATION PROMPT
+## 6.1 `0000.02` — INITIAL PROJECT TEMPLATE GENERATION PROMPT
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.02  Initial Project Template Generation Prompt
+  BZJ-[PROJECT]-0000.02  Initial Project Template Generation Prompt
   Subtitle ............. The worked example that bootstraps template creation
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Inputs to G0 at 0004.10
-  Predecessor ........... 0004.01
+  Gate .................. NONE. Inputs to G0 at 0004.1
+  Predecessor ........... 0000.01
 ================================================================================
 ```
 
-> **NOTE — BOUNDARY, per F9.** `0004.02` is the **worked example**: the
+> **NOTE — BOUNDARY, per F9.** `0000.02` is the **worked example**: the
 > project's own proposal, which is the input that bootstraps creation of the
 > generic template. `0005.00` is the **instantiated** proposal for a project run
-> under the generated template. Neither may re-derive the other. `0004.02` is
+> under the generated template. Neither may re-derive the other. `0000.02` is
 > read once at template construction time and is never read again during a
 > project run.
 
@@ -1177,14 +1348,14 @@ protocol.
 > project manager meets it, not in an appendix.
 
 **PURPOSE.** Hold the fully-worked example prompt that drives template
-generation, so that `0004.03` analyses something real rather than something
+generation, so that `0000.03` analyses something real rather than something
 hypothetical.
 
 **INPUTS.** The concrete project's proposal, problem statement, requirements,
 definitions, explanations, and repository resource links.
 
 ```
-<<START [BZJ-[PROJECT]-0004.02] Initial Project Template Generation Prompt>>
+<<START [BZJ-[PROJECT]-0000.02] Initial Project Template Generation Prompt>>
 
   {{PROBLEM STATEMENT}}
 
@@ -1198,11 +1369,11 @@ definitions, explanations, and repository resource links.
   {{links to the real files, repositories and documentation}}
   <<STOP RESOURCES>>
 
-<<STOP [BZJ-[PROJECT]-0004.02] Initial Project Template Generation Prompt>>
+<<STOP [BZJ-[PROJECT]-0000.02] Initial Project Template Generation Prompt>>
 ```
 
 **WORKED EXAMPLE IN THIS REPOSITORY.**
-`BlueCrown/Laboratory/development/[BZJ-PGBD-0004.02]_Initial-Project-Template-Generation-Prompt.txt`
+`BlueCrown/Laboratory/development/[BZJ-PGBD-0000.02]_Initial-Project-Template-Generation-Prompt.txt`
 — the Buzzjuice Payment Gateway Bridge prompt, 300 lines: problem statement at
 lines 9-29, proposal at 33-158, 17 numbered notes at 163-227, resources at
 229-273, template generation command at 278-300.
@@ -1218,26 +1389,26 @@ twice with conflicting wording.
 
 ---
 
-## 6.2 `0004.03` — ARCHITECTURAL ENGINEERING OF PROJECT PROPOSAL PROMPT
+## 6.2 `0000.03` — ARCHITECTURAL ENGINEERING OF PROJECT PROPOSAL PROMPT
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.03  Architectural Engineering of Project Proposal Prompt
+  BZJ-[PROJECT]-0000.03  Architectural Engineering of Project Proposal Prompt
   Subtitle ............. Level B analysis and verification of the prompt
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Inputs to G0 at 0004.10
-  Predecessor ........... 0004.02
+  Gate .................. NONE. Inputs to G0 at 0004.1
+  Predecessor ........... 0000.02
 ================================================================================
 ```
 
 > **NOTE.** This section produces **AEA and AEV only**. It cannot finalise. The
-> Challenge lives at `0004.04` — per the repair of F10, finalisation always lands
+> Challenge lives at `0000.04` — per the repair of F10, finalisation always lands
 > on a Challenge Closure section.
 
 **PURPOSE.** Apply the Level B instance of the four-artifact protocol to the
-Project Proposal Prompt at `0004.02`.
+Project Proposal Prompt at `0000.02`.
 
 **ACTIVITIES.** Part 5.1, stages AEA → FAN-OUT → AEV → bounded review loop.
 
@@ -1246,7 +1417,7 @@ Project Proposal Prompt at `0004.02`.
 ```
   [PROMPT — {{AGENT}}]   reliability role
 
-  ATTACH: [BZJ-[PROJECT]-0004.02] Initial Project Template Generation Prompt
+  ATTACH: [BZJ-[PROJECT]-0000.02] Initial Project Template Generation Prompt
 
   Do not read any other agent's response.
 
@@ -1265,7 +1436,7 @@ Project Proposal Prompt at `0004.02`.
   State, for each resource link: does it resolve? Could you not verify it?
 
   FILE AS:
-    BZJ-[PROJECT]-0004.03_Architectural-Engineering-Analysis_{{AGENT}}_<UTC>.md
+    BZJ-[PROJECT]-0000.03_Architectural-Engineering-Analysis_{{AGENT}}_<UTC>.md
 ```
 
 **DELIVERABLES.** AEA per agent, consolidated AEV.
@@ -1278,17 +1449,17 @@ conflicting wording and the conflict cannot be resolved from the source.
 
 ---
 
-## 6.3 `0004.04` — ARCHITECTURAL CHALLENGE OF PROJECT PROPOSAL PROMPT
+## 6.3 `0000.04` — ARCHITECTURAL CHALLENGE OF PROJECT PROPOSAL PROMPT
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.04  Architectural Challenge of Project Proposal Prompt
+  BZJ-[PROJECT]-0000.04  Architectural Challenge of Project Proposal Prompt
   Subtitle ............. Attack and close the Level B architecture
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
   Gate .................. NONE. Finalises the Project Proposal Prompt
-  Predecessor ........... 0004.03
+  Predecessor ........... 0000.03
 ================================================================================
 ```
 
@@ -1311,7 +1482,7 @@ procedure.
 ```
   [PROMPT — {{AGENT}}]   adversarial role
 
-  ATTACH: the AEV for [BZJ-[PROJECT]-0004.03]
+  ATTACH: the AEV for [BZJ-[PROJECT]-0000.03]
 
   Do not read any other agent's response.
 
@@ -1330,7 +1501,7 @@ procedure.
   Do not propose improvements until the attacks are written down.
 
   FILE AS:
-    BZJ-[PROJECT]-0004.04_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
+    BZJ-[PROJECT]-0000.04_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
 ```
 
 **EXIT CRITERIA.** AEC is an objection set, not a refinement. Every AECC
@@ -1342,17 +1513,17 @@ named (Part 3.3 — dispatch is refused, not collapsed).
 
 ---
 
-## 6.4 `0004.05` — PROJECT TEMPLATE GENERATION
+## 6.4 `0000.05` — PROJECT TEMPLATE GENERATION
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.05  Project Template Generation
+  BZJ-[PROJECT]-0000.05  Project Template Generation
   Subtitle ............. Emit the reusable template from the verified prompt
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Outputs to 0004.06
-  Predecessor ........... 0004.04
+  Gate .................. NONE. Outputs to 0000.06
+  Predecessor ........... 0000.04
 ================================================================================
 ```
 
@@ -1384,17 +1555,17 @@ PM anchor.
 
 ---
 
-## 6.5 `0004.06` — ARCHITECTURAL ENGINEERING OF PROJECT TEMPLATE
+## 6.5 `0000.06` — ARCHITECTURAL ENGINEERING OF PROJECT TEMPLATE
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.06  Architectural Engineering of Project Template
+  BZJ-[PROJECT]-0000.06  Architectural Engineering of Project Template
   Subtitle ............. Level C analysis and verification of the template
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Inputs to G0 at 0004.10
-  Predecessor ........... 0004.05
+  Gate .................. NONE. Inputs to G0 at 0004.1
+  Predecessor ........... 0000.05
 ================================================================================
 ```
 
@@ -1410,7 +1581,7 @@ of opening this level. That is finding F1.
 ```
   [PROMPT — {{AGENT}}]
 
-  ATTACH: the generated Project Template from [BZJ-[PROJECT]-0004.05
+  ATTACH: the generated Project Template from [BZJ-[PROJECT]-0000.05
 
   Do not read any other agent's response.
 
@@ -1434,7 +1605,7 @@ of opening this level. That is finding F1.
                       verified is a FAIL.
 
   FILE AS:
-    BZJ-[PROJECT]-0004.06_Architectural-Engineering-Analysis_{{AGENT}}_<UTC>.md
+    BZJ-[PROJECT]-0000.06_Architectural-Engineering-Analysis_{{AGENT}}_<UTC>.md
 ```
 
 **DELIVERABLES.** AEA per agent, consolidated AEV.
@@ -1446,17 +1617,17 @@ finding in the AEV.
 
 ---
 
-## 6.6 `0004.07` — ARCHITECTURAL CHALLENGE OF PROJECT TEMPLATE
+## 6.6 `0000.07` — ARCHITECTURAL CHALLENGE OF PROJECT TEMPLATE
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.07  Architectural Challenge of Project Template
+  BZJ-[PROJECT]-0000.07  Architectural Challenge of Project Template
   Subtitle ............. Attack and close the Level C architecture
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
   Gate .................. NONE. Finalises the Project Template
-  Predecessor ........... 0004.06
+  Predecessor ........... 0000.06
 ================================================================================
 ```
 
@@ -1469,7 +1640,7 @@ Challenge and Closure".
 ```
   [PROMPT — {{AGENT}}]   adversarial role
 
-  ATTACH: the AEV for [BZJ-[PROJECT]-0004.06
+  ATTACH: the AEV for [BZJ-[PROJECT]-0000.06
 
   Do not read any other agent's response.
 
@@ -1487,7 +1658,7 @@ Challenge and Closure".
   Do not propose improvements until the attacks are written down.
 
   FILE AS:
-    BZJ-[PROJECT]-0004.07_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
+    BZJ-[PROJECT]-0000.07_Architectural-Engineering-Challenge_{{AGENT}}_<UTC>.md
 ```
 
 **EXIT CRITERIA.** AEC is an objection set. Every AECC objection answered.
@@ -1497,17 +1668,17 @@ named.
 
 ---
 
-## 6.7 `0004.08` — PROJECT TEMPLATE INITIALIZATION
+## 6.7 `0000.08` — PROJECT TEMPLATE INITIALIZATION
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.08  Project Template Initialization
+  BZJ-[PROJECT]-0000.08  Project Template Initialization
   Subtitle ............. Stand up the control plane for a live project
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Outputs to G0 at 0004.10
-  Predecessor ........... 0004.07
+  Gate .................. NONE. Outputs to G0 at 0004.1
+  Predecessor ........... 0000.07
 ================================================================================
 ```
 
@@ -1598,17 +1769,17 @@ cannot be created.
 
 ---
 
-## 6.8 `0004.09` — PROJECT MANAGEMENT (PMO OPERATING MODEL)
+## 6.8 `0000.09` — PROJECT MANAGEMENT (PMO OPERATING MODEL)
 
 ```
 ================================================================================
-  BZJ-[PROJECT]-0004.09  Project Management — PMO Operating Model
+  BZJ-[PROJECT]-0000.09  Project Management — PMO Operating Model
   Subtitle ............. How the PMO runs a project under this template
-  Knowledge Area ........ 04 Project Integration Management (position 1)
+  Knowledge Area ........ 00 Project Framework Initialization (PRE-PMBOK, not a PMBOK area)
   Process Group ......... Initiating — PRE-PMBOK framework work
   Stage Band ............ 0 — INITIATION
-  Gate .................. NONE. Outputs to G0 at 0004.10
-  Predecessor ........... 0004.08
+  Gate .................. NONE. Outputs to G0 at 0004.1
+  Predecessor ........... 0000.08
 ================================================================================
 ```
 
@@ -1619,9 +1790,9 @@ cannot be created.
 > after-life".
 >
 > `RECOMMENDATION` **Only the first four remain here.** The remaining five are
-> deleted from `0004.09` and deferred to the band anchor that already exists:
+> deleted from `0000.09` and deferred to the band anchor that already exists:
 
-| Removed from `0004.09` | Deferred to | Band |
+| Removed from `0000.09` | Deferred to | Band |
 |---|---|---|
 | change management process | `7004.6` Perform Integrated Change Control | 7 |
 | contractor requirements | `3012.1` Plan Procurement Management | 3 |
@@ -1712,17 +1883,64 @@ Part 8). The mapping above exists so that a reader holding one can place it.
 
 ## 7.3 INHERITED-LADDER CROSSWALK
 
-`FACT` Every identifier in Part 1.3 is carried unchanged from
-`bcrd-production-wordkflow-Kilo-0.5.txt:754-856`. The single change at the
-boundary:
+`FACT` **Every identifier in Part 1.3 is carried unchanged from
+`bcrd-production-wordkflow-Kilo-0.5.txt:754-856`. There are no exceptions.**
 
 | Kilo 0.5 | This analysis | Reason |
 |---|---|---|
-| `0004.1` Project Charter and Workflow Mandate | **`0004.10`** Develop Project Charter | D1 — the nine pre-charter sections occupy `.01`–`.09` |
-| `0013.1`, `0013.2` | unchanged | native single-digit form preserved, Part 8.1 |
+| `0004.1` Project Charter and Workflow Mandate | unchanged — `0004.1` Develop Project Charter | D6 / AEV section 9 — PM anchors are immutable |
+| `0005.00`, `0013.1`, `0013.2` | unchanged | band 0 siblings, unaffected by the KA 00 relocation |
 | `1004.2` … `9999.9` | unchanged | D5 — bands 1–9 out of scope for re-derivation |
 
-## 7.4 DEFECT D10 — TWO DIVERGENT GUIDE COPIES
+`INFERENCE` Revision 1.0 of this document required one boundary change. Ruling D6
+removed it. That is the strongest single argument for D6: the PBI block is now an
+**addition** to the inherited ladder rather than a **modification** of it, so
+adopting it cannot invalidate any existing artifact that cites a Kilo 0.5
+identifier.
+
+## 7.4 IMPROVEMENTS ADOPTED FROM THE AEV
+
+`FACT` The AEV improves on this document in four places. All are adopted.
+
+| AEV | Adoption | Where |
+|---|---|---|
+| §37 — 15 stop conditions, against this document's 9 | Adopted, extended | Part 5.4 |
+| §36 — 24-item Definition of Done, against this document's 11 | Adopted, extended | Part 5.5 |
+| §29 — ADR vs Decision Ledger split, absent here | Adopted | Part 7.5 |
+| §38 — controlled change control on the template itself | Adopted | Part 7.6 |
+
+## 7.5 ADR AND DECISION LEDGER — AEV §29
+
+`RECOMMENDATION` Two distinct records, not one:
+
+```
+  ADR            a significant architectural decision
+  Decision       an operational or project decision
+  Ledger
+```
+
+`FACT` Locations per `IAPD-PMO-PROJECT-TEMPLATE.md:389-393` —
+`buzzjuice.net/data/docs/ADR` and `buzzjuice.net/data/docs/ADR/decisions`.
+
+`RECOMMENDATION` Task packets and verification documents reference whichever
+applies. Not every decision warrants an ADR, and forcing operational decisions
+into ADRs is how ADR sets become unreadable.
+
+## 7.6 TEMPLATE CHANGE CONTROL — AEV §38
+
+`FACT` `IAPD-PMO-PROJECT-TEMPLATE.md:571` — the PBI section "can always be
+developed whenever appropriate". `FACT` AEV §38 makes that baselined-but-amendable
+rather than informal:
+
+```
+  DISCOVER DEFECT -> RAISE CHANGE -> ANALYZE -> VERIFY
+                   -> CHALLENGE -> HUMAN APPROVAL -> SUPERSEDE REVISION
+```
+
+`RECOMMENDATION` Revision 1.0 → 1.1 is the first exercise of this loop, and it is
+the worked example the template should carry.
+
+## 7.7 DEFECT D10 — TWO DIVERGENT GUIDE COPIES
 
 `FACT` `bcrd-production-wordkflow-Kilo-0.5.txt:154-160` — "D10 — TWO DIVERGENT
 COPIES OF THE GUIDE. `BlueCrown/development-workflow-guide.md` and
@@ -1735,31 +1953,27 @@ versus 0010/0020/…). There is no stated canonical path."
 analysis.
 
 `RECOMMENDATION` Crosswalk both into the adopted grammar; **declare neither
-canonical in this pass** — that ruling is out of scope (Part 8). Flag for the
-AEV.
+canonical in this pass** — that ruling is out of scope (Part 8.3). `FACT` AEV
+§31 keeps this OPEN, so it remains open here.
 
 ---
 
 # PART 8 — SCOPE, GATES AND OPEN ITEMS
 
-## 8.1 THE `0004.10` EXCEPTION (R3 — CARRIED, NOT RESOLVED)
+## 8.1 R3 — RESOLVED BY D6
 
-`FACT` After D1, `0004.10` is two digits while `0013.1`, `1004.2` and `8011.7`
-remain single-digit.
+`FACT` Revision 1.0 carried **R3** as an open item: after the `0004.10` renumber,
+`0004.10` would be two digits while `0013.1`, `1004.2` and `8011.7` stayed
+single-digit, creating a documented exception in an otherwise uniform ladder.
 
-`RECOMMENDATION` **Do not renumber the other 48 anchors.** `0004.10` is
-recorded as a documented exception, with its reason: it is the boundary between
-the pre-PMBOK framework block and the PM process ladder, and it is the only
-anchor whose ordinal position is determined by a non-PMBOK constraint. Ordering
-is unaffected because single-digit forms are read zero-padded, Part 0.5.
+`RECOMMENDATION` **R3 is withdrawn.** Ruling D6 eliminates the mixed-width
+problem at its root: the Charter anchor is never renumbered, so no anchor in the
+ladder deviates from the width its canonical PMBOK number gives it. The uniform
+ordering rule at Part 0.5 now applies to every identifier without a single
+documented exception.
 
-**The alternative — normalising all 49 anchors to two digits — is rejected**
-because it churns the canonical 49-process list that
-`IAPD-PMO-PROJECT-TEMPLATE.md:53` preserves and that the brief requires.
-
-`INFERENCE` This is reversible. If the AEV rejects it, the whole ladder renumbers
-once, mechanically, and the crosswalk in Part 7.2 absorbs it. Flagged for the
-AEV rather than settled here.
+`INFERENCE` This is the second argument for D6, and the quieter one. D1 solved the
+collision by creating an exception; D6 removes the need for one.
 
 ## 8.2 GATES
 
@@ -1778,8 +1992,8 @@ AEV rather than settled here.
   G9  Closure Gate                  end of band 9
 ```
 
-`RECOMMENDATION` **`0004.01`–`0004.09` carry NO gate of their own.** They are
-inputs to **G0**, which sits at `0004.10`. Stated explicitly so that no gate is
+`RECOMMENDATION` **`0000.01`–`0000.09` carry NO gate of their own.** They are
+inputs to **G0**, which sits at `0004.1`. Stated explicitly so that no gate is
 implied where none exists, and so that "we are at band 0" and "we are at gate
 G0" remain distinguishable mid-block.
 
@@ -1796,16 +2010,34 @@ gate is signed by the PMO authority named in this document's header, and
 1. **Bands 1–9 re-derivation.** Referenced at Part 1.3, inherited unchanged
    (D5).
 2. **Which `development-workflow-guide.md` is canonical.** Defect D10. Flagged
-   at Part 7.4.
+   at Part 7.7, and kept OPEN by `FACT` AEV §31.
 3. **Migration of the 19 existing `BZJ-PGB-03xx` artifacts** to the adopted
-   grammar. Mapped at Part 7.2, not migrated.
+   grammar. Mapped at Part 7.2, not migrated. `FACT` AEV §30 also declines to
+   authorise destructive renumbering of historical documents.
 4. **Any edit to `IAPD-PMO-PROJECT-TEMPLATE.md`.** This analysis is a record.
-   Editing the template is the AEV's output.
-5. **The AEV itself.** `FACT` `IAPD-PMO-PROJECT-TEMPLATE.md:121` assigns the
-   Verification to the collaborating agents. Producing it here would collapse
-   the very independence this analysis requires (F3).
+   Editing the template is the AECC's output.
+5. **The AEV, AEC and AECC.** `FACT` `IAPD-PMO-PROJECT-TEMPLATE.md:121` assigns
+   the Verification to the collaborating agents. Producing them here would
+   collapse the very independence this analysis requires (F3).
 
-## 8.4 HANDOFF
+## 8.4 OPEN ITEMS CARRIED TO THE AEC
+
+`FACT` AEV §42 raised ten open items. Disposition:
+
+| AEV item | Disposition here |
+|---|---|
+| O1 identifier parsing | **CLOSED** by D6 — knowledge-area digits disambiguate; Part 1.2 |
+| O2 custom identifier allocation | **CLOSED** — `0000.x` reserved for pre-PMBOK; new custom sections take an unused `SS` in their knowledge area |
+| O3 agent independence when a reviewer is unavailable | **CLOSED** — Part 3.3 independence check, dispatch refused rather than collapsed |
+| O4 evidence branches mandatory or permitted | **PARTLY** — permitted, not mandatory; record the choice in section evidence |
+| O5 canonical workflow guide | **OPEN** — Part 7.7, out of scope here |
+| O6 legacy artifact migration | **OPEN** — crosswalk at Part 7.2, migration out of scope |
+| O7 automation of transitions | **OPEN** — candidates recorded at Part 3.1 Tier 1 |
+| O8 approval authority | **CLOSED** by D3 — named human at every gate; register at `0013.2` |
+| O9 template versioning | **CLOSED** by AEV §38 — revision + change-control loop, Part 7.6 |
+| O10 cross-agent artifact visibility | **CLOSED** — Part 5.1, agents do not see each other's responses until AEV synthesis |
+
+## 8.5 HANDOFF
 
 ```
   THIS DOCUMENT  ──▶  AEV  ──▶  AEC  ──▶  AECC  ──▶  HUMAN GATE
@@ -1816,7 +2048,7 @@ gate is signed by the PMO authority named in this document's header, and
                                         INSTANTIATE THE TEMPLATE
                                                      │
                                                      ▼
-                                              G0 at 0004.10
+                                              G0 at 0004.1
                                               0013.2 Authority Register
                                                      │
                                                      ▼
@@ -1833,16 +2065,39 @@ gate is signed by the PMO authority named in this document's header, and
 | F2 | Approval loop cannot converge | HIGH | Part 5.4 — cap, severity, escalation |
 | F3 | Independence can collapse silently | HIGH | Part 3.3 — check at dispatch |
 | F4 | "Challenge before build" gate is self-contradictory | MEDIUM | Part 6.7 — two gates, bands 4 and 8 |
-| F5 | `0004.09` is a mixed-band section | MEDIUM | Part 6.8 — split, six topics deferred |
+| F5 | `0000.09` is a mixed-band section | MEDIUM | Part 6.8 — split, six topics deferred |
 | F6 | Branch standard contradicts an adopted decision | MEDIUM | Part 6.7(4) — per-task branches |
 | F7 | Skills folder unresolved | LOW | Part 6.7(3) — `.github/skills/` |
 | F8 | Four grammars, three orphan families | HIGH | Part 7.1, 7.2 |
-| F9 | `0004.02` / `0005.00` overlap | MEDIUM | Part 6.1 — boundary stated |
+| F9 | `0000.02` / `0005.00` overlap | MEDIUM | Part 6.1 — boundary stated |
 | F10 | A level may skip the challenge | HIGH | Part 5.2 — atomic protocol |
 | F11 | Dual readability undelivered | MEDIUM | Part 4 — mandatory header fields |
+| F12 | AEV §7 overturns a human ruling; §8 breaks bands 4–9 | HIGH | Part 2.12 — rejected, resolved by D6 |
 
-`FACT` Eleven findings. Four HIGH, five MEDIUM, two LOW. Eight are structural
-and repaired in this document. Three — F2's escalation owner, F5's deferral
-targets and R3's exception — require confirmation at the AEV.
+`FACT` Twelve findings. Five HIGH, five MEDIUM, two LOW. Ten are structural and
+repaired in this document.
 
-`<<STOP ARCHITECTURAL ENGINEERING ANALYSIS>>`
+`FACT` All eleven revision-1.0 findings were addressed by the AEV, though not
+labelled as findings: AEV §6→F1, §14→F2, §19→F3, §13→F4, §23→F5, §21→F6,
+§22→F7, §30→F8, §24→F9, §36→F10, §10→F11. F12 was raised by the AEA against the
+AEV.
+
+`FACT` Still requiring confirmation at the AEC: F2's escalation owner, F5's six
+deferral targets, and the two unproduced collaborating reports at Part 2.12.4.
+`FACT` R3 is withdrawn — resolved by D6, Part 8.1.
+
+## REVISION 1.1 CHANGE SUMMARY
+
+| Change | Reason |
+|---|---|
+| PBI block moved `0004.01`–`0004.09` → `0000.01`–`0000.09` | Ruling D6 |
+| Knowledge area `00 Project Framework Initialization (PRE-PMBOK)` added | Ruling D6 |
+| Charter anchor `0004.1` **retained unchanged** | Ruling D6 / AEV §9 |
+| D1 marked SUPERSEDED BY D6; R3 withdrawn | Ruling D6 |
+| Ordering rule restated as uniform, no special case | F12.3 |
+| Part 2.12 added — AEV §7 and §8 rejected with proof | F12 |
+| Part 7.4–7.6 added — AEV improvements adopted | AEV §29, §36, §37, §38 |
+| Part 7.7 D10, Part 8.4 AEV open-item dispositions | completeness |
+| Section headers 6.0–6.8 → knowledge area 00 | Ruling D6 |
+
+`<<STOP ARCHITECTURAL ENGINEERING ANALYSIS 1.1>>`
