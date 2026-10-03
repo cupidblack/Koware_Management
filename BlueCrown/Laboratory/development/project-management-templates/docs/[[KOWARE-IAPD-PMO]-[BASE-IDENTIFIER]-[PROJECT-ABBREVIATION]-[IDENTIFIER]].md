@@ -356,7 +356,7 @@ The following are 'Architectural Engineering Verification' responses from the co
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DArchitectural-Engineering-of-Project-Proposal-Prompt\_Verification-Responses-202603100820.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Responses-202603100906.txt
 
 
 
