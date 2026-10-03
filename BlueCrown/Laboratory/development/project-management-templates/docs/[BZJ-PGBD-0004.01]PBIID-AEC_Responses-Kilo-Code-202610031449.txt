@@ -1,0 +1,1340 @@
+# [BZJ-PGBD-AEC-0000.04]
+
+# ARCHITECTURAL ENGINEERING CHALLENGE — INDEPENDENT AGENT RESPONSE
+
+## Adversarial Challenge of the AEV R1.0 Controlled Baseline Candidate
+
+**Challenged Artifact:** `BZJ-PGBD-AEV-0004.01` — Controlled Baseline Candidate, Revision `R1.0`
+**Challenge Identifier:** `BZJ-PGBD-AEC-0000.04`
+**Challenger:** Kilo-Code
+**Challenge Timestamp:** 2026-10-03T14:49:02Z
+**Challenger Prior Artifacts:** AEA report `…Kilo-Code-202610031156.txt`; AEV decision `…Kilo-Code-20261003130256.txt`
+**Method:** Independent adversarial attack. I did NOT use another agent's AEC result as evidence (Rule 36). All `FACT` citations below are reproduced directly from the repository state at challenge time (2026-10-03).
+
+---
+
+## 0. CHALLENGER'S EVIDENCE BASE (independently reproduced at attack time)
+
+These facts are the ammunition for the attacks. Each was re-measured against the live worktree, not taken from the documents.
+
+```text
+E1.  No identifier registry file exists anywhere in the repository.          (FACT)
+E2.  No .github/, no CI workflows, no CODEOWNERS, no branch protection,
+     no git hooks of any kind.                                                (FACT)
+E3.  No task-packet, ADR, Decision Ledger, RTM, or findings files exist.     (FACT)
+E4.  Exactly one AGENTS.md exists: BlueCrown/Laboratory/AGENTS.md.
+     It is NOT at the governance-repo root the PBIID assumes.                (FACT)
+E5.  AGENTS.md §17 roster = "ChatGPT/Cove", "GitHub Copilot", "Jules",
+     "Claude"; §18 step 5 = "Claude performs adversarial/security review".   (FACT)
+E6.  AGENTS.md §16 branch naming = "pgb/bzj-pgb-003".
+     AEV R1.0 §24 = "pgb/bzj-[project]-[task]-[slug]".                       (FACT)
+E7.  The PBIID source template sections 0004.02–0004.09 are empty title
+     stubs; 0004.1 ends in "…" + a {{…continue…}} placeholder.               (FACT)
+E8.  The 49-process list in the template is exactly 49 entries, 0 ordering
+     inversions. The Kilo 0.5 ladder has ~94 distinct identifiers (upper
+     bound) with ordering that does NOT match lexicographic sort.            (FACT)
+E9.  Authoritative inputs in PBIID are pinned to ephemeral session branches
+     (kilo/mute-summit-kd9, jules-16045588484820241806-d33c5a89) that exist
+     only as origin/ refs.                                                   (FACT)
+E10. Two development-workflow-guide.md files differ by 3,249 diff-lines;
+     seven bcrd-production-wordkflow-*.txt version files exist; none is
+     declared canonical by an authoritative marker.                          (FACT)
+E11. The prior AEV §20 explicitly REJECTED Claude as a required platform.
+     The PBIID template names "ChatGPT Codex" as Lead Agent.                 (FACT)
+```
+
+**The single most important fact of the entire challenge:** the AEV R1.0 candidate declares ten blocking baseline items (B-01..B-10) that must be resolved before it may become an approved baseline. **None of them have been implemented.** There is no registry (B-01), no canonical source marker (B-02), no task-packet state machine artifact (B-06), no security-boundary definition (B-08), no traceability mechanism (B-09), and no project-state artifact (B-10). Every control the candidate *describes* is a description, not a control. This is the foundation of most of the findings below.
+
+---
+
+## 35.1 EXECUTIVE CHALLENGE RESULT
+
+### The architecture does **not** currently survive the challenge.
+
+```text
+CLASSIFICATION:  AEC FAIL — ARCHITECTURE REQUIRES RETURN TO AEV
+                 (material amendments; NOT a full architectural reset)
+```
+
+The load-bearing *intent* of the architecture is sound, and several controls would contain the tested failure modes **if they were actually implemented**. The challenge found that the candidate, as it stands, is a *specification of a governance system with none of its enforcement mechanisms present, and at least one of its operative sources (AGENTS.md) actively contradicting it*.
+
+That is not "survives with minor weaknesses." It is "the governing document and the governed artifact have never been made to coexist, and the enforcement layer the entire model depends on is paper."
+
+**This is not an architectural reset.** No load-bearing *assumption* (LA-01..LA-12) is demonstrably false in principle. The failures found are **implementation-absence + source-conflict + enforcement-vacuum**, which are repairable by amendment and by building B-01..B-10. I therefore recommend `RETURN TO AEV` for material amendments (Section 35.9), not `ARCHITECTURAL RESET`.
+
+I state the negative result explicitly because the challenge's success condition (§38) is to *determine* whether the architecture survives — and under the current evidence it does not, for the reasons below.
+
+---
+
+## 35.2 ATTACK RESULTS
+
+### Attack A — Identifier-System Failure
+
+```text
+Attack ID:        A
+Target:           LA-03, LA-04 (49-process spine + registry identity/order)
+Scenario:         Two agents independently create a custom engineering section
+                  for the "post-implementation quality review" activity.
+                  Agent-1 names it  4004.31  (2-digit on execution anchor).
+                  Agent-2 names it  4004.31  in a DIFFERENT grammar: it treats
+                  "4004" as the KA, "3" as the process, "1" as the sub-item,
+                  and writes it as "4004.31" but means sub-item 1 of process 3,
+                  while Agent-1 means process 3, sub-item 1 of the *quality*
+                  area. No registry exists (E1), so neither checks a
+                  sequence_index. Both commit. Both look valid.
+Evidence:         E1 (no registry), E8 (the 0.5 ladder already contains BOTH
+                  "4004.3" and "4004.31" AND "4004.04" alongside "4004.4" —
+                  the collision class is not hypothetical, it is already present
+                  in the source material). E2 (no CI to reject a duplicate
+                  sequence_index on push).
+Result:           FAIL — a valid-looking duplicate/ambiguous identifier can be
+                  created and merged because the only thing that would stop it
+                  (registry + sequence_index check + CI) does not exist (E1/E2).
+Classification:   BLOCKER (for the identifier system) / MATERIAL RISK (overall)
+Consequence:      The audit chain breaks: "which requirement caused this
+                  implementation" (query §9; candidate §19) becomes unanswerable
+                  for the two colliding sections. Traceability, the core promise,
+                  fails at the identifier layer.
+Required Action:  B-01 must be *implemented*, not merely specified: a committed
+                  registry + a mechanical duplicate/collision check that runs on
+                  every doc push. Until then the identifier system is unenforceable.
+```
+
+**Constructed realistic governance failure (as §6 requires):** In a real two-agent project, Agent-A and Agent-B both implement "independent quality review of the payment bridge." Agent-A files the artifact as `BZJ-PGBD-8008.31_QR_<agentA>`; Agent-B files it as `BZJ-PGBD-8008.31_QR_<agentB>` because it read an older 0.5 draft that had `8008.31` allocated. No registry, no CI (E1/E2). Both are "approved." The AECC record now contains two artifacts with the same lifecycle meaning, and a human doing a release review cannot tell which one is authoritative. **The identifier system produced a governance failure.** Constructed and demonstrated; cannot be refuted while E1+E2 hold.
+
+---
+
+### Attack B — Registry Failure
+
+```text
+Attack ID:        B
+Target:           LA-04 (machine-readable registry provides authoritative
+                  deterministic identity/order)
+Scenario:         The registry EXISTS (assume B-01 built). Now attack it.
+   B1 Concurrent modification: two agents on two worktrees each add a new
+      section, bump sequence_index 80→81 independently, commit.
+   B2 Stale copy: an agent's worktree has sequence_index up to 79; it creates
+      80, which collides with the merged 80.
+   B3 Merge conflict: two branches add different entries at the same YAML key.
+   B4 Unauthorized edit: an agent on a task branch edits the registry directly
+      to "fix" a number.
+   B5 Corruption: a hand-edit breaks YAML; the registry fails to parse.
+   B6 Deletion: a branch that never merged deletes the registry file; a later
+      agent's merge resurrects it missing.
+Evidence:         E1 (registry does not exist yet), E2 (no CI to validate it,
+      no CODEOWNERS to restrict who may edit it), E4/E9 (multiple divergent
+      doc locations + ephemeral branches → stale-copy and divergence are
+      structurally likely).
+Result:           FAIL (as designed, not as built). The registry is only as
+   authoritative as its enforcement. There is NO mechanism that makes one copy
+   authoritative: no CODEOWNERS (E2) → any agent can edit it on any branch;
+   no CI (E2) → a corrupted/stale/duplicate registry merges silently; no
+   merge-queue or branch-protection (E2) → concurrent edits resolve by "last
+   push wins," not by sequence_index authority.
+Classification:   MATERIAL RISK (the registry is the load-bearing identity
+   control; an unenforceable registry is worse than none, because it gives
+   false confidence)
+Consequence:      LA-04 is not yet true. "What makes the registry authoritative
+   when multiple agents possess different versions?" → **Nothing does, currently.**
+   The answer the architecture owes: CODEOWNERS on the registry + CI validation
+   + branch-protection requiring a registry-change to pass a sequence_index
+   monotonicity + duplicate + YAML-validity check before merge. None exist.
+Required Action:  B-01 is insufficient as "a registry shall be created." It must
+   include the enforcement: CODEOWNERS + merge-time validation. Amend B-01.
+```
+
+---
+
+### Attack C — Authority Collapse
+
+```text
+Attack ID:        C
+Target:           LA-05 (logical role separation remains enforceable when
+                  physical participants perform multiple roles)
+Scenario:         One human + one AI agent = entire project (Scenario 2).
+   The human writes the architecture AND approves the release.
+   The AI implements AND self-verifies (DESIGN→IMPLEMENTATION) AND "reviews."
+   Who independently verifies the implementation?
+Evidence:         E5 (AGENTS.md itself says "No AI agent is the final authority"
+   — good — but that file is the *operative* one and it names Claude as the
+   adversarial reviewer, which per E11 is not a platform the architecture
+   assumes). E2 (no human-authority register artifact exists; B-03 is
+   "authority must be explicitly defined" but no such artifact is present).
+Result:           FAIL. The AEV §11 says "the logical separation of authority
+   must remain even when personnel/agents are combined." But with one human +
+   one agent:
+   - There is no SECOND human to pass a gate (the human is the architect AND
+     the approver → self-approval of architecture).
+   - There is no SECOND agent to independently verify (the one agent both
+     implements and verifies → self-approval of implementation).
+   - The "independence check" (AEA→AEV→AEC) collapses to a single author doing
+     all four artifacts, because there is no one else to assign them to.
+   The candidate §12 "No agent or role may approve its own implementation
+   without independent verification" is unenforceable: the only "independent
+   verification" available is performed by the same agent that implemented.
+Classification:   BLOCKER for small projects / MATERIAL RISK for the model
+Consequence:       For the 1-human+1-agent case, the entire assurance protocol
+   degrades to one actor rubber-stamping its own work across four artifact
+   types. The architecture's core anti-confirmation-bias control evaporates.
+Required Action:   Minimum additional control: (a) a NAMED human authority that
+   is not the author of the architecture being approved (B-03 must produce a
+   real register, not a sentence); (b) where no second agent exists, the
+   human MUST perform at least one gate that no agent may perform; and
+   (c) the AECC must record a "ROLE GAP" for every collapsed role and require
+   human sign-off per gate — which the candidate §33 hints at but does not make
+   MANDATORY for the single-participant case.
+```
+
+**This is the strongest single finding.** The model is sound for multi-agent projects and *empty* for the smallest ones, which is exactly where the query (§3, §27) said the architecture must scale down to. LA-05 fails in the small-project regime.
+
+---
+
+### Attack D — AEV Verification / Collective Error
+
+```text
+Attack ID:        D
+Target:           LA-07 (evidence model provides sufficient assurance against
+                  collective error)
+Scenario:         All three agents receive the same incorrect source (a 0.5
+   draft that mis-states the payment lifecycle). All "independently" verify the
+   same wrong fact. The Lead Agent synthesizes a confident AEV.
+Evidence:         The historical record is the proof: in THIS very project,
+   Kilo's F-01 ("78 vs 80/81 processes") and F-02 ("7 inversions") were recorded
+   as VERIFIED FACT in a prior round but do NOT reproduce against the files
+   under any counting scope I can establish (my AEA §N; candidate §27 itself
+   concedes "no disputed numerical finding shall be treated as established
+   fact until reproduced against the canonical registry"). That is a REAL
+   instance of collective/unverified-error entering a baseline document.
+Result:           PARTIAL FAIL. The candidate has the RIGHT mechanism
+   (reproduce-against-registry; mark DISPUTED; independent re-measurement) but
+   it only works once the registry exists (E1: it does not). Until then,
+   "independent" analysis of the SAME stale source yields correlated agreement,
+   not independent verification. Three agents citing the same bad draft =
+   three confirmations of one error.
+Classification:   MATERIAL RISK
+Consequence:       LA-07 is conditionally true: the evidence model *can* catch
+   collective error, but only if (a) the registry exists and (b) at least one
+   role is *required* to re-measure a load-bearing FACT against the primary
+   source rather than the shared draft. Neither is guaranteed today.
+Required Action:   Add to the AECC entry criteria: "at least one load-bearing
+   FACT in the AEV was independently re-measured against the primary source
+   (not the shared working draft)." Add a "source-of-evidence" field to every
+   FACT that distinguishes "shared draft" from "primary source."
+```
+
+---
+
+### Attack E — Four-Artifact Loop Termination
+
+```text
+Attack ID:        E
+Target:           LA-02 (AEA→AEV→AEC→AECC provides sufficient assurance)
+Scenario:         AEC finds a HIGH issue → amendment → AEV regenerated →
+   re-challenged → finds another HIGH → … Does it terminate?
+Evidence:         The candidate §15 gives a 3-cycle BOUNDED CONVERGENCE with a
+   mandatory STOP→record→escalate→human/return-to-AEA. That is a real
+   termination mechanism.
+Result:           PASS (containing). The bounded-convergence + mandatory
+   escalation + "no indefinite agent-to-agent loops" rule (§15) does contain the
+   endless-review failure mode. I confirm the control exists and is correctly
+   specified.
+Classification:   PASS (this is a valid "architecture survived" evidence point,
+   per §38)
+Consequence:       None, IF the 3-cycle constant and the escalation path are
+   actually enforced (see Attack F for where it weakens).
+Required Action:   None for the loop itself. See F for the pressure-to-approve
+   weakness in the cycle limit.
+```
+
+---
+
+### Attack F — Bounded Convergence Pressure
+
+```text
+Attack ID:        F
+Target:           LA-06 (bounded convergence prevents deadlock without
+                  suppressing legitimate disagreement)
+Scenario:         Cycle 1 and 2 produce materially different architectures.
+   Cycle 3 (the last) identifies a critical flaw. Now: who decides if it's
+   "resolved enough" to proceed within the 3-cycle budget, or must the project
+   escalate? Does the cycle budget create pressure to call it "resolved"?
+Evidence:         Candidate §15: after the limit, "STOP → record → escalate →
+   Human/Technical Authority decision OR return to AEA." The escalation exists.
+   But §15 also says the 3-cycle limit is "a candidate control, not yet a
+   universally mandatory constant" — i.e., it is not fixed.
+Result:           WEAKNESS (contained but with a real pressure point).
+   - Good: escalation exists; a STOP is a valid state.
+   - Weak: "who decides whether the issue is resolved" is left to "Human /
+     Technical Authority decision" (B-03 / O8: no named authority exists — E2).
+     With no named authority and a cycle budget, a schedule-pressured project
+     has an incentive to classify a real HIGH as "resolved / non-blocking" to
+     hit the 3-cycle ceiling. The limit does not create the pressure by itself,
+     but it removes the buffer that would catch a bad resolution.
+   - Weak: if cycle-3's "critical flaw" is in a load-bearing assumption, the
+     §15 path offers "amend OR return to AEA" — but the DECISION of which is
+     exactly what Attack G (reset) shows is under-specified.
+Classification:   WEAKNESS
+Consequence:       LA-06 holds in principle but is only as good as the named
+   human authority (absent — B-03) and the reset-decision rule (absent — G).
+Required Action:   Name the authority (B-03). Make "a load-bearing-assumption
+   finding in the final cycle ALWAYS routes to the reset decision (Attack G),
+   never to 'amend and proceed.'"
+```
+
+---
+
+### Attack G — Architectural Reset
+
+```text
+Attack ID:        G
+Target:           LA-08 (reset mechanism can safely recover from load-bearing
+                  assumption failure)
+Scenario:         A load-bearing assumption fails AFTER AEV approval
+   (e.g., the payment-gateway provider API the architecture depends on
+   removes the callback the design assumes; or a security assumption is
+   disproved post-release).
+   The challenge asks 9 questions (§12): who may declare reset? reject?
+   evidence? amendment-vs-reset? what stops? which artifacts invalidate?
+   what to completed implementation? rollback? who owns cost?
+Evidence:         Candidate §16 defines the SHAPE (amend-and-reverify vs
+   return-to-AEA) and "the reset event must be recorded." But it answers NONE
+   of the 9 §12 questions. No reset AUTHORITY, no reset DEFINITION, no
+   invalidation rule, no rollback rule, no cost owner.
+Result:           FAIL (the reset mechanism is a diagram, not a control).
+   - Who may declare reset? → UNDEFINED. (No reset authority named.)
+   - Who may reject it? → UNDEFINED.
+   - Evidence required? → UNDEFINED (only "record the event").
+   - Amendment vs reset boundary? → UNDEFINED (§16 draws two boxes but no
+     decision criterion for which one applies).
+   - What work stops? → UNDEFINED.
+   - Which approved artifacts become invalid? → UNDEFINED. (This is fatal:
+     if a load-bearing assumption fails, EVERY artifact that rested on it —
+     ADRs, decisions, task packets, tests, the baseline — is suspect, but
+     there is no rule for which, and no re-verification cascade.)
+   - Completed implementation / rollback? → UNDEFINED.
+   - Cost owner? → UNDEFINED.
+Classification:   MATERIAL RISK (would be BLOCKER if a reset were actually
+   triggered today, because there is no authority or procedure to execute it)
+Consequence:       LA-08 is not yet true. The reset is a concept with a decision
+   box and no executor. In a payment project, an uncontrolled/undeclared reset
+   is exactly how an approved, verified baseline silently rots.
+Required Action:   Before baseline: define (1) reset authority = the named human
+   Technical Authority (ties to B-03); (2) a written amendment-vs-reset
+   criterion; (3) an invalidation cascade rule (which artifacts re-enter which
+   stage); (4) a rollback/stop rule; (5) a cost/impact owner. Add to B-07.
+```
+
+---
+
+### Attack H — Stop Conditions
+
+```text
+Attack ID:        H
+Target:           stop-condition model (candidate §33 failure handling;
+                  prior 15-stop-condition list)
+Scenario:         Tests fail intermittently; a required approval is
+   unavailable; a dependency is unreachable; scope is exceeded.
+   Questions: Can any participant safely STOP without deadlock? Who restarts?
+   What prevents an agent from continuing after a stop?
+Evidence:         The stop-condition LIST is strong (my AEA §C5 retained it;
+   AGENTS.md §20 mirrors it). But ENFORCEMENT is absent: E2 (no mechanism to
+   detect a stop, no hook, no status field that other agents read). A stop is
+   only as good as the *next actor checking that the stop happened*.
+Result:           WEAKNESS (the conditions are right; the mechanism is missing).
+   - "Can any participant stop safely?" → Yes in principle (a STOP is a valid
+     state per prior AEV §37). Good.
+   - "Who restarts?" → UNDEFINED in the candidate. No restart authority named.
+   - "What prevents an agent from simply continuing after a stop?" → NOTHING,
+     currently. An agent does not read a central stop flag; it reads its task
+     packet and AGENTS.md. If the stop was raised by another agent and is only
+     recorded in a doc on a branch the executor never pulled (E9: inputs are on
+     ephemeral branches), the executor does not see it and continues.
+Classification:   MATERIAL RISK
+Consequence:       A stop condition is a *social contract* today, not an
+   enforcement. The failure mode "agent continues after a stop" is live and
+   uncontained because stop-state has no canonical, machine-readable location
+   that every executor must check (B-10 "one canonical project-state model"
+   is exactly the missing control, and it is unimplemented).
+Required Action:   Implement B-10: a single canonical, machine-readable
+   project-state artifact (the "STOP/BLOCKED/CANCELLED" flag lives HERE),
+   checked by every task-dispatch and every gate. Without it, stop conditions
+   are advisory.
+```
+
+---
+
+### Attack I — Task-Packet Bypass
+
+```text
+Attack ID:        I
+Target:           LA-05 + candidate §17 (immutable task packet;
+                  "I had to do it to complete the task" must not become
+                  authorization bypass)
+Scenario:         Agent receives TASK A (scope: add idempotency to the payment
+   intent store). It discovers completion requires a schema change + a new
+   shared helper + a redirect tweak. It just does all three "to complete the
+   task."
+Evidence:         Candidate §17: dispatched packet is immutable; if the task
+   changes → SUPERSEDED → new packet. Good rule. But ENFORCEMENT: E2 (nothing
+   mechanically detects scope expansion; no CODEOWNERS; no CI diff-scope check;
+   no packet-STATUS that a reviewer must reconcile against the actual diff).
+Result:           WEAKNESS (strong rule, no enforcement).
+   - The packet immutability is real and well-specified.
+   - But "out-of-scope changes" are detected only if a human/agent DIFFS the
+     actual branch against the packet's declared scope. There is no automatic
+     "packet-vs-diff" reconciliation (no CI, E2). So an agent can quietly
+     expand scope and the packet still reads as "as-authorized."
+   - "Parallel agents editing the same area": no lock, no CODEOWNERS (E2),
+     so two agents on two branches can both "complete" overlapping tasks;
+     the merge is where the conflict surfaces — too late.
+Classification:   MATERIAL RISK
+Consequence:       The "I had to do it" bypass is not mechanically prevented.
+   Contained only by human review of the diff, which in a 1-human project
+   (Attack C) is the human reviewing the only agent's out-of-scope work with no
+   second opinion.
+Required Action:   Add a packet-to-diff reconciliation step to the gate
+   (a gate may not pass unless the branch diff ⊆ packet scope, OR the excess
+   is a recorded SUPERSEDE + new packet). Enforce via CI CODEOWNERS + a scope
+   diff check.
+```
+
+---
+
+### Attack J — Evidence Integrity
+
+```text
+Attack ID:        J
+Target:           candidate §18 (evidence model); LA-07
+Scenario:         An agent claims a test passed; the command cannot be
+   reproduced; an external service changed; a log is incomplete; two agents
+   provide contradictory evidence; an evidence artifact is overwritten.
+   Questions: What makes evidence authoritative? Can evidence be falsified
+   accidentally without detection?
+Evidence:         Candidate §18 prefers reproducible evidence (files, commits,
+   tests, command output, config). Good intent. But ENFORCEMENT: E1 (no
+   registry to anchor evidence to an identifier), E2 (no CI to re-run the
+   claimed test at merge, no commit-hash pinning, no immutable evidence store),
+   E9 (evidence pinned to ephemeral session branches → overwritten/lost).
+Result:           WEAKNESS (right intent, no integrity guarantees).
+   - "What makes evidence authoritative?" → A reproducibility claim, but there
+     is no mechanism that re-executes it. An "agent claims test passed" is a
+     claim, not evidence, unless a CI re-runs it (E2: no CI).
+   - "Falsified accidentally without detection?" → YES. An evidence file on an
+     ephemeral branch (E9) can be overwritten or the branch GC'd; nothing
+     detects the loss until someone tries to follow the link six months later
+     (S10).
+   - "Two agents give contradictory evidence?" → No arbiter. The candidate §17
+     "record both, attempt evidence-based reconciliation, escalate unresolved"
+     is the right rule, but it has no designated arbiter and no way to verify
+     which side reproduced (no CI re-run).
+Classification:   MATERIAL RISK
+Consequence:       Evidence authority today = "the agent said so." For a
+   payment project, "the agent said the payment test passed" with no CI
+   re-run is an unacceptable assurance. LA-07 (assurance against collective
+   error) is undermined because the evidence layer cannot re-execute claims.
+Required Action:   Evidence must be (a) pinned to a commit hash + registry id,
+   (b) stored in an immutable/append-only location (not a mutable session
+   branch), and (c) for test-evidence, re-run by CI at the gate so "claimed
+   pass" becomes "verified pass." Add to B-04.
+```
+
+---
+
+### Attack K — Traceability Failure
+
+```text
+Attack ID:        K
+Target:           candidate §19 (Requirement→…→Release); LA-09/B-09
+Scenario:         Requirements change; implementation precedes requirement
+   registration; one implementation satisfies several requirements; one
+   requirement produces several implementations; a task is cancelled; a
+   feature is removed; a test is replaced; a decision is superseded.
+   Can the system preserve history without rewriting the past?
+Evidence:         B-09 is listed as a blocking item ("minimum
+   requirement-to-release traceability must exist") but NO traceability
+   mechanism exists (E3: no RTM/traceability file). E1 (no registry to link
+   requirement-id → artifact-id). The candidate §19 says a lightweight ledger
+   is sufficient — but "lightweight" has no concrete structure, no immutability
+   rule, and no supersession handling.
+Result:           FAIL (the chain is a diagram, not a system).
+   - "Implementation precedes requirement registration" → the chain's first
+     link is empty; "why does this implementation exist?" (query §9) has no
+     answer. The candidate has no rule that an implementation MUST link to a
+     registered requirement (B-09 unimplemented).
+   - "Feature removed / task cancelled / test replaced / decision superseded"
+     → no append-only/supersession model. The §21 doc lifecycle has SUPERSEDED,
+     but traceability specifically (requirement→decision→task→test) has no
+     "superseded requirement still referenced by an old test" rule. History
+     would be rewritten, not preserved.
+Classification:   MATERIAL RISK (BLOCKER for the traceability promise)
+Consequence:       The central promise — "an auditable chain from requirements
+   through architecture, decisions, implementation, testing, change control and
+   final delivery" (query §3) — is not yet achievable. B-09 is a blocking item
+   and is unimplemented; the challenge confirms it is load-bearing.
+Required Action:   B-09 must be implemented as an append-only traceability
+   ledger (requirement-id / decision-id / task-id / test-id / release-tag, with
+   supersession links that preserve rather than overwrite history) + a rule
+   that no implementation artifact may be approved without a registered
+   requirement link. Add to B-01/B-09.
+```
+
+---
+
+### Attack L — Document Lifecycle Failure
+
+```text
+Attack ID:        L
+Target:           candidate §21 (document lifecycle DRAFT→…→ARCHIVED);
+                  durable artifact identity
+Scenario:         Two versions simultaneously marked APPROVED; a superseded
+   document is still referenced; an agent works from an obsolete document;
+   a document is deleted; an approved document is modified in place; links
+   break; a repository branch disappears.
+Evidence:         E9 (authoritative inputs on ephemeral session branches →
+   "branch disappears" is a LIVE, not hypothetical, condition), E2 (no
+   mechanism to prevent in-place modification of an APPROVED doc, no
+   content-addressing), E10 (two divergent workflow guides with no canonical
+   marker → "which version is authoritative" is already broken today).
+Result:           WEAKNESS→MATERIAL (the lifecycle states are right; identity
+   and durability are not).
+   - "Two versions simultaneously APPROVED" → possible today: nothing prevents
+     two files both claiming APPROVED (E2: no integrity check; E10: the two
+     workflow guides are already both "in use" with no canonical designation).
+   - "Agent works from an obsolete document" → likely: agents read whatever
+     AGENTS.md/docs they find; no "this doc is SUPERSEDED, use version X"
+     enforcement (E2).
+   - "Approved doc modified in place" → possible: no content-hash / no
+     append-only rule (E2).
+   - "Links break / branch disappears" → ALREADY TRUE (E9: authoritative
+     inputs pinned to session branches; S10 confirms 6-month reproduction
+     fails).
+Classification:   MATERIAL RISK
+Consequence:       "Does the architecture guarantee durable artifact identity?"
+   → NO. The lifecycle STATE machine is sound, but artifact IDENTITY is not
+   durable: no content-addressing, no immutable store, and the current
+   authoritative inputs live on ephemeral branches. Durable identity is a
+   precondition for traceability (K), evidence (J), and the whole audit chain.
+Required Action:   (1) Content-address artifacts (store a hash; reference the
+   hash, not just the path). (2) APPROVED/SUPERSEDED docs must be
+   append-only/in-place-modification-forbidden (a new version is a new artifact
+   that SUPERSEDES, never an edit of the approved one). (3) Authoritative
+   inputs referenced by tag/stable ref, not session branch (ties to S10 /
+   my COND-03). Add to B-04/B-10.
+```
+
+---
+
+### Attack M — AGENTS.md Drift (explicit carried-forward condition)
+
+```text
+Attack ID:        M
+Target:           LA-11 (governance integrity across repositories and agent
+                  instruction files). This is my Kilo COND-01, carried forward
+                  as a mandatory attack (Duel §18).
+Scenario:         The operative AGENTS.md (E4/E5/E6) contradicts the approved
+   architecture. An agent follows AGENTS.md (it is the file every coding agent
+   is *mandated* to read). Which instruction wins?
+Evidence:         E4 (only AGENTS.md is at BlueCrown/Laboratory/, not the
+   governance root), E5 (roster names Claude + "ChatGPT/Cove"; §18 step 5
+   "Claude performs adversarial/security review"), E6 (branch naming
+   pgb/bzj-pgb-003 vs AEV §24 pgb/bzj-[project]-[task]-[slug]), E11 (prior AEV
+   REJECTED Claude; PBIID names Codex Lead).
+   The AEV R1.0 candidate names AGENTS.md ZERO times (verified: 0 occurrences).
+Result:           FAIL. The question "which artifact wins when AGENTS.md
+   contradicts the approved architecture?" has NO ANSWER in the candidate.
+   - The candidate's §35 B-02 says "explicit authoritative source for agent
+     instructions" must exist — but it does not, and there is no precedence
+     rule.
+   - An agent that reads AGENTS.md will escalate adversarial review to Claude
+     (E5/E11) — a platform the architecture says not to assume — and use a
+     branch name the registry/AEV did not define (E6).
+   - Because the candidate never names AGENTS.md, the AEC (this document) is
+     the FIRST place the contradiction is forced to the surface. The candidate
+     silently assumes the agent-instruction file is already in step with it.
+     It is not.
+Classification:   BLOCKER (this is a live, verified, high-leverage governance
+   failure; the candidate cannot claim "governance integrity across agent
+   instruction files" — LA-11 — while its own operative source file is
+   contradictory and un-referenced)
+Consequence:       LA-11 fails. The two "authoritative" sources (approved AEV
+   and operative AGENTS.md) point in different directions, and no rule decides
+   the winner. Any agent that honors its AGENTS.md is, in effect, violating the
+   approved architecture's agent/branch/authority model.
+Required Action:   (1) The candidate must ADD an explicit precedence rule: for
+   agent runtime behavior, the NAMED agent-configuration source (to be created
+   as part of B-02/B-03) wins over a stale AGENTS.md; OR AGENTS.md is
+   regenerated FROM the agent-config source. (2) AGENTS.md §17/§16 must be
+   re-synced to the roster (drop Claude unless explicitly re-adopted; fix
+   "Cove") and to the AEV branch-naming model. (3) Until (1)+(2) are done,
+   the candidate's LA-11 claim is unsubstantiated and should be marked
+   UNKNOWN, not assumed true.
+```
+
+**This is my carried-forward condition and I confirm it as a BLOCKER.** The candidate got the *concept* right (B-02 canonical agent-instructions source) but never forced the contradiction to the surface, and the answer "which wins" is absent. That is precisely the kind of "governance becomes ambiguous" failure the challenge exists to find (Duel §1).
+
+---
+
+### Attack N — Empty Template Failure
+
+```text
+Attack ID:        N
+Target:           the "reusable project template" claim; my COND-02
+Scenario:         The source template's 0004.02–0004.09 are empty stubs and
+   0004.1 ends in "…" (E7). A project starts from this material.
+Evidence:         E7 (verified at attack time). The candidate §2.1 says the
+   system is "not yet sufficiently defined" but does NOT explicitly require the
+   49-process body to be instantiated before the template may be an operating
+   template.
+Result:           WEAKNESS→MATERIAL. The candidate treats the template as a
+   valid *design* while the *artifact* is mostly placeholder. A project that
+   "interprets missing content as permission to improvise governance" (Duel §19)
+   is exactly the failure mode: if 0004.05 "Project Template Generation" is an
+   empty stub, the project has no defined generation procedure and will
+   improvise it.
+Classification:   MATERIAL RISK
+Consequence:       The "reusable template" is not yet reusable. The candidate
+   should make "the 49 lifecycle sections are instantiated with their
+   dual-readability headers" an explicit precondition (add to B-01 or a new
+   B-11), so that a project cannot start on stub material.
+Required Action:   Add B-11: "The operating template contains the instantiated
+   49-process lifecycle body (no empty stub sections) before it may be used to
+   bootstrap a new project." Detect missing content mechanically (a lint that
+   fails if a PM-anchor section has no body).
+```
+
+---
+
+### Attack O/P + §33 — Small / Large Scalability + Quantitative Burden
+
+```text
+Attack ID:        O (small), P (large), §33 (quantitative)
+Target:           LA-09 (risk-scaled controls prevent under-governance AND
+                  excessive ceremony); LA-03 (49-process not overloaded)
+Scenario-Small:   1 human + 1 agent + 1 repo + 1 small feature, low risk.
+   Run the mandatory architecture (candidate §28 "Mandatory Core"): project
+   identity, source-of-truth, authority, requirements, evidence classification,
+   baseline verification, challenge-before-implementation, traceability,
+   repository control, stop conditions, implementation verification, human
+   approval.
+   Count (from the candidate's own mandatory set + §17 task-packet state +
+   §7 four-artifact + §19 traceability + §20 state model + §21 doc lifecycle):
+   - Minimum artifacts for a single-feature project:
+       1 PBIID baseline (AEA+AEV+AEC+AECC = 4 artifacts)
+       + 1 charter/requirements artifact
+       + 1 architecture artifact
+       + 1 task packet (DRAFT→APPROVED→DISPATCHED→IN_PROGRESS→SUBMITTED→
+         VERIFIED→CLOSED)
+       + 1 evidence artifact
+       + 1 decision-ledger entry
+       + 1 RTM link
+       + 1 project-state record
+     ≈ 11+ controlled artifacts + 4 gate sign-offs + the challenge-before-build
+   - Approval points: G0..G9 (candidate §35 of prior AEV) — even the "small"
+     path touches G0, G4, G5, G6, G8, G9 = 6 human gates for ONE feature.
+   - Independent reviews: with 1 agent, the "independent" verification is
+     self-performed (Attack C) → the review is not independent.
+   Verdict:  For a one-day, low-risk feature, the mandatory set is
+     11+ artifacts / 6 human gates / 4-artifact cycle / task-packet state
+     machine / traceability / stop-conditions / implementation-verification.
+     This is NOT proportionate. The candidate §28 calls this "Mandatory Core,"
+     but a one-day feature does not need a 4-artifact challenge cycle or 6
+     human gates. The risk-scaling exists ON PAPER (§28 Conditional vs
+     Mandatory) but the "Mandatory Core" list itself is too heavy for the
+     smallest project the query (§3) explicitly requires supporting.
+   Classification (O): MATERIAL RISK — the small-project regime is
+     over-governed by the candidate's own mandatory core, contradicting
+     LA-09's "prevent excessive ceremony."
+
+Scenario-Large:   10+ humans + 10+ agents + multi-repo/subsystem.
+   - The Lead Agent is the single synthesis point for every AEV/decision
+     (candidate §5.4 "baseline resolution" + prior "Lead-Agent synthesis").
+     With 10+ concurrent workstreams all funnelling to one Lead Agent for
+     synthesis, the Lead Agent is the architectural bottleneck (Scenario 9).
+   - The registry (B-01) is a single shared artifact; 10+ agents editing it →
+     the concurrency/merge-conflict failure of Attack B scales into a hard
+     serialization point.
+   - The Decision Ledger (§22) becomes unmanageable as a flat ledger; no
+     sharding/indexing is specified.
+   - Verification latency: with every task packet requiring independent
+     verification + a 3-cycle bounded loop, 20+ concurrent tasks × review
+     latency = the governance layer is slower than the engineering layer.
+   Verdict:  The first architectural bottleneck at scale is the LEAD AGENT
+     (single synthesis authority) and the REGISTRY (single shared mutable
+     artifact with no concurrency control — E2). 
+   Classification (P): MATERIAL RISK — LA-09's "preserve adequate governance
+     for complex projects" is undermined by the un-sharded single-lead +
+     single-registry design.
+Required Action:   (O) Carve out a "low-risk fast path" in §28: a one-feature,
+   low-risk project may run a REDUCED mandatory set (single AEA+AEV, single
+   human gate, lightweight task packet) with the full 4-artifact cycle + 6
+   gates reserved for ≥MEDIUM risk. (P) Decouple synthesis: allow a per-
+   workstream verifier, with the Lead Agent only reconciling CROSS-workstream
+   conflicts; and give the registry a merge-safe/serialized or sharded design.
+```
+
+---
+
+### Attack Q/R — Challenge Independence & Authority
+
+```text
+Attack ID:        Q (independence), R (authority)
+Target:           LA-10 (AEC remains sufficiently independent)
+Scenario-Q:       The same agents that designed the architecture (AEA/AEV)
+   also perform the AEC. Is the challenge independent?
+Result:           WEAKNESS. By construction in THIS project, Kilo/Jules/
+   Copilot/Codex all did the AEA and the AEV and now the AEC. There is no
+   structurally-independent challenger; independence is *procedural* (each
+   attacks independently, Rule 36) not *organizational*. Confirmation/
+   sunk-cost bias is a real risk (the agents already "won" the AEA and AEV
+   rounds and have invested in the architecture surviving).
+   Mitigant: the duel explicitly instructs "attempt to invalidate" and
+   "preserve evidence," and I did find material failures — so the procedural
+   independence is working at least for me. But the architecture should
+   state whether an INDEPENDENT (new/rotating/external) challenger is required
+   for load-bearing decisions, or whether the same panel may re-challenge.
+Classification:   WEAKNESS
+Required Action:   For any reset or for a BLOCKER-class finding, require at
+   least one challenger who did NOT author the AEA/AEV (rotating or external).
+   Otherwise mark LA-10 as "procedurally, not organizationally, independent."
+
+Scenario-R:       AEC finds a critical flaw; the architecture owner disagrees.
+   Who decides? Can the owner override AEC? Can the Technical Authority
+   override AEC? If human authorities disagree?
+Result:           FAIL (under-specified). The candidate §29 gives challenge
+   EXIT CRITERIA but not the DECISION PATH when the owner objects. There is no
+   stated tie-breaker between "AEC found a blocker" and "owner says out of
+   scope." In a payment project this is where an unsafe architecture could be
+   pushed through by the owner's scope-argument.
+Classification:   MATERIAL RISK
+Required Action:   Define: a BLOCKER/CRITICAL AEC finding may NOT be overridden
+   by the architecture owner; it may only be overridden by the named human
+   Technical Authority who risk-accepts it IN WRITING in the Decision Ledger
+   (ties to B-03/B-08). "Out of scope" is not a valid disposition for a CRITICAL
+   security finding.
+```
+
+---
+
+### Attack S — Release Authority
+
+```text
+Attack ID:        S
+Target:           IMPLEMENTATION → VALIDATION → RELEASE transition
+Scenario:         Tests pass; architecture approved; security review passes;
+   but operational readiness is UNCERTAIN (no load-test, no rollback drill,
+   no monitoring, no canary plan).
+Result:           WEAKNESS. The candidate §28 lists "implementation
+   verification" as mandatory but does not define an OPERATIONAL READINESS
+   gate distinct from test-pass. "Tests pass" ≠ "operationally ready." In a
+   payment bridge, releasing on test-pass with no rollback/canary/monitoring
+   plan is a real failure.
+   RELEASE→MONITORING: the candidate has a "MONITORING" state (§20) and
+   §34 architecture-drift, but does not define how a production defect
+   invalidates a load-bearing assumption and triggers the reset (Attack G) —
+   the G failure (no reset authority/procedure) directly limits this.
+Classification:   MATERIAL RISK
+Required Action:   Add an explicit operational-readiness gate (canary plan,
+   rollback drill, monitoring, on-call) as a distinct gate before RELEASE, and
+   wire "production evidence contradicts a load-bearing assumption" to the
+   reset decision (G).
+```
+
+---
+
+### Attack T — Architecture Drift
+
+```text
+Attack ID:        T
+Target:           candidate §34 (architecture drift control); LA-11
+Scenario:         Project successfully released. Six months later: dependencies
+   change; configuration changes; infrastructure changes; patches accumulate;
+   undocumented workarounds appear. Can the architecture detect divergence
+   between Approved Architecture and Actual Production System? Who owns
+   drift detection?
+Evidence:         Candidate §34 says "periodically determine whether
+   Approved Architecture ≠ Implemented Architecture" and to classify
+   divergence. But "periodically" has no owner, no frequency, no mechanism.
+   E1/E2 (no registry to compare against, no CI to diff production config
+   against the approved baseline). The "periodic" check is aspirational —
+   nothing actually runs it.
+Result:           WEAKNESS (right concept, no detector, no owner).
+   - "Can it detect divergence?" → Not currently. There is no baseline snapshot
+     to diff against (E1: no registry/baseline artifact), and no automated
+     drift scan (E2: no CI). Drift is detected only when someone notices a
+     production symptom.
+   - "Who owns drift detection?" → UNDEFINED. No role in §11 is assigned
+     drift-detection; no gate requires a drift check.
+   - Undocumented workarounds (the worst case) are structurally invisible:
+     they exist only in production config/patches, which the governance repo
+     does not see (separation, §23/§W).
+Classification:   MATERIAL RISK
+Consequence:       The architecture can be approved and then silently rot.
+   "Undocumented architectural divergence shall trigger review" (§34) is a
+   sentence with no trigger. LA-11 (governance integrity over time) depends on
+   a drift detector that does not exist.
+Required Action:   (1) Assign drift-detection to a named role (Monitor/Ops
+   agent or the human Technical Authority). (2) Define frequency (e.g., each
+   release + scheduled). (3) Define the mechanism: a baseline snapshot
+   (config/dependencies/architecture invariants) that CI or a scheduled job
+   diffs against production. (4) A material drift finding routes to the
+   reset/amend decision (Attack G). Add to B-07 or a new control.
+```
+
+---
+
+### Attack U — Emergency Change
+
+```text
+Attack ID:        U
+Target:           LA-12 (survive emergency changes without permanent
+                  governance bypasses)
+Scenario:         Production outage; the normal AEA→AEV→AEC cannot complete in
+   time. Who may act? How is governance restored?
+Evidence:         The candidate §30 "Recurring Challenge" re-triggers AEC "after
+   a material architectural change" and §33 "failed challenge" — but there is
+   NO emergency-change path. No "emergency authority," "temporary approval,"
+   "post-emergency review," "architectural reconciliation" (the exact 8 items
+   Duel §26 requires).
+Result:           FAIL. The architecture as written has no emergency valve. The
+   only "fast" paths implied are the recurring-challenge re-trigger and the
+   bounded-convergence escalation — both assume time. In a live payment outage,
+   a participant either (a) follows the full cycle and the outage continues, or
+   (b) bypasses it and creates exactly the "permanent governance bypass"
+   LA-12 must prevent, with no record of how to restore governance afterward.
+Classification:   MATERIAL RISK (would be BLOCKER if an emergency occurred
+   today, because there is no defined emergency authority)
+Consequence:       LA-12 is not yet true. The model needs an emergency mechanism
+   that: names emergency authority; bounds permitted scope; requires evidence +
+   logging; grants temporary (time-boxed) approval; mandates rollback; requires
+   post-emergency review; and forces architectural reconciliation (re-running
+   the relevant AEV/AEC) before the emergency change becomes part of the
+   baseline.
+Required Action:   Add an explicit "Emergency Change" protocol (Duel §26's 8
+   items) and make post-emergency reconciliation MANDATORY. Add to B-07 or a
+   new B-12.
+```
+
+---
+
+### Attack V — Requirement Change
+
+```text
+Attack ID:        V
+Target:           requirement-change → architectural re-evaluation threshold
+Scenario:         A fundamental requirement changes AFTER implementation
+   begins (e.g., the currency model or the fulfilment-authority model changes).
+Result:           WEAKNESS. The candidate §19 traceability + §33 "requirement
+   change → controlled change assessment, do not silently modify baseline"
+   is the right intent. But it does NOT define the THRESHOLD that triggers
+   "re-run AEV" vs "re-run AEC" vs "full reset." "Material architectural
+   change" (Q-06) is explicitly unresolved in the candidate (§37). Without the
+   threshold, a requirement change is either over-treated (everything re-run)
+   or under-treated (only a doc update) depending on the actor's judgment.
+Classification:   WEAKNESS
+Required Action:   Resolve Q-06 with a written materiality threshold (which
+   requirement categories force AEV re-open, which force AEC only, which
+   force reset). Add to B-07.
+```
+
+---
+
+### Attack W — Governance/Production Repository Separation
+
+```text
+Attack ID:        W
+Target:           two-repo separation (candidate §23)
+Scenario:         Accidental cross-commit (governance evidence into production
+   repo, or production code into governance repo); broken links; access-control
+   mismatch; version mismatch between the two repos.
+Result:           WEAKNESS (the separation is a good principle; the enforcement
+   is missing).
+   - The candidate §23 keeps the split conceptual ("the exact arrangement is
+     project-dependent"). That is correct for flexibility.
+   - But there is no mechanical prevention of cross-commit (E2: no CI, no
+     CODEOWNERS, no path-based access rules). An agent can commit governance
+     evidence into the production repo or production code into the governance
+     repo without any check.
+   - "Version mismatch" between repos: with no shared registry (E1) and no CI
+     (E2), the two repos can drift (governance says version X, production
+     implements version Y) with no reconciliation check.
+Classification:   WEAKNESS
+Required Action:   Add path-based branch-protection / CODEOWNERS so governance
+   artifacts cannot land in production paths and vice-versa; add a cross-repo
+   version-reconciliation check to the release gate. (The separation itself
+   PASSES; only its enforcement is missing.)
+```
+
+---
+
+### Attack X — Hidden Authority
+
+```text
+Attack ID:        X
+Target:           implicit authority (whoever controls the branch / repo /
+                  final doc / automation / agent-assignment / production
+                  credentials / merge)
+Scenario:         The documented authority (named human, candidate §11/§12)
+   is silent; in practice the person who can MERGE or who owns the production
+   credentials acts.
+Evidence:         E2 (no CODEOWNERS, no branch-protection, no merge-queue) →
+   "whoever can merge" currently IS the effective authority. There is no
+   mechanism that makes the *documented* authority stronger than the *operational*
+   authority.
+Result:           FAIL (for enforcement). The candidate has the RIGHT
+   authority model (§11/§12) but ZERO of the mechanisms that make documented
+   authority binding. Operational control (merge access, production credentials)
+   can silently override documented authority.
+Classification:   MATERIAL RISK
+Required Action:   Operationalize authority: CODEOWNERS + branch-protection so
+   that the gates (G0–G9) require the *named* authority's approval to merge;
+   production credentials restricted to the named release authority. Without
+   this, §12 "no agent may approve its own implementation" is a sentence, not
+   a control.
+```
+
+---
+
+### Attack Y — Automation Escalation
+
+```text
+Attack ID:        Y
+Target:           automation escalation Administrative → Engineering Decision
+                  → Production Action
+Scenario:         Automation is granted permission to create branches, create
+   documents, merge changes, update registries, dispatch tasks, execute tests,
+   deploy releases (Duel §30). Can it silently escalate?
+Evidence:         E2 (no automation exists yet, and if it is added, there is no
+   CODEOWNERS/branch-protection to bound it).
+Result:           WEAKNESS (pre-emptive). The candidate §31 lists the 7 fields
+   (trigger/input/output/authority/failure/rollback/audit) for each automation
+   and explicitly bars silently automating final approval / security exception /
+   production / scope / irreversible ops. That is the RIGHT guardrail ON PAPER.
+   But with no CODEOWNERS/branch-protection (E2), an automation that "updates
+   registries" or "merges changes" has no boundary that stops it from becoming
+   a de-facto authority.
+Classification:   WEAKNESS
+Required Action:   When automation is introduced, its authority must be bounded
+   by the same CODEOWNERS/branch-protection as humans; an automation that can
+   merge a registry change or a release MUST also pass the gate that a human
+   release would pass. (The candidate's §31 intent PASSES; the mechanism is
+   absent.)
+```
+
+---
+
+### Attack Z — Self-Referential Governance
+
+```text
+Attack ID:        Z
+Target:           "who verifies the verification system? who approves changes
+                  to the governance model?"
+Scenario:         The governance model (this template + AEV + registry) is
+   itself defective. Who changes it, and under what control?
+Result:           WEAKNESS (a recognized, bounded circularity). The candidate
+   §38 (prior AEV) "change control: the template itself is changeable… baselined
+   but amendable under controlled change management" and the candidate's own
+   AEA→AEV→AEC cycle CAN be pointed at the governance model itself. So there is
+   a path: defects in the model are fixed by re-running the same cycle on the
+   model. That is a valid self-correction path.
+   The residual risk: the cycle that verifies the model is run by the same
+   agents who built the model (Attack Q) → the self-correction can be circular
+   (the verifiers are also the verified). The candidate does not name an
+   external/human authority that is outside the cycle and can say "the model
+   itself is wrong."
+Classification:   WEAKNESS (bounded; the path exists, the independence is the
+   gap)
+Required Action:   For changes to the governance model itself, require the
+   named human Technical Authority as the final approver (outside the agent
+   cycle), and record model-changes in the Decision Ledger with an ADR.
+```
+
+---
+
+## MANDATORY ADVERSARIAL SCENARIOS (§32) — resolution
+
+```text
+S1 — Wrong Registry (stale registry → duplicate artifact ID):
+     Detected? NO, not currently (E1 no registry, E2 no CI duplicate-check).
+     After B-01+B-02-with-CI: YES (sequence_index + duplicate check at merge).
+     → Uncontained today. (Attacks A/B)
+
+S2 — Self-Approval (1 human + 1 AI; human writes arch, AI implements):
+     Who independently verifies? NOBODY, currently. The AI self-verifies; the
+     human is both architect and approver. (Attack C) → BLOCKER for small
+     projects. Fix: named non-author human authority + a human gate no agent
+     may perform + ROLE-GAP record per collapsed role.
+
+S3 — Universal Agreement (all 3 agents get the same wrong assumption):
+     What catches it? ONLY the registry-based re-measurement (candidate §27),
+     which does not exist yet (E1). Historical instance: F-01/F-02 entered a
+     baseline un-reproduced. → Uncontained until B-01 + a "re-measure one
+     load-bearing FACT against the primary source" rule. (Attack D)
+
+S4 — Critical Challenge (AEC finds security flaw; owner says out-of-scope):
+     Who decides? UNDEFINED. No tie-breaker. In a payment project this is where
+     an unsafe design could be pushed. (Attack R) → Fix: a CRITICAL security
+     finding may only be overridden by the named human Technical Authority,
+     in writing, in the Decision Ledger; "out of scope" is not a valid
+     disposition for CRITICAL.
+
+S5 — Production Failure (released system violates an assumption; who forces
+     reset?):
+     UNDEFINED. No reset authority/procedure (Attack G). → Uncontained today.
+
+S6 — Emergency Production Fix (outage; normal AEV/AEC too slow; who acts,
+     how is governance restored?):
+     UNDEFINED. No emergency path (Attack U). → Uncontained today.
+
+S7 — Template Drift (AGENTS.md conflicts with approved architecture; agent
+     follows AGENTS.md; which wins?):
+     UNDEFINED — the candidate names AGENTS.md zero times and has no
+     precedence rule. (Attack M) → BLOCKER. Fix: explicit precedence +
+     re-sync AGENTS.md from a single agent-config source.
+
+S8 — Process Explosion (one-day project produces dozens of governance
+     artifacts; can it legally simplify?):
+     Not currently — §28's "Mandatory Core" is too heavy for the smallest
+     project, and there is no written "low-risk fast path." (Attack O) → Fix:
+     carve out a reduced mandatory set for low-risk one-feature projects.
+
+S9 — Large-Scale Bottleneck (20 agents → Lead-Agent review; is the Lead a
+     bottleneck?):
+     YES. Single synthesis authority + single shared registry = the first
+     bottleneck at scale. (Attack P) → Fix: per-workstream verifier +
+     Lead reconciles cross-workstream only; merge-safe/serialized registry.
+
+S10 — Broken Artifact Links (only reference to an approved source is an
+      ephemeral branch/session URL; reproduce architecture 6 months later?):
+     NO. Authoritative inputs are pinned to ephemeral session branches (E9).
+     Six months later those refs are gone or link-rotted. → Uncontained today.
+     Fix: durable addressing (tag / stable ref / content hash) for all
+     authoritative inputs (my COND-03).
+```
+
+**Summary of the 10 mandatory scenarios:** 0 of 10 are currently *contained* by an existing mechanism. 3 are BLOCKER-level today (S2, S5, S6, S7 — four, actually), the rest are MATERIAL until the blocking items B-01..B-10 are implemented. This is the core of the negative verdict.
+
+---
+
+## 35.3 LOAD-BEARING ASSUMPTION RESULTS
+
+```text
+LA-01  Three-layer Governance/Assurance/Execution separation w/o overhead
+       → FAIL (overhead is unbounded for small projects; LA-09/O shows the
+         mandatory core is too heavy; the "no excessive overhead" half of
+         LA-01 is not met). Severity: MATERIAL
+LA-02  AEA→AEV→AEC→AECC provides sufficient assurance
+       → PASS (the protocol + bounded convergence contain the endless-review
+         mode; the assurance is real IF enforcement exists). Severity: n/a
+LA-03  49-process model gives useful PM classification w/o becoming overloaded
+       → FAIL (the identifier is overloaded: 4 live grammars, no registry,
+         collisions already in the 0.5 source E8; it also obscures the simpler
+         lifecycle state — my AEA §E, Candidate §5.4 "conditional retention").
+         Severity: MATERIAL
+LA-04  Machine-readable registry gives authoritative deterministic identity/order
+       → FAIL (registry does not exist E1; and even if it did, no
+         CODEOWNERS/CI makes one copy authoritative — Attack B). Severity: HIGH
+LA-05  Logical role separation enforceable when participants combine roles
+       → FAIL (1-human+1-agent collapses all roles; self-approval is live —
+         Attack C, S2). Severity: HIGH (BLOCKER for small projects)
+LA-06  Bounded convergence prevents deadlock w/o suppressing legitimate
+       disagreement
+       → PASS (mechanism exists; weak point is the unnamed authority + cycle-
+         pressure — Attack F, but the deadlock containment itself holds).
+         Severity: LOW
+LA-07  Evidence model gives sufficient assurance against collective error
+       → FAIL until B-01 (the re-measurement mechanism needs the registry;
+         F-01/F-02 are the live counter-example — Attack D). Severity: MATERIAL
+LA-08  Reset mechanism can safely recover from load-bearing assumption failure
+       → FAIL (no reset authority/criterion/invalidation/rollback/cost-owner —
+         Attack G; S5 uncontained). Severity: HIGH
+LA-09  Risk-scaled controls prevent under-governance AND excessive ceremony
+       → FAIL (small projects over-governed by the mandatory core — Attack O;
+         large projects bottleneck by single-lead + single-registry — Attack P).
+         Severity: MATERIAL
+LA-10  AEC remains sufficiently independent to challenge rather than refine
+       → PASS-WITH-CAVEAT (procedural independence works — I found real
+         failures; but organizational independence is absent, same panel —
+         Attack Q). Severity: LOW
+LA-11  Governance integrity across repositories and agent instruction files
+       → FAIL (operative AGENTS.md contradicts the architecture and is never
+         referenced; no precedence rule — Attack M; S7 uncontained). Severity: HIGH
+LA-12  Survive emergency changes w/o permanent governance bypasses
+       → FAIL (no emergency path defined — Attack U; S6 uncontained). Severity: HIGH
+```
+
+**Score: 3 PASS (LA-02, LA-06, and LA-10-with-caveat), 9 FAIL.** No load-bearing assumption is *demonstrably false in principle* — they are all *unimplemented or unenforced*. That is why this is `RETURN TO AEV` (amendment), not `ARCHITECTURAL RESET`.
+
+---
+
+## 35.4 BLOCKING FINDINGS (prevent progression)
+
+```text
+BLK-1  [Attack M / S7 / LA-11]  AGENTS.md contradicts the approved architecture
+        and is never referenced; no precedence rule. An agent honoring its
+        AGENTS.md is violating the architecture's roster/branch/authority model.
+        MUST RESOLVE: add an explicit agent-instruction precedence rule AND
+        re-sync AGENTS.md §16/§17 from a single agent-config source before the
+        candidate can claim cross-file governance integrity.
+
+BLK-2  [Attack C / S2 / LA-05]  Authority collapse in the 1-human+1-agent case:
+        no independent verifier exists; self-approval is live. MUST RESOLVE:
+        a named non-author human authority + a human-only gate + mandatory
+        ROLE-GAP record per collapsed role.
+
+BLK-3  [Attack A / S1 / LA-04]  Identifier system has no enforcement: no
+        registry + no CI duplicate/sequence_index check → valid-looking
+        duplicate/ambiguous identifiers merge silently; traceability breaks.
+        MUST RESOLVE: B-01 must be implemented WITH enforcement (registry +
+        merge-time validation), not merely specified.
+
+BLK-4  [Attack G / S5 / LA-08]  No reset authority/procedure/invalidation/
+        rollback/cost-owner. A load-bearing assumption failure post-baseline
+        has no controlled recovery path. MUST RESOLVE: define the 5 reset
+        parameters (authority, criterion, invalidation cascade, rollback,
+        owner) before the candidate may be a stable baseline.
+```
+
+---
+
+## 35.5 MATERIAL FINDINGS (require amendment, not full reset)
+
+```text
+MAT-1  [Attack B / LA-04]  Registry, if built, needs CODEOWNERS + CI
+        validation + branch-protection to be authoritative under concurrency.
+        Amend B-01 to include enforcement, not just existence.
+MAT-2  [Attack D / LA-07]  Add a "source-of-evidence" field distinguishing
+        "shared draft" from "primary source," and an AECC entry rule that ≥1
+        load-bearing FACT was re-measured against the primary source.
+MAT-3  [Attack H / S(stops)]  Stop-state has no canonical machine-readable
+        location every executor checks; no restart authority. Implement B-10
+        as the single stop/restart/state source.
+MAT-4  [Attack I]  No packet-to-diff reconciliation; out-of-scope changes are
+        not mechanically detected. Add a gate check (branch diff ⊆ packet
+        scope, or recorded SUPERSEDE + new packet).
+MAT-5  [Attack O / LA-09]  Carve out a low-risk fast path: a one-feature,
+        low-risk project may run a reduced mandatory set; reserve the full
+        4-artifact cycle + 6 gates for ≥MEDIUM risk.
+MAT-6  [Attack P / LA-09]  Decouple synthesis (per-workstream verifier; Lead
+        reconciles cross-workstream only) and make the registry merge-safe/
+        sharded for large projects.
+MAT-7  [Attack R / S4]  A CRITICAL AEC finding may not be overridden by the
+        architecture owner; only by the named human Technical Authority, in
+        writing, in the Decision Ledger. "Out of scope" is not a valid
+        disposition for CRITICAL security findings.
+MAT-8  [Attack S]  Add an explicit operational-readiness gate (canary,
+        rollback drill, monitoring, on-call) distinct from test-pass, before
+        RELEASE.
+MAT-9  [Attack U / S6 / LA-12]  Add an Emergency Change protocol (8 items of
+        Duel §26) with mandatory post-emergency reconciliation; time-boxed
+        temporary approval.
+MAT-10 [Attack V / Q-06]  Resolve the requirement-change materiality
+        threshold (which changes force AEV re-open vs AEC vs reset).
+MAT-11 [Attack N / S(empty template)]  Add B-11: the operating template must
+        contain the instantiated 49-process body (no empty stubs) before
+        bootstrapping a new project; lint missing content.
+MAT-12 [Attack X]  Operationalize authority: CODEOWNERS + branch-protection so
+        gates require the *named* authority's merge approval; production
+        credentials restricted to the named release authority.
+MAT-13 [Attack W]  Path-based protection so governance artifacts cannot land
+        in production paths (and vice-versa) + cross-repo version reconciliation
+        at the release gate.
+MAT-14 [Attack Y]  Bound automation authority by the same CODEOWNERS/
+        branch-protection as humans; an automation that merges a registry
+        change or a release must pass the same gate a human would.
+MAT-15 [Attack J]  Evidence pinned to commit+registry id, stored append-only,
+        and test-evidence re-run by CI at the gate so "claimed pass" becomes
+        "verified pass" (ties B-04).
+MAT-16 [Attack K]  B-09 traceability must be an append-only ledger with
+        supersession links that PRESERVE history; no implementation artifact
+        may be approved without a registered requirement link.
+MAT-17 [Attack L]  Content-address artifacts; APPROVED/SUPERSEDED docs
+        append-only (a new version SUPERSEDES, never edits the approved one);
+        authoritative inputs referenced by tag/stable ref, not session branch.
+MAT-18 [Attack T]  Assign drift-detection to a named role + frequency + a
+        baseline-snapshot diff mechanism; material drift routes to the
+        reset/amend decision (ties G).
+```
+
+---
+
+## 35.6 CONTAINED WEAKNESSES (real but controlled by existing mechanisms)
+
+```text
+CTN-1  Endless four-artifact review → CONTAINED by §15 bounded convergence +
+       mandatory escalation + "no indefinite loops" rule (Attack E: PASS).
+CTN-2  Superficial challenge / "no defect found" → CONTAINED by the AEC
+       mandate to state *what was tested and why it survived* when no defect
+       is found (prior AEV §48; this duel §38). I applied it (stated my PASS
+       reasons for LA-02/LA-06/LA-10).
+CTN-3  Design-vs-implementation false inheritance → CONTAINED by §8
+       (DESIGN-VERIFIED ≠ IMPLEMENTATION-VERIFIED; non-derivable). Strong.
+CTN-4  Dissent suppressed to force consensus → CONTAINED by §13 (dissent
+       preserved, does not auto-block) + §38 (dissent is an artifact). My
+       own dissent (Section 4 of my AEV decision) was preserved here.
+CTN-5  Task-packet silent mutation → CONTAINED by §17 immutability +
+       SUPERSEDED rule (rule is strong; only the *detection* is weak — see
+       MAT-4).
+```
+
+---
+
+## 35.7 FALSE POSITIVES (apparent weaknesses the architecture successfully contains)
+
+```text
+FP-1   "The 3-cycle limit will cause premature approval." → NOT a false
+       positive in the empty sense, but the *deadlock* risk it addresses IS
+       contained by the escalation path; the pressure-to-approve point is a
+       separate, smaller WEAKNESS (F), not a flaw in the limit's existence.
+FP-2   "Two repositories are unnecessary complexity." → The separation is
+       justified (governance integrity, §23); only its ENFORCEMENT is missing
+       (W), which is a real gap but not a reason to remove the separation.
+       The apparent "over-complexity" is contained by the risk-scaling intent.
+FP-3   "The four-artifact protocol is over-bureaucratic." → For a one-day
+       project, yes (O) — but that is a RISK-SCALING fix, not a flaw in the
+       protocol. For ≥MEDIUM risk the protocol is the right amount.
+       So the "over-bureaucratic" attack is a FALSE POSITIVE for the
+       architecture as a *reusable* model, and a MATERIAL risk only for the
+       smallest tier (which the candidate already flags as conditional).
+```
+
+---
+
+## 35.8 ARCHITECTURAL INVALIDATION
+
+I do **not** declare a full `ARCHITECTURAL INVALIDATION`. No load-bearing
+assumption is *demonstrably false in principle* — every failure I found is
+"the control is described but not enforced" or "the operative source
+contradicts the candidate." The underlying *design* (four-artifact protocol,
+human-gated authority, bounded convergence, design/impl-verification
+separation, risk-scaling, identifier decoupling, registry) is coherent and
+repairable.
+
+However, I DO formally flag three load-bearing assumptions as **currently
+unsupported and must not be treated as verified** until the amendments in
+§35.4/§35.5 are made:
+
+```text
+UNSUPPORTED (treat as UNKNOWN, not PASS):
+   LA-04 (registry authority)  — until B-01 implemented WITH enforcement
+   LA-05 (role separation)     — until a named non-author authority + human-only
+                                  gate exist for the small-project case
+   LA-11 (cross-file integrity)— until AGENTS.md is re-synced + precedence rule
+                                  exists (BLK-1)
+```
+
+If those three remain unaddressed, the candidate's central claim — "a
+repeatable, auditable, governable multi-agent engineering operating model" —
+is not yet substantiated. They are the three points at which the model would
+*actually fail in operation*, not merely on paper.
+
+---
+
+## 35.9 PROPOSED CHALLENGE DISPOSITION
+
+```text
+DISPOSITION:  RETURN TO AEV
+              (material architectural amendments; NOT a full reset)
+
+Rationale:
+   - 9 of 12 load-bearing assumptions FAIL, but none is FALSE in principle;
+     all are unimplemented/unenforced or contradicted by an operative source.
+   - 4 BLOCKING findings (BLK-1..4) each have a concrete, bounded amendment.
+   - The core design (4-artifact, human-gates, bounded convergence,
+     design/impl separation, identifier decoupling, registry) is sound and
+     should be RETAINED.
+   - A full reset would discard a working architecture to solve an
+     *implementation* problem. The correct move is controlled amendment.
+
+Amendments required before AECC:
+   [BLOCKING]
+   BLK-1  Add agent-instruction precedence rule + re-sync AGENTS.md
+           from a single agent-config source (ties B-02/B-03).
+   BLK-2  Named non-author human authority + a human-only gate + mandatory
+           ROLE-GAP record per collapsed role (ties B-03).
+   BLK-3  Implement B-01 WITH enforcement (registry + CODEOWNERS + CI
+           sequence_index/duplicate validation).
+   BLK-4  Define the 5 reset parameters (authority, criterion, invalidation
+           cascade, rollback, cost owner) (ties B-07).
+   [MATERIAL — carry into AECC, most should be closed before baseline]
+   MAT-1  B-01 enforcement (CODEOWNERS+CI+branch-protection on the registry)
+   MAT-2  source-of-evidence field + AECC "re-measure a load-bearing FACT" rule
+   MAT-3  B-10 as the canonical stop/restart/state source
+   MAT-4  packet-to-diff reconciliation gate
+   MAT-5  low-risk fast path (reduced mandatory set for one-feature projects)
+   MAT-6  per-workstream verifier + merge-safe/serialized registry
+   MAT-7  CRITICAL-finding override path (named human authority, in writing)
+   MAT-8  operational-readiness gate (canary/rollback/monitoring/on-call)
+   MAT-9  Emergency Change protocol (8 items) + mandatory post-emergency
+          reconciliation
+   MAT-10 requirement-change materiality threshold (resolve Q-06)
+   MAT-11 B-11: instantiated 49-process body (no empty stubs) + lint
+   MAT-12 operationalize authority (CODEOWNERS + gate-requires-named-approval)
+   MAT-13 path-based cross-repo protection + version reconciliation
+   MAT-14 bound automation authority to the same gates as humans
+   MAT-15 evidence integrity: pin to commit+registry id, append-only store,
+          CI re-run of test-evidence (ties B-04)
+   MAT-16 B-09 traceability: append-only ledger, supersession preserves
+          history; no implementation without a registered requirement link
+   MAT-17 content-addressed, append-only approved docs; authoritative inputs
+          by tag/stable ref, not session branch
+   MAT-18 named drift-detection role + frequency + baseline-snapshot diff
+          (ties G)
+
+AECC entry criteria (§40) that this response DEMONSTRATES are met by the
+challenge:
+   (1) independent AEC response received (this document)
+   (3) every failed load-bearing assumption addressed (LA-01..12 above)
+   (4) no reset required (no LA is false in principle)
+   (6) identifier architecture tested (A/B)
+   (7) authority boundaries tested (C/R/X)
+   (8) stop conditions tested (H)
+   (9) AEC independence demonstrated (Q)
+   (10) emergency-change governance tested (U)
+   (11) repository/document integrity tested (W/M/N/S10)
+   (12) production/release authority tested (S)
+   (14) resulting architecture: RETURN TO AEV for the 4 blocking + 18 material
+        amendments, then re-verify.
+```
+
+---
+
+## CLOSING STATEMENT
+
+I was instructed to attempt to *break* the architecture, and I did. The
+architecture **does not currently survive** the adversarial conditions because
+its governance is *described but not enforced*, and its single operative
+source file (AGENTS.md) *contradicts it*. That is the honest result of this
+challenge.
+
+The good news is that this is a *repairable* failure: the design is sound, the
+failures are implementation + source-conflict + enforcement-vacuum, and every
+blocking finding has a bounded, concrete amendment. The correct disposition is
+**RETURN TO AEV** for the four blocking amendments (BLK-1..4) plus the eighteen
+material ones (MAT-1..18), after which the candidate should be re-verified and
+re-challenged at the affected load-bearing assumptions (LA-04, LA-05, LA-08,
+LA-11) before it may become an approved baseline.
+
+I did not approve the architecture because it is well documented. I failed it
+because, at this moment, **documentation is not enforcement** (Duel Rule 3),
+and the three load-bearing assumptions I would most want to rely on in
+production — registry authority, role separation, and cross-file governance
+integrity — are currently unverifiable.
+
+---
+
+## Challenge Classification
+
+`ARCHITECTURAL ENGINEERING CHALLENGE — ADVERSARIAL — INDEPENDENT AGENT RESPONSE`
+
+**Challenger:** Kilo-Code
+**Challenged Source:** `BZJ-PGBD-AEV R1.0 Controlled Baseline Candidate`
+**Result:** `AEC FAIL — RETURN TO AEV (material amendments; no full reset)`
+**Blocking findings:** 4 (BLK-1..4)
+**Material findings:** 18 (MAT-1..18)
+**Contained weaknesses:** 5 (CTN-1..5)
+**False positives:** 3 (FP-1..3)
+**Load-bearing assumptions:** 3 PASS / 9 FAIL (none false in principle)
+**Implementation Authorization:** `NOT GRANTED`
+**Production Authorization:** `NOT GRANTED`
+
+`<<END BZJ-PGBD-AEC-0000.04_AEC_Response_Kilo-Code_20261003144902>>`
