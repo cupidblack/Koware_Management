@@ -18,13 +18,19 @@ Thoroughly review and analyze the entire 'Project Template' document, including 
 
 
 
-
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
 
 
 
 **<<STOP Project Template document>>**
 
 
+
+2\. {{To be shared with each collaborating agent}}
+
+
+
+Thoroughly review and analyze the following 'Architectural Engineering Analysis Query' document then generate a report:
 
 
 
@@ -36,7 +42,7 @@ Thoroughly review and analyze the entire 'Project Template' document, including 
 
 
 
-
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query-Codex-202610031035.txt
 
 
 
@@ -46,7 +52,7 @@ Thoroughly review and analyze the entire 'Project Template' document, including 
 
 
 
-2\. {{To be shared with the lead agent}}
+3\. {{To be shared with the lead agent}}
 
 
 
@@ -78,7 +84,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-3\. {{To be shared with each collaborating agent}}
+4\. {{To be shared with each collaborating agent}}
 
 
 
@@ -102,7 +108,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-4\. {{To be shared with the lead agent}}
+5\. {{To be shared with the lead agent}}
 
 
 
