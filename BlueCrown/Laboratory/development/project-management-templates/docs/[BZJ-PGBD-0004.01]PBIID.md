@@ -68,15 +68,7 @@ Thoroughly review and analyze the 'Architectural Engineering Analysis Query' rep
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/kilo/mute-summit-kd9/IAPD/AGENCY/BZJ-PGBD-0000.01\_Architectural-Engineering-Analysis\_Kilo-Code\_202610030009.md
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/jules-16045588484820241806-d33c5a89/BlueCrown/Laboratory/development/payment-gateway/docs/BZJ-PGBD-0004.01\_Architectural-Engineering-Analysis\_Google-Jules.md
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/BZJ-PGBD-0004.01\_Architectural-Engineering-Analysis\_Github-Copilot.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query\_Reports-202610031251.txt
 
 
 
