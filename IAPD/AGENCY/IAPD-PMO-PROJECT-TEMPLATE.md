@@ -102,6 +102,10 @@ For example, "0004.1 Develop Project Charter" cannot be changed but we could imp
 
 
 
+To clear up the discrepancy about 0004.1 and 0004.01. 0004.1 is the same as 0004.1000000\~..., however, because there are an infinite number of zeros, no other digits are displayed after the 1. The same applies to 0004.0100000\~.... So 0004.01 comes before 0004.1.
+
+
+
 A section could be "\[BZJ-PGB-0010.9] Architecture Brief Quality Monitoring" for instance. This would represent an item in the Project Quality Management Knowledge Area and either Monitoring \& Controlling or Closing process group but is specific to this workflow template being developed.
 
 
@@ -284,7 +288,7 @@ Referencing the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt'
 
 
 
-2\. Thoroughly review and analyze the 'Architectural Engineering Analysis' documents shared by the collaborating agents to develop a controlled 'Architectural Engineering Verification' baseline candidate document.
+2\. Thoroughly review and analyze the 'Architectural Engineering Analysis' reports shared by the collaborating agents then develop a controlled 'Architectural Engineering Verification' baseline candidate document based on their reports.
 
 
 
@@ -304,7 +308,7 @@ https://github.com/cupidblack/Koware\_Management/blob/jules-16045588484820241806
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/Architectural-Engineering-Analysis-Github.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/BZJ-PGBD-0004.01\_Architectural-Engineering-Analysis\_Github-Copilot.txt
 
 
 
@@ -312,7 +316,11 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-3\. Thoroughly review and analyze the 'Architectural Engineering Verification' document for approval:
+3\. {{To be shared with each collaborating agent}}
+
+
+
+Thoroughly review and analyze the 'Architectural Engineering Verification' document for approval:
 
 
 
