@@ -1,0 +1,1215 @@
+# [BZJ-PGBD-0004.01]
+
+# PROJECT BASE INTEGRATION INITIALIZATION MANAGER [PBIIM]
+
+## ARCHITECTURAL ENGINEERING VERIFICATION
+
+### Revised Controlled Baseline Candidate — R1.1
+
+**Generic Project:** Koware / IAPD-PMO Reusable Project Template
+**Concrete Reference:** Buzzjuice Market Payment Gateway Bridge Development (`BZJ-PGBD`)
+**System Under Verification:** Project Base Integration Initialization Manager (`PBIIM`)
+**Previous Baseline Candidate:** `[BZJ-PGBD-AEV-0000.01-R1.0]`
+**Revision:** `R1.1`
+**Lifecycle Stage:** AEV — RE-VERIFICATION REQUIRED
+**Origin:** AEC Adversarial Duel findings
+**Implementation Authorization:** NOT GRANTED
+**Production Authorization:** NOT GRANTED
+**AECC Closure:** NOT YET AUTHORIZED
+
+---
+
+# 1. Document Purpose
+
+This document is the revised Architectural Engineering Verification baseline candidate for the Project Base Integration Initialization Manager (PBIIM).
+
+Revision R1.1 has been produced because the Architectural Engineering Challenge (AEC) duel identified material and blocking weaknesses in the previous AEV R1.0 candidate.
+
+The revision does not treat agent consensus as verification.
+
+It incorporates the adversarial findings as explicit architectural amendments and submits those amendments for independent re-verification.
+
+The governing sequence is therefore:
+
+**AEA → AEV R1.0 → AEC → AEV R1.1 → independent re-verification → AECC → final PBIIM authorization**
+
+No implementation or production authorization is granted by this document.
+
+---
+
+# 2. AEV R1.1 Disposition
+
+## 2.1 Current Status
+
+**CONTROLLED BASELINE CANDIDATE — RE-VERIFICATION REQUIRED**
+
+R1.1 is not an approved final architecture.
+
+It is the amended candidate produced in response to the AEC duel.
+
+## 2.2 Reason for Revision
+
+The AEC duel produced materially different dispositions among the collaborating agents:
+
+### Google Jules
+
+Disposition:
+
+**AEC PASS WITH AMENDMENTS**
+
+Jules identified three material amendments:
+
+1. Machine-readable identifier registry enforcement.
+2. Automated Task Packet scope enforcement.
+3. Secret redaction in evidence logs.
+
+Jules considered the architecture conceptually viable and proposed advancement to AECC subject to those amendments.
+
+### Kilo
+
+Disposition:
+
+**RETURN TO AEV**
+
+Kilo identified multiple blocking and material findings and expressly declined approval because the architecture's controls were documented but not sufficiently enforced.
+
+Kilo reported:
+
+* identifier-system enforcement failure;
+* registry governance failure;
+* authority separation failure;
+* reset-governance failure;
+* AGENTS.md conflict;
+* insufficient enforcement mechanisms;
+* and multiple additional material findings.
+
+Kilo specifically stated that documentation is not equivalent to enforcement and recommended bounded amendment followed by AEV re-verification rather than implementation.
+
+### GitHub/Copilot
+
+Disposition:
+
+**ARCHITECTURALLY VIABLE ONLY WITH AMENDMENT**
+
+GitHub/Copilot identified material/blocking defects involving:
+
+* identifier semantics;
+* registry authority;
+* authority enforcement;
+* independent challenge;
+* runtime override precedence;
+* emergency governance;
+* finite review termination;
+* scalability;
+* hidden operational authority;
+* and self-referential governance.
+
+It explicitly stated that implementation must not be authorized on the current version.
+
+## 2.3 Controlled Interpretation
+
+Because at least one collaborating agent identified blockers and recommended return to AEV, and another independently classified the architecture as not yet production-grade, the R1.0 candidate cannot proceed directly to AECC closure.
+
+Therefore:
+
+**R1.0 is superseded as the implementation-candidate architecture by R1.1.**
+
+R1.1 must be independently reviewed before AECC closure.
+
+---
+
+# 3. Architectural Position Retained
+
+The AEC duel did not invalidate the fundamental architectural concept.
+
+The following architectural principles remain provisionally retained:
+
+### 3.1 Three-Layer Architecture
+
+**Governance → Assurance → Execution**
+
+Governance establishes authority, rules, state and control.
+
+Assurance independently examines whether the proposed architecture and implementation satisfy those rules.
+
+Execution performs authorized project work.
+
+No execution activity may create its own authority.
+
+---
+
+# 4. Four-Stage Assurance Protocol
+
+The assurance sequence remains:
+
+**AEA → AEV → AEC → AECC**
+
+Where:
+
+* **AEA** — Architectural Engineering Analysis
+* **AEV** — Architectural Engineering Verification
+* **AEC** — Architectural Engineering Challenge
+* **AECC** — Architectural Engineering Challenge Closure
+
+However, R1.1 establishes that this is a **gated control sequence**, not merely a document-production sequence.
+
+Each stage must produce a decision state.
+
+Documentation alone cannot satisfy a gate.
+
+---
+
+# 5. New Principle: Documentation Is Not Enforcement
+
+This is a load-bearing amendment arising directly from the AEC duel.
+
+A control shall not be classified as operationally verified merely because:
+
+* it appears in a document;
+* an agent was instructed to follow it;
+* a prompt describes it;
+* a role is named;
+* or an agent states that the control exists.
+
+A control is considered **ENFORCED** only where an applicable combination of:
+
+* repository controls;
+* branch protections;
+* CI/CD checks;
+* schema validation;
+* immutable or append-only records;
+* access permissions;
+* workflow gates;
+* independent review;
+* or mandatory human authorization
+
+prevents or detects unauthorized bypass.
+
+Where such enforcement does not yet exist, the control must be classified as:
+
+**DESIGNED — NOT YET ENFORCED**
+
+This distinction is mandatory.
+
+---
+
+# 6. Identifier Architecture Amendment
+
+## 6.1 49-Process Model
+
+The 49-process model is retained only as a **Project Management classification spine**.
+
+It is explicitly prohibited from serving as the sole:
+
+* identity engine;
+* ordering algorithm;
+* workflow state engine;
+* artifact uniqueness mechanism;
+* or machine execution engine.
+
+The AEC challenge identified ambiguity and ordering problems when process identifiers are treated as machine-sortable identifiers. GitHub/Jules specifically identified the risk of lexical ordering such as `4004.36` versus `4004.4`.
+
+## 6.2 Identifier Separation
+
+The following concepts remain separate:
+
+* Project Identifier
+* Process Identifier
+* Work Identifier
+* Task Packet Identifier
+* Artifact Identifier
+* Revision Identifier
+* Lifecycle State
+* Sequence Index
+
+No identifier may acquire another identifier's semantic responsibility merely through convention.
+
+## 6.3 Machine Ordering
+
+Machine ordering shall use an explicit numeric:
+
+`sequence_index`
+
+rather than lexical sorting of human-readable identifiers.
+
+Example:
+
+```yaml
+process_id: "4004.4"
+sequence_index: 4
+```
+
+and:
+
+```yaml
+process_id: "4004.36"
+sequence_index: 36
+```
+
+The machine must never infer ordering from the string representation.
+
+---
+
+# 7. Canonical Identifier Registry
+
+A machine-readable canonical registry shall be established.
+
+Required characteristics:
+
+1. Canonical repository location.
+2. Canonical branch.
+3. Defined ownership.
+4. Defined write authority.
+5. Schema validation.
+6. Duplicate detection.
+7. Conflict detection.
+8. Explicit `sequence_index`.
+9. Revision history.
+10. Controlled modification.
+11. CI validation.
+12. Traceability to affected artifacts.
+
+The registry shall be authoritative for machine-readable identifier semantics.
+
+## 7.1 Registry Authority
+
+The architecture shall explicitly identify:
+
+* which repository is authoritative;
+* which branch is authoritative;
+* who may modify the registry;
+* which process validates changes;
+* which automated checks reject invalid registry changes;
+* and how stale branch copies are prevented from becoming authoritative.
+
+A local branch copy shall never become authoritative merely because it is newer locally.
+
+## 7.2 Registry Failure
+
+If the canonical registry is unavailable, contradictory, corrupted or unverified:
+
+**identifier creation and affected governance operations shall STOP.**
+
+The system shall not silently generate substitute identifiers.
+
+---
+
+# 8. Authority Architecture Amendment
+
+The previous statement that logical authority separation remains valid when participants combine roles is insufficient by itself.
+
+R1.1 therefore distinguishes:
+
+**Role Assignment ≠ Authority Capability ≠ Physical Participant**
+
+A person or agent may perform multiple functions, but the system must still enforce the required authority boundaries.
+
+---
+
+# 9. Human Authority Levels
+
+The architecture introduces the following authority model.
+
+### H0 — Project/Human Authority
+
+Responsible for material project decisions and final human authorization.
+
+### H1 — Independent Review Authority
+
+Performs independent technical, verification or challenge review where required by project risk.
+
+### H2 — Execution/Worker Authority
+
+Performs authorized implementation or operational tasks.
+
+H2 cannot approve its own work.
+
+An implementation agent cannot become its own verifier merely by changing its role label.
+
+---
+
+# 10. Minimum Separation Rules
+
+## 10.1 Material-Risk Projects
+
+For material-risk work:
+
+* implementation and approval must be separated;
+* implementation and verification must be separated;
+* design ownership and AEC challenge must be separated;
+* challenge disposition must not be controlled solely by the challenged design owner.
+
+At least one genuinely independent reviewer must exist.
+
+## 10.2 Single-Person Projects
+
+A single-person project does not automatically receive an exemption from independence requirements.
+
+For low-risk work, the Light Governance Profile may reduce ceremony.
+
+However, it may not authorize:
+
+**self-implementation → self-verification → self-approval**
+
+where the applicable risk class requires independent review.
+
+If an independent reviewer is unavailable, the project must enter:
+
+**REVIEW-BLOCKED**
+
+rather than silently treating the missing reviewer as an approval.
+
+## 10.3 Agent Role Combination
+
+An AI agent may perform multiple operational functions only where the applicable gate explicitly permits that combination.
+
+The agent cannot manufacture independence through a role label.
+
+---
+
+# 11. Challenge Independence Amendment
+
+The AEC function must be independently constituted.
+
+An AEC participant shall not be considered independent if that participant:
+
+* authored the architecture;
+* synthesized the architecture;
+* approved the architecture;
+* implemented the architecture;
+* or otherwise has direct ownership of the challenged outcome,
+
+unless an explicitly defined higher-level governance model permits a limited exception and records the conflict.
+
+## 11.1 Independent Challenge Requirement
+
+The AEC must be conducted by:
+
+* a different human;
+* a different agent;
+* an independent challenge panel;
+* or an external governance authority
+
+that did not own the challenged design decision.
+
+## 11.2 No Independent Challenger Available
+
+If the required independent challenger is unavailable:
+
+**AEC cannot be marked PASS.**
+
+The project enters:
+
+`CHALLENGE-BLOCKED`
+
+and escalates to the appropriate human governance authority.
+
+---
+
+# 12. Challenge Authority
+
+The AEC finding hierarchy is now explicit.
+
+### AEC BLOCKER
+
+A blocker prevents advancement.
+
+The design owner cannot unilaterally downgrade it.
+
+### AEC MATERIAL RISK
+
+A material risk requires resolution, formal containment or authorized risk disposition before final baseline approval.
+
+### AEC WEAKNESS
+
+A weakness may be accepted where documented and appropriately controlled.
+
+### AEC PASS
+
+No material challenge finding remains against the tested condition.
+
+---
+
+# 13. Disagreement Resolution
+
+If:
+
+* AEC says BLOCKER;
+* Design Authority says acceptable;
+* Technical Authority says acceptable;
+* Project Authority says proceed;
+
+the project does **not** automatically proceed.
+
+The blocker remains active until:
+
+1. the finding is resolved;
+2. the architecture is amended and re-verified;
+3. or the matter is escalated to a higher governance authority explicitly empowered to adjudicate the conflict.
+
+No project-level participant may silently override an AEC blocker.
+
+---
+
+# 14. Authority and Repository Permissions
+
+R1.1 recognizes that documented authority is insufficient if actual repository permissions contradict it.
+
+The authority model must therefore map:
+
+* repository ownership;
+* branch protection;
+* merge permissions;
+* CI permissions;
+* deployment permissions;
+* registry write permissions;
+* credential ownership;
+* release permissions;
+* automation permissions
+
+to the declared authority model.
+
+A user possessing technical access does not automatically possess architectural decision authority.
+
+Conversely, an authority who lacks the required operational control must use an approved control path rather than bypassing governance.
+
+---
+
+# 15. AGENTS.md Precedence Amendment
+
+The AEC identified a specific governance conflict risk between approved architecture and runtime instruction files.
+
+R1.1 therefore establishes an explicit precedence hierarchy.
+
+Unless a higher-level governance document explicitly states otherwise:
+
+**H0 Human Governance Authority**
+↓
+**Approved Architectural Baseline**
+↓
+**Approved Project Charter**
+↓
+**Repository-Level AGENTS.md**
+↓
+**Subsystem-Level AGENTS.md**
+↓
+**Task-Specific Instructions**
+↓
+**Runtime Automation Defaults**
+
+Lower-level instructions may refine higher-level instructions.
+
+They may not contradict or override them.
+
+If contradiction exists:
+
+**the lower-level instruction is invalid for that action.**
+
+The agent must stop and escalate.
+
+---
+
+# 16. AGENTS.md Conformance Control
+
+The architecture shall include a governance-drift check capable of identifying:
+
+* conflicting role rosters;
+* conflicting branch conventions;
+* conflicting authority rules;
+* conflicting security rules;
+* conflicting secret-handling rules;
+* conflicting production authorization rules.
+
+Existing `AGENTS.md` requirements concerning payment/security/secret handling remain in force unless formally superseded through controlled architectural change.
+
+They may not be silently discarded by the PBIIM architecture.
+
+---
+
+# 17. Architectural Reset Amendment
+
+Architectural Reset is now a formal governance state rather than an informal recommendation.
+
+## 17.1 Reset Triggers
+
+Reset may be mandatory where:
+
+* a load-bearing assumption is proven false;
+* a critical dependency changes materially;
+* the approved architecture cannot satisfy a mandatory requirement;
+* a security boundary is invalidated;
+* the production environment materially contradicts the architecture;
+* the canonical registry becomes untrustworthy;
+* authority integrity is compromised;
+* or an approved baseline is demonstrated to be materially incorrect.
+
+## 17.2 Reset Effect
+
+A reset shall:
+
+1. stop affected execution;
+2. identify the failed assumption;
+3. invalidate affected verification states;
+4. identify affected artifacts;
+5. preserve historical evidence;
+6. prevent execution under the invalid baseline;
+7. return the project to the appropriate architectural stage;
+8. initiate AEA/AEV as required;
+9. create a new controlled baseline;
+10. establish reauthorization before execution resumes.
+
+---
+
+# 18. Reset Authority
+
+The architecture must identify who can declare a reset.
+
+At minimum:
+
+* designated H0 may initiate a reset;
+* an authorized independent verifier may trigger a mandatory escalation;
+* an AEC blocker involving a load-bearing architectural assumption shall force reset consideration;
+* automation may detect and halt, but shall not independently redefine architectural authority.
+
+A reset cannot be vetoed merely because implementation has already begun.
+
+---
+
+# 19. Stop Conditions
+
+R1.1 converts stop conditions into explicit governance controls.
+
+A project must stop affected work when:
+
+* a required approval is absent;
+* a blocker exists;
+* an authority conflict exists;
+* a security condition is unresolved;
+* a required dependency is unavailable;
+* an identifier cannot be validated;
+* a Task Packet boundary is violated;
+* evidence integrity is compromised;
+* or a load-bearing assumption fails.
+
+## 19.1 Stop Authority
+
+Participants authorized to stop work shall be explicitly recorded.
+
+## 19.2 Resume Authority
+
+Participants authorized to resume work shall also be explicitly recorded.
+
+Stopping and restarting are separate authority operations.
+
+---
+
+# 20. Bounded Convergence Amendment
+
+The three-cycle convergence model remains.
+
+However:
+
+**cycle exhaustion is never an approval mechanism.**
+
+At the end of the permitted review cycles:
+
+* unresolved blocker → remains BLOCKED;
+* unresolved material disagreement → escalates;
+* architecture uncertainty → may return to AEA;
+* failed load-bearing assumption → Reset;
+* unresolved authority conflict → Human Governance decision.
+
+No cycle limit can convert an unresolved blocker into PASS.
+
+---
+
+# 21. Finite Assurance Loop
+
+The assurance system therefore has explicit terminal outcomes:
+
+1. PASS;
+2. PASS WITH AMENDMENTS;
+3. RETURN TO AEV;
+4. RETURN TO AEA;
+5. ARCHITECTURAL RESET;
+6. BLOCKED;
+7. CANCELLED.
+
+There is no valid state called:
+
+`KEEP REVIEWING FOREVER`
+
+---
+
+# 22. Task Packet Enforcement
+
+Task Packets remain immutable after dispatch.
+
+However, R1.1 adds enforcement.
+
+The implementation environment shall compare actual changes against the authorized Task Packet scope.
+
+Where technically applicable, automated checks shall validate:
+
+* authorized files;
+* authorized directories;
+* authorized operations;
+* authorized branch;
+* authorized task identifier;
+* authorized dependencies.
+
+An unauthorized modification shall cause the applicable task or merge operation to fail or enter review.
+
+Prompt instructions alone are not sufficient enforcement.
+
+This directly incorporates the Jules finding concerning Task Packet scope enforcement.
+
+---
+
+# 23. Evidence Integrity Amendment
+
+Evidence remains classified using:
+
+* FACT
+* INFERENCE
+* ASSUMPTION
+* PROPOSAL
+* RECOMMENDATION
+* RISK
+* UNKNOWN
+* DISPUTED
+
+However, evidence logging must also protect secrets.
+
+Evidence pipelines shall provide appropriate automated controls for:
+
+* credentials;
+* access tokens;
+* payment credentials;
+* signatures;
+* API secrets;
+* private keys;
+* session material;
+* other sensitive operational data.
+
+Raw secrets must not become permanent governance evidence.
+
+Where evidence requires a secret-bearing artifact, the system shall produce a sanitized derivative for governance use.
+
+---
+
+# 24. Collective Error Control
+
+AEC is not considered sufficient merely because agents disagree.
+
+The architecture must actively attempt to expose shared assumptions.
+
+Challenge activities should therefore include:
+
+* assumption falsification;
+* independent source comparison;
+* environmental verification;
+* adversarial scenario testing;
+* negative testing;
+* boundary testing;
+* failure injection where appropriate;
+* comparison against actual operational evidence.
+
+If every agent agrees but the underlying evidence is wrong, consensus shall not be interpreted as verification.
+
+---
+
+# 25. Emergency Change Architecture
+
+Emergency production changes are permitted only as a controlled exception.
+
+Emergency status does not create permanent bypass authority.
+
+An emergency change must record:
+
+* emergency trigger;
+* affected system;
+* person/agent initiating change;
+* immediate authorization;
+* change performed;
+* risk introduced;
+* evidence collected;
+* operational result;
+* rollback position;
+* post-event AEA/AEV reconciliation;
+* Decision Ledger entry;
+* resulting architectural amendment if required.
+
+An emergency change that invalidates the architecture shall trigger Architectural Reset or equivalent re-baselining.
+
+---
+
+# 26. Risk-Scaled Governance
+
+The architecture retains risk-scaled controls.
+
+### Light Profile
+
+For genuinely low-risk work:
+
+* reduced documentation;
+* reduced review depth;
+* simplified Task Packet;
+* reduced challenge scope.
+
+But mandatory authority and safety controls remain.
+
+### Standard Profile
+
+Normal project governance.
+
+### High-Assurance Profile
+
+For:
+
+* production infrastructure;
+* financial systems;
+* security-sensitive systems;
+* high-impact migrations;
+* irreversible changes;
+* critical platform architecture;
+
+stronger independent verification and challenge are required.
+
+Risk scaling changes **ceremony**, not fundamental authority integrity.
+
+---
+
+# 27. Small-Project Rule
+
+Small projects shall not be forced through enterprise-scale ceremony.
+
+However, simplification cannot eliminate:
+
+* authorization;
+* traceability appropriate to risk;
+* independent review where required;
+* stop conditions;
+* security controls;
+* final human authority.
+
+The Light Profile must therefore be defined as an actual operating profile rather than a general recommendation.
+
+---
+
+# 28. Large-Project Delegation
+
+Large projects shall not depend upon a single Lead Agent for every decision.
+
+Authority shall be delegable through controlled workstream structures.
+
+Delegation must specify:
+
+* delegated authority;
+* scope;
+* risk threshold;
+* approval limit;
+* escalation condition;
+* evidence requirement;
+* revocation condition.
+
+Delegation does not transfer ultimate governance accountability.
+
+---
+
+# 29. Automation Boundary
+
+Automation is an execution aid, not an independent source of architectural authority.
+
+Automation may:
+
+* validate;
+* detect;
+* lint;
+* test;
+* report;
+* stop;
+* route;
+* enforce defined rules.
+
+Automation may not independently:
+
+* approve architecture;
+* waive blockers;
+* redefine authority;
+* override an approved baseline;
+* authorize production;
+* modify authoritative governance state outside its declared permission boundary.
+
+Automation must operate within explicit authority scopes.
+
+---
+
+# 30. Governance-of-Governance
+
+The PBIIM itself requires a higher-level governance authority.
+
+The governance mechanism cannot be permitted to redefine its own authority without external accountability.
+
+Changes to the PBIIM architecture therefore require:
+
+* architectural analysis;
+* verification;
+* challenge;
+* controlled closure;
+* and the applicable human governance authorization.
+
+The PBIIM cannot approve its own constitutional amendment merely because its internal workflow says the amendment is valid.
+
+---
+
+# 31. Artifact Durability
+
+Governance artifacts must remain reproducible even when:
+
+* branches are deleted;
+* sessions expire;
+* agents disappear;
+* repository paths change;
+* documents are superseded;
+* work moves between agents.
+
+Every controlled artifact must have:
+
+* stable identifier;
+* revision;
+* lifecycle state;
+* canonical source;
+* relationship to superseded/superseding artifacts;
+* durable repository location.
+
+A temporary agent session is not a canonical artifact store.
+
+---
+
+# 32. Document Lifecycle
+
+Controlled documents retain:
+
+**DRAFT → SUBMITTED → CONTROLLED CANDIDATE → VERIFIED → APPROVED → SUPERSEDED → ARCHIVED**
+
+A superseded document remains historically retrievable.
+
+It must not silently be overwritten by a later revision.
+
+---
+
+# 33. Decision Ledger and ADR
+
+The Decision Ledger remains the canonical decision index.
+
+An ADR remains the detailed durable explanation of a significant architectural decision.
+
+The two are related but not interchangeable.
+
+A decision shall be traceable from:
+
+**Requirement → Decision → Architecture → Task → Implementation → Verification → Test → Approval → Release**
+
+---
+
+# 34. Repository Architecture
+
+The conceptual separation remains:
+
+### Governance Repository
+
+Contains:
+
+* project governance;
+* architectural artifacts;
+* AEA;
+* AEV;
+* AEC;
+* AECC;
+* registries;
+* Decision Ledger;
+* Task Packets;
+* governance evidence.
+
+### Production Repository
+
+Contains:
+
+* implementation;
+* tests;
+* deployment material;
+* operational code.
+
+Governance artifacts must not be casually embedded into production code repositories merely because doing so is convenient.
+
+---
+
+# 35. Load-Bearing Assumption Status — R1.1
+
+| ID    | Assumption                                                             | R1.1 Status       |
+| ----- | ---------------------------------------------------------------------- | ----------------- |
+| LA-01 | Governance → Assurance → Execution remains useful                      | RETAINED — VERIFY |
+| LA-02 | AEA → AEV → AEC → AECC is sufficient                                   | AMENDED — VERIFY  |
+| LA-03 | 49-process model can remain a classification spine                     | AMENDED — VERIFY  |
+| LA-04 | Canonical identifier registry can provide deterministic identity/order | AMENDED — VERIFY  |
+| LA-05 | Logical authority separation remains enforceable                       | AMENDED — VERIFY  |
+| LA-06 | Bounded convergence prevents deadlock without forcing approval         | AMENDED — VERIFY  |
+| LA-07 | Evidence/challenge can detect collective error                         | AMENDED — VERIFY  |
+| LA-08 | Architectural Reset can recover from failed assumptions                | AMENDED — VERIFY  |
+| LA-09 | Risk-scaled governance prevents excessive ceremony                     | AMENDED — VERIFY  |
+| LA-10 | AEC can remain genuinely independent                                   | AMENDED — VERIFY  |
+| LA-11 | Cross-repository and AGENTS.md governance remains coherent             | AMENDED — VERIFY  |
+| LA-12 | Emergency changes cannot become permanent bypasses                     | AMENDED — VERIFY  |
+
+No R1.1 load-bearing assumption is declared finally verified until the collaborating agents complete re-verification.
+
+---
+
+# 36. Blocking Conditions for AEV R1.1 Approval
+
+The following conditions are now mandatory verification targets.
+
+### B-01 — Identifier Authority
+
+The identifier architecture must clearly distinguish:
+
+* human identifiers;
+* machine ordering;
+* process classification;
+* artifact identity;
+* lifecycle state.
+
+### B-02 — Canonical Registry
+
+The registry must have defined authority, schema, validation and conflict handling.
+
+### B-03 — Authority Separation
+
+The architecture must prevent unauthorized self-approval according to project risk.
+
+### B-04 — Independent Challenge
+
+AEC independence must be operationally enforceable.
+
+### B-05 — Challenge Decision Rights
+
+A blocker cannot be silently overridden by the challenged design owner.
+
+### B-06 — AGENTS.md Precedence
+
+Runtime instruction hierarchy must be explicit and enforceable.
+
+### B-07 — Reset Authority
+
+Reset triggers, authority, invalidation and re-baselining must be defined.
+
+### B-08 — Stop/Resume Authority
+
+The system must define who can stop and who can restart.
+
+### B-09 — Task Packet Enforcement
+
+Task boundaries must be enforceable beyond prompt instructions.
+
+### B-10 — Emergency Governance
+
+Emergency changes require controlled post-event reconciliation.
+
+### B-11 — Automation Boundary
+
+Automation cannot silently escalate its authority.
+
+### B-12 — Governance-of-Governance
+
+PBIIM itself requires an external/higher-level governance authority.
+
+### B-13 — Evidence Security
+
+Evidence pipelines must prevent secret leakage.
+
+### B-14 — Artifact Durability
+
+Canonical artifacts must survive branch/session changes.
+
+---
+
+# 37. AEC Findings Disposition Matrix
+
+| AEC Finding                 | R1.1 Treatment |
+| --------------------------- | -------------- |
+| 49-process ambiguity        | Amended        |
+| Registry authority          | Amended        |
+| Authority collapse          | Amended        |
+| Collective error            | Amended        |
+| Review-loop risk            | Amended        |
+| Bounded convergence         | Amended        |
+| Architectural Reset         | Amended        |
+| Stop conditions             | Amended        |
+| AGENTS.md drift             | Amended        |
+| Small-project overhead      | Amended        |
+| Large-project bottleneck    | Amended        |
+| Challenge independence      | Amended        |
+| Challenge authority         | Amended        |
+| Hidden authority            | Amended        |
+| Automation escalation       | Amended        |
+| Self-referential governance | Amended        |
+| Task Packet bypass          | Amended        |
+| Evidence-secret exposure    | Amended        |
+| Emergency change            | Amended        |
+| Artifact durability         | Amended        |
+
+---
+
+# 38. Required Re-Verification
+
+The collaborating agents shall independently review R1.1.
+
+Each agent must determine whether the amendments:
+
+1. resolve the original AEC finding;
+2. merely describe a control;
+3. actually establish an enforceable control;
+4. create a new architectural conflict;
+5. introduce excessive complexity;
+6. create an authority loophole;
+7. remain operationally testable.
+
+Each agent must preserve dissent.
+
+---
+
+# 39. Required Agent Decision
+
+Each collaborating agent shall return one of:
+
+### AEV APPROVE
+
+The architecture is verified for advancement to AECC.
+
+### AEV APPROVE WITH CONDITIONS
+
+Only permitted where no unresolved blocker remains and all conditions are explicit, bounded and acceptable for AECC.
+
+### AEV RETURN
+
+Material architectural amendments remain necessary.
+
+### AEV BLOCK
+
+A blocking architectural defect remains.
+
+### ARCHITECTURAL RESET
+
+The amended architecture has invalidated a load-bearing assumption and requires fundamental redesign.
+
+---
+
+# 40. Prohibited Interpretation
+
+The following statements shall not be treated as evidence of approval:
+
+* “The architecture looks sound.”
+* “The concept is good.”
+* “The agent agrees.”
+* “The document describes the control.”
+* “The prompt tells the agent not to do it.”
+* “A human could manually prevent it.”
+* “It probably will not happen.”
+* “The repository owner can fix it later.”
+
+Verification requires evidence that the relevant control is defined sufficiently to operate and govern the project.
+
+---
+
+# 41. Current Implementation Status
+
+Implementation remains:
+
+**NOT AUTHORIZED**
+
+Production remains:
+
+**NOT AUTHORIZED**
+
+The purpose of R1.1 is architectural re-verification.
+
+No implementation agent may interpret the existence of R1.1 as permission to begin PBIIM implementation.
+
+---
+
+# 42. AECC Entry Criteria
+
+AECC may begin only when:
+
+1. all collaborating agents have reviewed R1.1;
+2. no unresolved blocker remains;
+3. all material conditions have an accepted disposition;
+4. authority boundaries are verified;
+5. registry architecture is verified;
+6. challenge independence is verified;
+7. `AGENTS.md` precedence is verified;
+8. reset/stop/emergency controls are verified;
+9. Task Packet enforcement is verified;
+10. artifact durability is verified;
+11. dissent is preserved;
+12. human governance requirements are satisfied.
+
+Only then may the project produce:
+
+`[BZJ-PGBD-AECC-0000.05]PBIID-AECC_Closure-[DATE/TIME]`
+
+---
+
+# 43. Final R1.1 Statement
+
+The AEC duel demonstrated that the PBIIM concept remains architecturally promising but exposed a critical distinction:
+
+> **A governance control that is documented is not necessarily a governance control that is enforced.**
+
+R1.1 therefore strengthens the architecture around:
+
+* authority;
+* enforcement;
+* independence;
+* identifiers;
+* registry control;
+* runtime precedence;
+* reset;
+* stop conditions;
+* automation boundaries;
+* emergency governance;
+* evidence integrity;
+* and durable artifacts.
+
+The previous R1.0 candidate shall not proceed directly to implementation or production.
+
+R1.1 is submitted for independent AEV re-verification.
+
+**Current lifecycle state:**
+
+`AEC FINDINGS → RETURN TO AEV → R1.1 RE-VERIFICATION REQUIRED`
+
+**Implementation authorization:** NO
+
+**Production authorization:** NO
+
+**AECC authorization:** PENDING AEV R1.1 APPROVAL
+
+---
+
+# 44. Verification Record
+
+**Previous AEV:** R1.0
+**AEC Challenge:** `[BZJ-PGBD-AEC-0000.04]`
+**AEC Result Source:** `[BZJ-PGBD-0004.01]PBIIM_Development-AEC_Adversarial_Duel-Results-202610031541.txt`
+**Current AEV:** R1.1
+**Status:** Controlled Candidate — Re-Verification Required
+
+**Collaborating Agents:**
+
+* Kilo — AEV re-verification required
+* Google Jules — AEV re-verification required
+* GitHub/Copilot — AEV re-verification required
+
+**Final baseline approval:** NOT YET GRANTED
