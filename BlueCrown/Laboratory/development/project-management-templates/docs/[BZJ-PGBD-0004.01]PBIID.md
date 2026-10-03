@@ -92,7 +92,7 @@ Thoroughly review and analyze the 'Architectural Engineering Verification' docum
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Statement-Codex-202610030911.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEV\_Statement-202610031258.txt
 
 
 
