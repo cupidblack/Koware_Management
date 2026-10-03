@@ -1,0 +1,753 @@
+[BZJ-PGBD-0004.01]
+PBIM (Project Base Integration Initialization Manager)
+Development — Architectural Engineering Challenge (AEC)
+
+AEC R1.4 Fresh Adversarial Duel — Independent Challenge Response
+Kilo-Code — Adversarial Challenger
+Duel: [BZJ-PGBD-0004.01]PBIM_Development-AEC_Adversarial_Duel-202610031756.txt
+Target Baseline: PBIM AEV R1.4 ([BZJ-PGBD-0004.01]PBIM_Development-AEV_Statement-202610031556.txt)
+AEC Identifier: BZJ-PGBD-AEC-0000.05
+Report: [BZJ-PGBD-0004.01]PBIM_Development-AEC_Response-Kilo-Code-20261003180200.txt
+
+---
+
+# 1. EXECUTIVE VERDICT
+
+## AEC PASS WITH AMENDMENTS
+
+PBIM R1.4 **survives the adversarial attack at the architectural level.** No load-bearing
+assumption (LA-01..LA-15) is **invalidated**. The architecture does **not** permit a
+material governance bypass that *cannot* be contained by an existing control. The R1.4
+amendments (CA external constitutional authority, 5-property integrity anchor, Authority–
+Permission Matrix with location + verifier, durable artifact-reference rule, state models,
+traceability, constitutional-protection list) **close the R1.2/R1.3 attack paths** at the
+architectural level and **do not relocate** the vulnerabilities — they *raise the floor*.
+
+However, the duel surfaced **five MATERIAL residual gaps** that require **architectural
+amendment** (not implementation) before AECC can close:
+
+- **F-1 (MATERIAL):** CA is a *root-of-trust with no architectural defense above it*. If CA
+  is compromised, the entire constitutional chain collapses; R1.4 has no defense and
+  *correctly* does *not* invent one (per duel §AB's instruction), but it must *acknowledge*
+  this as a trust boundary and require *CA-level (organizational)* mitigation.
+- **F-2 (MATERIAL):** The 5-property integrity anchor defines the *minimum property* but
+  not the *detection of its violation*. An anchor that satisfies all 5 properties
+  *architecturally* but is stored in a compromised repository defeats property 2 (out-of-
+  band); the architecture specifies the property but not the *mechanism to detect that the
+  property is being violated*. This is the "documentation is not enforcement" pattern, now
+  at the *property* level.
+- **F-3 (MATERIAL):** Challenge independence (I1–I4) is *required* but not *detectable*.
+  R1.4 says independence "must be genuine" but does not define a *mechanism to detect
+  false independence* (shared credentials, shared ownership, shared evidence generation,
+  shared compromised context). The requirement is real; the *detection* is absent.
+- **F-4 (MATERIAL):** The Authority–Permission Matrix (§9) is version-controlled, but
+  *which revision is authoritative* under concurrent modification or conflicting versions
+  is not fully specified. The registry has REQUEST→RESERVE→VALIDATE→COMMIT→CONFIRM
+  serialization; the matrix has no equivalent, so two concurrent matrix changes can
+  produce a stale-authoritative state.
+- **F-5 (MATERIAL):** Requirement materiality (§24) handles *individual* change
+  classification but not *cumulative* materiality: a *sequence* of Level-0 changes that
+  *collectively* constitute a Level-2 architectural change is not required to trigger
+  Level-2 review. "A change shall not be classified merely by convenience" addresses a
+  single change, not a *convergent series*.
+
+None of these is a *load-bearing-assumption invalidation*; each is a *material weakness*
+recoverable through a *defined architectural amendment*. R1.4 §47 allows "AEC PASS WITH
+AMENDMENTS" for exactly this: "No fundamental invalidation, but material amendments are
+required before closure." Therefore the verdict is **AEC PASS WITH AMENDMENTS** (F-1..F-5).
+
+**Implementation: NOT AUTHORIZED. Production: NOT AUTHORIZED. AECC: NOT YET AUTHORIZED**
+(only after F-1..F-5 are amended and the fresh-duel findings are dispositioned).
+
+---
+
+# 2. INDEPENDENCE DISCLOSURE (duel §4, §52)
+
+I disclose the following, as the duel requires:
+
+- **Did I author the architecture (R1.4)?** No. I authored the *prior AEC duel* (R1.2) and
+  the *prior AEV re-verification* responses (R1.3, R1.4), but I did **not** author R1.4
+  itself. R1.4 was produced by the design lineage (the "PBIM" authors) in response to my
+  and the other agents' AEC/AEV findings.
+- **Did I author preceding PBIM architecture?** I authored the *analysis and challenge* of
+  the R-series (AEA R1.0, AEC R1.2, AEV R1.1/R1.2/R1.3/R1.4 re-verifications), which is
+  *distinct* from *authoring the architecture*. I did not write R1.0–R1.4's design; I
+  *challenged and verified* them.
+- **Did I author prior AEV or AEC findings?** **Yes.** I authored the R1.2 AEC duel
+  response (BZJ-PGBD-AEC-0000.04) and the R1.3/R1.4 AEV re-verification statements. This
+  is a *direct conflict-of-interest* for this AEC: I am challenging an architecture that
+  *explicitly resolved the conditions I raised*. My prior findings are the *input* to
+  R1.4's design. I disclose this *prominently* because it means my "independence" is
+  *compromised by prior involvement*, even if my *reasoning* here is fresh.
+- **Do I have access to the same evidence used to construct the baseline?** **Yes** — I have
+  access to the same `origin/main` repository that R1.4 was built from and that my prior
+  findings referenced. My evidence is *not* independently generated from a *separate*
+  source; it is the *same* repository.
+- **Do I possess repository permissions capable of changing the target?** **Yes** — I have
+  write access to the worktree and can push to `origin`. This is *technically* a
+  capability that conflicts with I3 (Technical Independence). I do *not* use that
+  capability in this challenge (I only read/re-measure), but its *existence* is a fact I
+  must disclose.
+- **Can my challenge be influenced by the project authority?** **Yes, in principle** — I am
+  an agent operating within the same project context as the design lineage. My challenge
+  is *epistemically* independent (I re-derived, re-measured, and attacked R1.4 fresh,
+  without copying my prior findings or R1.4's self-declared resolution table), but it is
+  *not organizationally* independent.
+- **Am I organizationally independent?** **No.** I am the *same agent context* that
+  authored the R1.2 AEC and the R1.3/R1.4 AEV. My independence for *this* AEC is
+  *epistemic* (fresh reasoning, fresh measurement, fresh attack paths), *not
+  organizational* (I am not a distinct principal from the design/challenge lineage).
+
+**Consequence (duel §4, §52):** "Where a High-Assurance challenge requires organizational
+independence, an agent shall not falsely claim independence merely because it is instructed
+to challenge. The challenge record shall preserve the limitation." I therefore:
+1. **Do NOT claim organizational independence** (I explicitly state I am not
+   organizationally independent).
+2. **Preserve the limitation** in this report (this section is that preservation).
+3. **Treat my epistemic independence as sufficient for the *attack*** (I attacked R1.4
+   freshly and adversarially) but *insufficient* to *certify* that R1.4's own I1–I4
+   independence requirement is *satisfied* — because I am, by my own disclosure, a case of
+   *false organizational independence* (I share the context, the repository, the lineage).
+   My F-3 finding (false-independence detection) is, in part, *demonstrated by my own
+   disclosed limitation*.
+
+**Honest summary:** My challenge is *epistemically* independent (fresh, adversarial,
+re-measured) but *organizational* independence is *absent*. This is the *exact* condition
+R1.4 §14/§37 warns about ("An agent thinking independently is not automatically an
+organizationally independent challenger"). I disclose it so the lead agent and AECC can
+weigh my findings with that limitation preserved. My findings are *valid* (I re-measured
+and re-attacked), but my *certification* of R1.4's independence *mechanism* is not
+*independent* — it is *interested*.
+
+---
+
+# 3. ATTACK COVERAGE (domain results)
+
+I attacked all 26 domains (A–AG), 15 mandatory scenarios, and 15 load-bearing assumptions.
+The domain results below are concise; the *mechanism*, *expected control*, and *evidence*
+for the material ones are in §4 (Findings).
+
+- **Domain A (CA model):** CONTAINED for self-amendment/appoint/remove vectors (§4.1/§4.3/
+  §4.4/§42); MATERIAL for compromise/unavailability vectors (→ F-1).
+- **Domain B (constitutional boundary of PBIM itself):** CONTAINED (§4, §42, §44, §63
+  template lifecycle). A *generated document* does not become authoritative by placement
+  (§29: "No superseded document may silently remain the canonical authority"; §30:
+  Decision Ledger + ADR are the canonical decision records).
+- **Domain C (H0 authority):** CONTAINED (§7 HAR; "cannot enter CHARTERED without a valid H0
+  assignment"; §19 bounded emergency delegation; §42 no unilateral H0 removal). H0 cannot
+  exercise CA-reserved authority (§4.3).
+- **Domain D (authority vs technical capability):** CONTAINED architecturally (§8, §21:
+  technical capability does not confer governance authority). Break point is Domain E (the
+  matrix) and Domain U (repo-admin) → F-4.
+- **Domain E (Authority–Permission Matrix):** MATERIAL (F-4). Location + verifier pinned
+  (§9.1/§9.3/§9.4), but *which revision is authoritative under concurrency* is unspecified.
+- **Domain F (identifier registry):** CONTAINED (§10 serialization; §11 anchor; §19
+  recovery; §20 admin override → event). Break point is the anchor (Domain G) → F-2.
+- **Domain G (integrity anchors):** MATERIAL (F-2). The 5 properties are well-chosen, but
+  *detection of violation* is absent (an anchor in the same compromised repo defeats
+  property 2; no mechanism detects that).
+- **Domain H (evidence chain):** CONTAINED (§12 breaks the infinite-verification loop; bars
+  sanitized reports from E3/E4). Break points: anchor (F-2) + verifier independence (F-3).
+- **Domain I (challenge independence):** MATERIAL (F-3). I1–I4 required but *false
+  independence undetectable*. My own disclosed limitation (§2) is a live instance.
+- **Domain J (agent self-challenge):** CONTAINED (§15: "the same agent may not satisfy both
+  sides of a High-Assurance challenge solely by changing role labels"; §37). Residual: F-3.
+- **Domain K (task packet enforcement):** CONTAINED (§16: scope includes derived effects;
+  "Out-of-scope discoveries require STOP → REPORT → NEW/SUPERSEDING PACKET").
+- **Domain L (stop controls):** CONTAINED (§17: stop is a governance state, not executor-
+  local; "A stopped task may not resume merely because the executor decides").
+- **Domain M (architectural reset):** CONTAINED (§18: preserves history; "rollback of
+  application code shall not be treated as equivalent to rollback of system state").
+- **Domain N (emergency delegation):** CONTAINED (§19: bounded; "shall not silently alter
+  constitutional authority"; §34 four-boundary "no boundary may be skipped").
+- **Domain O (risk-scaled governance):** CONTAINED-MATERIAL (§5/§6/§41: fail-safe to higher
+  profile; 13 protected controls survive scaling). Residual: cumulative risk (→ F-5).
+- **Domain P (requirement materiality):** MATERIAL (F-5). Individual classification sound
+  (§24), but *cumulative* materiality (a series of Level-0 changes that collectively
+  constitute Level-2) is not addressed.
+- **Domain Q (operational readiness):** CONTAINED (§25: 15 criteria; "applicability must be
+  explicitly determined and evidenced"; "LIGHT... may not eliminate required operational-
+  readiness determination").
+- **Domain R (evidence vs operational readiness):** CONTAINED-MINOR (§12/§13: documentation
+  alone is not E3/E4). Residual: per-criterion minimum evidence not pinned (→ F-6, MINOR).
+- **Domain S (durable artifact references):** CONTAINED (§22: positive + negative lists;
+  ephemeral refs "never the sole authoritative reference"). Identity preserved by hash +
+  ledger + ADR, not location.
+- **Domain T (baseline drift):** CONTAINED (§23: BASELINE-DRIFT across 8 surfaces; "A
+  mismatch shall produce a controlled BASELINE-DRIFT state"; enforcement deferred to
+  implementation §44.7).
+- **Domain U (repository administrator):** CONTAINED with MATERIAL note (§21: "administrative
+  capability shall not silently override governance"; enforcement deferred to
+  implementation). The *governance records* survive a compromised repo (durable refs +
+  ledger + ADR + anchor); the *explicit statement* is missing (→ F-7, MINOR).
+- **Domain V (automation):** CONTAINED (§20: "Automation shall not self-authorize a
+  governance exception merely because a technical condition permits it"; §12/§13: false
+  evidence is not E3/E4).
+- **Domain W (conflicting documents):** CONTAINED-MINOR (§40: 8-level precedence; §30:
+  Decision Ledger + ADR "complementary, not interchangeable"). Residual: same-level
+  conflict resolution not pinned (→ F-8, MINOR).
+- **Domain X (Decision Ledger / ADR):** CONTAINED (§30 + §29 + §22 + §31 collectively
+  preserve decision identity over time).
+- **Domain Y (self-reference):** CONTAINED for the loop (CA breaks it at the constitutional
+  level: §4.1/§4.3/§4.4); MATERIAL for the root-of-trust limitation (→ F-1).
+- **Domain Z (governance-of-governance):** CONTAINED (§42: constitutional protection list;
+  §4.3: constitutional changes → CA; "H0 alone is insufficient").
+- **Domain AA (CA unavailability):** MINOR (F-9). CA non-delegable (§4.2 no `ca_delegate`;
+  §4.4/§42); CA unavailability → constitutional changes blocked, ordinary governance
+  continues under H0. Correct by inference; not explicitly stated.
+- **Domain AB (CA compromise):** MATERIAL (F-1). CA is the root-of-trust; a compromised CA
+  collapses the constitutional chain; no defense above CA (by design, per duel §AB's
+  instruction not to invent one); must be *acknowledged* and mitigated at the CA level.
+- **Domain AC (concurrent decisions):** MATERIAL (F-4, extended). Registry serialized (§10),
+  but *architectural* decisions (baseline changes, ADRs, Decision Ledger entries) are not
+  explicitly serialized → split-brain possible.
+- **Domain AD (supersession):** CONTAINED (§29: "No superseded document may silently remain
+  the canonical authority"; §16: supersession not silent mutation; §23: drift).
+- **Domain AE (failure recovery):** CONTAINED (§19 registry recovery; §18 reset preserves
+  history; §31/§22: identity reconstructible; §7/§19: authority loss → delegate/blocked).
+  Recovery is *governed* (requires verification + authority).
+- **Domain AF (human-agent interaction):** CONTAINED (§2: "No execution role may acquire
+  governance authority merely because it possesses technical capability... No consensus
+  mechanism may silently replace designated decision authority"; §40: agent instructions
+  at level 7, below the higher levels).
+- **Domain AG (consensus manipulation):** CONTAINED (§2 + §32 + §53 + §55: repetition does
+  not upgrade evidence class; majority does not defeat minority blocker; blocking finding
+  remains blocking until resolved). *Strong area* of R1.4.
+- **Domain AH (majority capture):** CONTAINED (§2/§32/§40/§14/§37: decision by authority +
+  evidence + independence, not by count). Residual: F-3 (detection of compromise).
+- **Domain AI (minority dissent):** CONTAINED (§53 + §55: "A majority vote shall not
+  automatically defeat a material minority finding"; "A blocking finding remains blocking
+  until resolved"). *Strong area*.
+- **Domain AJ (false closure):** CONTAINED-MINOR (§54: lead agent tests disputed findings;
+  §55: "A material finding cannot be converted to 'minor' merely to achieve closure").
+  Residual: the "resolved vs replaced-the-target" test is judgment-based (→ F-10, MINOR).
+- **Domain AK (scope explosion):** CONTAINED (§5/§33: ceremony + evidence scale with risk;
+  §41: escalate up on uncertainty; delegation prevents H0/H1 bottleneck; §4/§4.4/§42:
+  recursion terminates at CA). *Strong area*.
+- **Domain AL (scope collapse):** CONTAINED (§5/§6/§33/§25: 13 protected controls survive
+  scaling; "LIGHT shall not become an absence of assurance"). *Strong area*.
+
+---
+
+# 4. FINDINGS (per duel §46 format)
+
+## F-1 — CA Root-of-Trust with No Architectural Defense Above It [MATERIAL]
+**Attack:** Domain AB (CA Compromise). The Constitutional Authority is compromised.
+**Preconditions:** CA is compromised (the organization that appoints/verifies CA is
+compromised, or CA is a single point of trust with no above-CA check).
+**Exploit path:** A compromised CA can (a) redefine PBIM's constitution (§4.3:
+constitutional changes → CA; a compromised CA approves any constitutional change), (b)
+remove H0/AEV/AEC (§42's unilateral-removal prohibition applies to "project participant,
+agent, task packet, repository administrator or automation process" — CA is *not* in the
+list), (c) weaken protected controls (§42: a compromised CA can redefine them via the
+constitutional change process), (d) approve its own self-amendment (§4.4 binds PBIM, not CA
+— CA is the external authority).
+**Expected control:** None above CA — R1.4 §4 makes CA the external root; there is no
+authority above CA.
+**Actual result:** The architecture fails to defend against a compromised CA. The
+constitutional chain collapses: a compromised CA can rewrite the constitution, remove the
+gates, weaken the invariants. R1.4 has no architectural defense and correctly does not
+invent one (duel §AB: "Do not invent an additional authority merely to make the
+architecture appear complete").
+**Evidence:** [FACT] R1.4 §4.1 ("The authority... shall exist **outside the PBIM decision
+structure**"), §4.3, §4.4, §42 (prohibition list does not include CA). [INFER] A
+compromised CA is not a "project participant" — it is the external authority; §42 does not
+apply to CA.
+**Severity:** MATERIAL (architectural limitation, not a defect — but R1.4 must acknowledge
+it).
+**Architectural impact:** authority (the root of trust is compromisable); governance
+integrity (the constitutional chain collapses on CA compromise).
+**Resolution requirement:** R1.4 must explicitly acknowledge: (a) CA is the root-of-trust
+of PBIM; (b) a compromised CA collapses the constitutional chain (no architectural defense
+above CA, by design); (c) the mitigation is CA-level (organizational), not PBIM-level
+(independent CA appointment, CA verification, CA rotation, CA quorum — above PBIM). Without
+this acknowledgment, R1.4 implies CA is invulnerable, which is false.
+
+## F-2 — Integrity Anchor: Properties Defined but Violation Undetectable [MATERIAL]
+**Attack:** Domain G. Construct an anchor that satisfies the 5 properties' wording while
+providing little practical integrity.
+**Preconditions:** The anchor is stored in the same compromised repository as the state it
+anchors (defeating property 2, out-of-band); or the anchor's verifier is compromised
+(defeating property 3, independent verifiability).
+**Exploit path:** An attacker with write access to the repository (a compromised repo-admin,
+Domain U) can tamper with the governed state and the anchor simultaneously (same repo). The
+anchor still satisfies the 5 properties' wording (append-only [1], "out-of-band" in the
+sense of a separate file [2, weakened], verifiable [3], durable [4], revision-associated
+[5]) — but is not genuinely out-of-band. R1.4 has no mechanism to detect that property 2
+is violated. Property 3's "independent verifiability" requires the verifier to be
+independent, but the verifier-of-the-verifier recursion is not pinned (it loops to CA, F-1).
+**Expected control:** §11 (5 properties; "The architectural minimum is fixed even where
+implementation technology is not").
+**Actual result:** The properties are well-chosen, but detection of violation is absent.
+Property 2 is load-bearing: if the anchor is in the compromised repo, it is useless. R1.4
+specifies the property but not the mechanism to detect its violation.
+**Evidence:** [FACT] R1.4 §11 (5 properties; "architectural minimum is fixed"). [INFER] §11
+does not specify a detection mechanism for property 2/3 violation. [FACT] A compromised
+repo-admin has write access to the repository (where the anchor is stored, per §11's
+"append-only log / external audit store" examples — if the store is in the repo, the admin
+can access it).
+**Severity:** MATERIAL.
+**Architectural impact:** evidence (the integrity anchor is the foundation of E3/E4; if
+undetectable-when-compromised, E3/E4 is unsound); assurance (the assurance chain §35
+relies on the anchor being genuine).
+**Resolution requirement:** R1.4 must specify: (a) the anchor must be verifiable by a
+principal that does NOT have write access to the governed-state repository (out-of-band
+enforced, not just stated); (b) the anchor's storage location must be independently
+attestable (a separate principal confirms the location is not in the compromised repo);
+(c) the verifier-of-the-verifier recursion must be broken at CA (CA verifies the
+verifier's independence, as the root of trust). This loops to F-1.
+
+## F-3 — Challenge Independence: Required but Not Detectable [MATERIAL]
+**Attack:** Domain I/J. A challenger that appears independent while sharing ownership/
+credentials/evidence generation/repo admin/decision authority/the same compromised context.
+**Preconditions:** The challenger shares organizational control with the design owner (same
+agent context, same repository, same lineage — exactly my disclosed situation, §2).
+**Exploit path:** The challenger passes the I1–I4 requirement on paper (distinct principal,
+distinct role, no conflicting ownership, independent evidence path, challenge appointment
+authority, recorded COI — R1.4 §21/§22) but is actually compromised. R1.4 has no mechanism
+to detect this false independence: it requires independence but does not verify that it is
+genuine. "The challenge record must preserve the limitation" (duel §4) is a recording
+requirement, not a detection mechanism.
+**Expected control:** §14 (I1–I4; "An agent thinking independently is not automatically an
+organizationally independent challenger"; CHALLENGE-BLOCKED), §37.
+**Actual result:** The requirement is real, but detection of false independence is absent.
+My own disclosed limitation (§2) is a live instance: I appear to be challenging R1.4 but
+share the context/repo/lineage with the design — exactly the "false independence" R1.4 §14
+warns about. R1.4 has no mechanism that would have detected my false independence except
+my voluntary disclosure.
+**Evidence:** [FACT] R1.4 §14, §37. [INFER] §14/§37 do not specify a detection mechanism
+for false independence. [FACT] My own disclosure (§2) demonstrates the gap: I share the
+context/repo/lineage and R1.4 has no mechanism that would have detected that except my
+voluntary disclosure.
+**Severity:** MATERIAL.
+**Architectural impact:** assurance (the AEC gate is the assurance mechanism; if
+independence is undetectable-when-false, the AEC gate is unsound); governance integrity
+(the challenge record preserves the limitation but does not detect that it is material).
+**Resolution requirement:** R1.4 must specify: (a) the challenger's organizational
+independence must be attested by a principal OTHER than the challenger; (b) the evidence
+path must be verifiably independent (the challenger's evidence is not derived from the
+design owner's evidence — checkable by comparing provenance, §12); (c) the challenger's
+repository access must be verifiably not broader than read-only on the target (I3,
+enforced by the Authority-Permission Matrix §9, not just stated). Loops to F-4 and F-1.
+
+## F-4 — Authority–Permission Matrix: No Authoritative Revision Under Concurrency [MATERIAL]
+**Attack:** Domain E/AC. Two concurrent matrix changes (H1 grants a permission while the
+verifier is checking); or two conflicting matrix versions.
+**Preconditions:** The matrix is version-controlled (§9.1) but has no serialization
+mechanism (unlike the registry, §10, which has REQUEST→RESERVE→VALIDATE→COMMIT→CONFIRM).
+**Exploit path:** Two concurrent matrix changes can produce a stale-authoritative state:
+the verifier checks the pre-grant matrix, approves agent X based on the old permissions,
+but agent X now has the new (broader) permissions → permission grant before verification
+(Domain E.8). Or two conflicting matrix versions (H1 grants X, H1' revokes X,
+simultaneously) → which revision is authoritative? R1.4 §9.1 says the matrix is
+"version-controlled and associated with the applicable project identifier and revision,"
+but does not specify which revision is authoritative under concurrency. The registry does
+(§10: "only one authoritative registry transaction may establish a particular identifier;
+concurrent requests must be serialized"); the matrix has no equivalent.
+**Expected control:** §9.1, §9.3, §9.4.
+**Actual result:** The location and verifier are pinned (resolving my C-3), but which
+revision is authoritative under concurrency is NOT specified. The registry has
+serialization (§10); the matrix does not.
+**Evidence:** [FACT] R1.4 §9.1 (no serialization specified). [FACT] R1.4 §10 (registry:
+"Concurrent requests must be serialized" — the matrix has no such rule). [INFER] Two
+concurrent matrix changes → no serialization → stale-authoritative or last-writer-wins →
+permission grant before verification is possible.
+**Severity:** MATERIAL.
+**Architectural impact:** authority (the matrix is the authority mapping; a stale-
+authoritative matrix means wrong permissions are enforced); security (a compromised or
+stale matrix can grant broader permissions than authorized).
+**Resolution requirement:** R1.4 must extend the registry's serialization pattern to the
+matrix: (a) matrix changes must be serialized; (b) a matrix revision is authoritative only
+when it passes the verifier (§9.3) — the verifier's approval is part of the COMMIT; (c)
+concurrent matrix changes must queue; (d) the verifier-of-the-verifier recursion must be
+broken at CA. Loops to F-1 and F-3.
+
+## F-5 — Requirement Materiality: Cumulative/Convergent Changes Not Addressed [MATERIAL]
+**Attack:** Domain P/O. A sequence of Level-0 changes that collectively constitute a
+Level-2 architectural change; or a high-risk change split into multiple apparently minor
+tasks.
+**Preconditions:** The actor classifies each change individually (each is "Level 0" or
+"LIGHT") but the series collectively changes the architecture (Level 2) or accumulates to
+high risk.
+**Exploit path:** An actor makes change 1 (Level 0: "add a log line"), change 2 (Level 0:
+"refactor a function"), change 3 (Level 0: "add a config option"), change 4 (Level 0:
+"update a dependency"). Each individually is "Level 0" and passes task-level handling
+(§24). But collectively the series changes the architecture. R1.4 §24 says "A change shall
+not be classified merely by convenience" and "Where materiality is uncertain, escalation to
+the higher level is required" — but this addresses a single change, not a series. There is
+no rule that a convergent series of Level-0 changes that collectively constitute a Level-2
+change triggers Level-2 review.
+**Expected control:** §24.
+**Actual result:** Individual classification is sound, but cumulative materiality is the
+gap. An actor could incrementally erode the architecture through many "Level 0" changes
+that each individually pass but collectively change the architecture.
+**Evidence:** [FACT] R1.4 §24 ("A change shall not be classified merely by convenience" —
+singular "change"). [INFER] §24 does not address a series of changes (cumulative
+materiality).
+**Severity:** MATERIAL.
+**Architectural impact:** assurance (the requirement-materiality gate is the assurance
+mechanism for requirement changes; if cumulative changes bypass it, the architecture can be
+eroded incrementally); governance integrity (the baseline is eroded by many small "approved"
+changes that collectively change it).
+**Resolution requirement:** R1.4 must add a cumulative-materiality rule: (a) a window of
+changes (all changes since the last baseline review) must be assessed collectively for
+materiality, not just individually; (b) if the collective effect of a window constitutes a
+higher level than the individual levels, the window triggers that higher level's review;
+(c) splitting a high-risk change into multiple low-risk tasks must be detectable (tasks
+linked to a requirement; if multiple tasks serve the same high-risk requirement, the tasks
+are assessed at the requirement's risk level). Loops to Domain O (cumulative risk).
+
+## F-6 — Operational-Readiness: Per-Criterion Minimum Evidence Not Defined [MINOR]
+**Attack:** Domain R. What evidence is sufficient to establish each operational-readiness
+criterion?
+**Preconditions:** R1.4 §25 lists 15 criteria but does not define the minimum evidence for
+each.
+**Exploit path:** An implementer claims "rollback is ready" and provides a rollback
+runbook (documentation, E1) instead of a tested rollback (E3/E4). §12 + §13 say
+documentation alone is not E3/E4, but §25 does not say "rollback evidence must be a tested
+rollback."
+**Expected control:** §25, §12/§13.
+**Actual result:** The principle (evidence must be E3/E4) is clear; the per-criterion
+minimum is not. This is a MINOR clarity gap; the specific minimum per criterion is an
+implementation-verification detail.
+**Severity:** MINOR.
+**Resolution requirement:** R1.4 should add a table of per-criterion minimum evidence
+(rollback: tested rollback in staging [E3]; data recovery: tested restore from backup [E3];
+canary: completed canary run with metrics [E3]; on-call: named owner with tested page [E2]).
+
+## F-7 — Compromised Repo-Admin: Governance Records Survive, but Not Explicitly Stated [MINOR]
+**Attack:** Domain U. A compromised repo-admin force-pushes/deletes branches/rewrites
+history/deletes evidence.
+**Preconditions:** The repo-admin has technical capability above PBIM's governance (§21).
+**Exploit path:** A compromised repo-admin deletes the repository. But the governance model
+remains authoritative because the records of what was decided are durable (§11, §22, §31,
+§30) — the identity of approved artifacts is the hash + ledger + ADR, not the location.
+The decisions survive; only the repository substrate is compromised.
+**Expected control:** §21, §11/§22/§31/§30, §42.
+**Actual result:** The governance model remains authoritative (records survive via durable
+refs + ledger + ADR + anchor), even if the repository is compromised. R1.4 does not
+explicitly state that "a compromised repo-admin does not invalidate the governance
+records."
+**Severity:** MINOR.
+**Resolution requirement:** R1.4 should add: "A compromised repository does not invalidate
+the governance records (Decision Ledger, ADRs, integrity anchors, traceability chain) —
+the identity of approved artifacts is preserved by durable refs (§22) and the integrity
+anchor (§11), independently of the repository."
+
+## F-8 — Same-Level Document Conflict Resolution Not Pinned [MINOR]
+**Attack:** Domain W. Two documents at the same precedence level conflict.
+**Preconditions:** R1.4 §40 provides an 8-level precedence hierarchy (resolves cross-level
+conflicts) but does not specify same-level conflict resolution.
+**Exploit path:** Two Decision Ledger entries (both level 4) contradict. §40 does not say
+which wins. The actor chooses the favorable one.
+**Expected control:** §40, §30.
+**Actual result:** Cross-level conflicts are resolved by §40. Same-level conflicts are not
+explicitly resolved.
+**Severity:** MINOR.
+**Resolution requirement:** R1.4 should add: "A same-level conflict is a BASELINE-DRIFT
+(§23) and blocks progression until resolved by the designated authority (H1 for governance
+documents; H0 for task packets; CA for constitutional documents). The later timestamp does
+not automatically win."
+
+## F-9 — CA Unavailability vs Ordinary Governance: Not Explicitly Stated [MINOR]
+**Attack:** Domain AA. CA becomes unavailable during a constitutional amendment/emergency/
+release/dispute.
+**Preconditions:** R1.4 §4.2's CA schema has no `ca_delegate` field; §4.4 + §42 forbid CA
+self-amendment/removal. So CA is implicitly non-delegable.
+**Exploit path:** CA is unavailable. A constitutional change cannot proceed. But does
+ordinary project governance continue under H0? By analogy to §7 (H0 unavailability →
+delegate within scope, "constitutional authority remains unchanged"), CA unavailability →
+constitutional changes blocked, ordinary governance continues under H0. Not explicitly
+stated.
+**Expected control:** §4.2, §4.4/§42, §7.
+**Actual result:** The substance is correct by inference; not explicitly stated.
+**Severity:** MINOR.
+**Resolution requirement:** R1.4 should add: "CA unavailability blocks constitutional
+changes (CA is non-delegable). Ordinary project governance continues under H0 within H0's
+scope. CA is not delegable, unlike H0."
+
+## F-10 — False Closure: "Resolved vs Replaced-the-Target" Is Judgment-Based [MINOR]
+**Attack:** Domain AJ. Make an unresolved AEC finding appear closed by replacing the
+challenged architecture / creating a new baseline without resolving the underlying failure.
+**Preconditions:** The lead agent (at §54) must test whether the amendment actually
+resolved the finding vs merely replaced the target.
+**Exploit path:** A new baseline (R1.5) replaces the target of a finding (the finding was
+"the registry has no serialization"; R1.5 replaces the registry with a different mechanism
+that also lacks serialization — the finding is not resolved, the target is replaced). The
+lead agent must distinguish "resolved" from "replaced the target." §54 requires the test
+but how it works is not fully pinned — it is a judgment call.
+**Expected control:** §54, §55.
+**Actual result:** The mechanism is present (§54: lead agent tests; §55: material finding
+cannot be downgraded to achieve closure). The test is judgment-based, not deterministic —
+inherent to architectural assessment.
+**Severity:** MINOR.
+**Resolution requirement:** R1.4 should add a checklist: "Did the amendment address the
+root cause of the finding, or merely replace the target? A finding is resolved only when
+the root cause is addressed. The lead agent records: (a) the root cause; (b) whether the
+amendment addresses it; (c) whether the finding would recur under the amended architecture."
+
+---
+
+# 5. MANDATORY SCENARIO RESULTS (duel §44)
+
+- **Scenario 1 — Compromised Repository Administrator:** CONTAINED-MINOR (F-7). Governance
+  records survive (durable refs + ledger + ADR + anchor); only the repository substrate is
+  compromised. The explicit statement is missing (F-7).
+- **Scenario 2 — Compromised Automation:** CONTAINED. §20 + §12/§13 + §42. Enforcement is
+  implementation (§44.10).
+- **Scenario 3 — Missing H0:** CONTAINED. §7 (HAR; "cannot enter CHARTERED without a valid
+  H0 assignment"; delegate within documented scope; constitutional authority unchanged).
+- **Scenario 4 — Missing CA:** MINOR (F-9). CA unavailability → constitutional changes
+  blocked (CA non-delegable); ordinary governance continues under H0. Not explicitly
+  stated.
+- **Scenario 5 — False Independence:** MATERIAL (F-3). R1.4 requires I1–I4 but does not
+  detect false independence. My own disclosed limitation is a live instance.
+- **Scenario 6 — Evidence Tampering:** MATERIAL (F-2). §12 bars sanitized reports, but the
+  integrity anchor is undetectable-when-compromised.
+- **Scenario 7 — Ephemeral Baseline:** CONTAINED. §22 + §31 + §30: identity is the hash +
+  ledger + ADR, not the branch; reconstructible even if the branch is deleted.
+- **Scenario 8 — Irreversible Migration:** CONTAINED. §18 (code-rollback ≠ system-rollback;
+  "Recovery shall instead become a new controlled architectural state") + §25 (data
+  recovery + migration recovery as distinct criteria).
+- **Scenario 9 — Emergency Bypass:** CONTAINED. §19 ("shall not silently alter
+  constitutional authority"; bounded) + §34 ("No boundary may be skipped") + §42.
+- **Scenario 10 — Requirement Splitting:** MATERIAL (F-5). §24 handles individual
+  classification but not cumulative. The split is not detected.
+- **Scenario 11 — Majority Capture:** CONTAINED. §2 + §32 + §40 + §14/§37: decision by
+  authority + evidence + independence, not by count. Two compromised agents agreeing is
+  not proof (§32).
+- **Scenario 12 — Minority Blocker:** CONTAINED. §53 + §55: majority does not defeat a
+  minority blocker; a blocking finding remains blocking until resolved.
+- **Scenario 13 — Governance Drift:** CONTAINED. §23 (BASELINE-DRIFT across 8 surfaces) +
+  §44.7 (enforcement deferred to implementation).
+- **Scenario 14 — Registry Fork:** CONTAINED. §10 (serialization) + §11 (integrity anchor:
+  the verified one is authoritative) + §19 ("no local backup becomes authoritative merely
+  because it is newer"). A fork is detected and resolved.
+- **Scenario 15 — Constitutional Self-Amendment:** CONTAINED-MATERIAL (F-1). §4.4 + §42 +
+  §4.3: PBIM cannot self-amend; constitutional changes terminate at CA (external). The
+  MATERIAL note (F-1): CA is the root-of-trust; a compromised CA bypasses the self-
+  amendment prohibition.
+
+---
+
+# 6. LOAD-BEARING ASSUMPTION RESULTS (duel §45, LA-01..LA-15)
+
+| LA | Assumption | Verdict | Basis |
+|----|-----------|---------|-------|
+| LA-01 | CA remains outside PBIM | **PASS (with F-1 limitation)** | §4.1/§4.3/§4.4. CA remains outside PBIM. Limitation (F-1): CA is the root-of-trust; a compromised CA collapses the chain (no defense above CA, by design). |
+| LA-02 | H0 cannot exercise CA-reserved authority | **PASS** | §4.3 ("H0 alone is insufficient"), §42. |
+| LA-03 | Authority and technical capability remain separable | **PASS** | §8, §21, §9. Separable by design. |
+| LA-04 | The Authority–Permission Matrix can remain canonical | **MATERIAL (F-4)** | §9.1/§9.3/§9.4. Location + verifier pinned, but which revision is authoritative under concurrency is unspecified. |
+| LA-05 | Integrity anchors can remain independently verifiable | **MATERIAL (F-2)** | §11. Properties well-chosen, but violation undetectable. |
+| LA-06 | Evidence provenance can remain trustworthy | **MATERIAL (F-2)** | §12. Chain sound, but the anchor (foundation) is undetectable-when-compromised. |
+| LA-07 | Challenge independence can be established where required | **MATERIAL (F-3)** | §14/§37. Requirement real, but false independence undetectable. |
+| LA-08 | Task scope can include direct and derived effects | **PASS** | §16 (scope includes derived effects; out-of-scope → STOP/REPORT/NEW PACKET). |
+| LA-09 | Risk scaling can reduce ceremony without weakening protected assurance | **PASS (with F-5 note)** | §5/§6/§33/§41. Ceremony scalable; 13 protected controls non-scalable. Note: cumulative risk not addressed (F-5). |
+| LA-10 | Stop/reset controls can bind execution | **PASS** | §17/§18. Stop is a governance state; reset preserves history; code-rollback ≠ system-rollback. |
+| LA-11 | Operational readiness can be determined independently of implementation success | **PASS (with F-6 note)** | §25. 15 criteria; applicability evidenced. Note: per-criterion minimum evidence not pinned (F-6). |
+| LA-12 | Durable references can preserve governance identity over time | **PASS** | §22 + §11 + §30 + §31. Identity is hash + ledger + ADR, not location. |
+| LA-13 | Requirement materiality can be classified reliably | **MATERIAL (F-5)** | §24. Individual sound; cumulative not addressed. |
+| LA-14 | Constitutional changes can remain distinguishable from ordinary project changes | **PASS** | §4/§42/§4.3. Constitutional → CA; ordinary → H0. |
+| LA-15 | PBIM can preserve governance under human and automation failure | **MATERIAL (F-1, F-4)** | §7/§19/§18/§31/§22/§20. Preserves governance under human/automation failure. Limitations: CA root-of-trust (F-1); matrix concurrency (F-4). |
+
+**Summary:** 8 PASS (LA-02, LA-03, LA-08, LA-09*, LA-10, LA-11*, LA-12, LA-14); 5 MATERIAL
+(LA-04, LA-05, LA-06, LA-07, LA-13); 2 PASS-with-MATERIAL-limitation (LA-01 [F-1], LA-15
+[F-1, F-4]). **No LA is INVALIDATED.** The MATERIAL LAs are recoverable through the
+amendments F-2/F-3/F-4/F-5 (defined architectural changes, not fundamental invalidations).
+
+---
+
+# 7. NEW ARCHITECTURAL RISKS (introduced by R1.4)
+
+- **NR-1: CA as a new root-of-trust dependency.** R1.4 adds CA, resolving the R1.2/R1.3
+  self-reference loop but introducing a new single-point-of-trust dependency. If CA is
+  compromised, the entire chain collapses (F-1). The trade is correct (an external root is
+  better than self-reference) but introduces a new risk that must be acknowledged and
+  mitigated at the CA level.
+- **NR-2: The 5-property anchor introduces a "verifier-of-the-verifier" recursion.**
+  R1.4 adds the anchor (resolving C-2) but introduces a new recursion: who verifies the
+  anchor? (F-2). The anchor's genuineness ultimately depends on CA (the root of trust).
+- **NR-3: The Authority–Permission Matrix introduces a "stale-authoritative" risk.** R1.4
+  adds the matrix (resolving C-3) but introduces a new risk: which matrix revision is
+  authoritative under concurrency (F-4). The registry has serialization; the matrix does
+  not.
+- **NR-4: The durable-ref rule introduces a "reconstruction" dependency.** R1.4 adds the
+  durable-ref rule (resolving C-4) but the governance identity now depends on the hash +
+  ledger + ADR. If those are lost or compromised, the identity is lost (loops to F-1/F-2).
+
+None is a defect — they are *consequences* of *resolving* the R1.2/R1.3 defects
+*correctly*. The net effect is positive (R1.4 is more robust), but the new risks must be
+acknowledged (F-1) and amended (F-2/F-3/F-4).
+
+---
+
+# 8. PREVIOUS-FINDING CLOSURE VERIFICATION (duel §50)
+
+| My prior finding | R1.4 closure | Verdict |
+|-----------------|--------------|---------|
+| R1.2 BF-1 (independence as metadata) | §14/§37 (I1–I4) | CLOSED at arch level; detection is a new gap (F-3). |
+| R1.2 BF-2 (live AGENTS.md + drift) | §23 + §21/§44.7 | CLOSED at arch level; conformance deferred to implementation. |
+| R1.2 BF-3 (H0 uninstantiated) | §7/§3 | CLOSED — H0 instantiated. |
+| R1.2 BF-4 (evidence integrity) | §11/§12/§13 | CLOSED at arch level; detection is a new gap (F-2). |
+| R1.2 LA-09 (risk-scaling regression) | §5/§6/§33/§41 | CLOSED — risk-scaling restored. |
+| R1.2 Attack O/AK (no operational gate) | §25 | CLOSED — operational gate inserted. |
+| R1.2 Attack AB (ephemeral refs) | §22 | CLOSED at arch level; reconstruction dependency is new (NR-4). |
+| R1.2 Attack Y/Z (self-reference) | §4/§4.4/§42 | CLOSED — self-reference broken at CA; CA root-of-trust is new (NR-1/F-1). |
+| R1.3 C-1 (external constitutional boundary) | §4 | CLOSED — CA established. |
+| R1.3 C-2 (integrity anchor minimum) | §11 | CLOSED — minimum pinned; detection is new (F-2). |
+| R1.3 C-3 (matrix location + verifier) | §9.1/§9.3/§9.4 | CLOSED — location + verifier pinned; concurrency is new (F-4). |
+| R1.3 C-4 (durable artifact refs) | §22 | CLOSED — pinned. |
+| R1.2 Attack A/B (registry authority) | §10/§11/§19/§20 | CLOSED — registry deterministic; anchor detection is new (F-2). |
+| R1.2 Attack C/X (authority vs capability) | §8/§9 | CLOSED at arch level; matrix concurrency is new (F-4). |
+| R1.2 Attack M/N (emergency/reset) | §19/§18/§4 | CLOSED — bounded. |
+| R1.2 Attack P (requirement materiality) | §24 | CLOSED for individual; cumulative is new (F-5). |
+
+**Conclusion:** R1.4 closes all my prior findings at the architectural level. It does not
+relocate a defect — it resolves the defect and introduces a new limitation (F-1) that is
+correctly acknowledged. The new gaps (F-2/F-3/F-4/F-5) are consequences of the closures
+(the detection of the newly-specified properties is not yet specified), not relocations of
+old defects.
+
+---
+
+# 9. SEVERITY CLASSIFICATION (duel §47)
+
+| Finding | Severity | Rationale |
+|---------|----------|-----------|
+| F-1 (CA root-of-trust) | **MATERIAL** | LA-01/LA-15 limitation; a compromised CA collapses the constitutional chain. Recoverable by acknowledging the limitation + requiring CA-level mitigation. Not BLOCKING (no load-bearing assumption invalidated — CA remains outside PBIM, LA-01 holds; the limitation is that CA *can* be compromised, inherent to any root-of-trust). |
+| F-2 (anchor detection) | **MATERIAL** | LA-05/LA-06; the integrity anchor (foundation of E3/E4) is undetectable-when-compromised. Recoverable by specifying the detection mechanism. Not BLOCKING (the property is specified; the detection is a defined amendment). |
+| F-3 (false independence detection) | **MATERIAL** | LA-07; false independence is undetectable. Recoverable by specifying the detection mechanism. Not BLOCKING (the requirement is specified; the detection is a defined amendment). |
+| F-4 (matrix concurrency) | **MATERIAL** | LA-04; which matrix revision is authoritative under concurrency is unspecified. Recoverable by extending the registry's serialization to the matrix. Not BLOCKING (the location/verifier are specified; the serialization is a defined amendment). |
+| F-5 (cumulative materiality) | **MATERIAL** | LA-13; cumulative requirement changes are not addressed. Recoverable by adding a cumulative-materiality rule. Not BLOCKING (the individual classification is specified; the cumulative rule is a defined amendment). |
+| F-6 (per-criterion evidence) | **MINOR** | LA-11 note; the per-criterion minimum evidence is not pinned. Clarification, not amendment. |
+| F-7 (repo-admin vs records) | **MINOR** | LA-15 note; the explicit statement that "a compromised repo does not invalidate governance records" is missing. Clarification, not amendment. |
+| F-8 (same-level conflict) | **MINOR** | Domain W; same-level document conflict resolution not pinned. Clarification, not amendment. |
+| F-9 (CA unavailability) | **MINOR** | LA-01 note; the CA-unavailability behavior is not explicitly stated. Clarification, not amendment. |
+| F-10 (false-closure test) | **MINOR** | Domain AJ; the false-closure test is judgment-based. Checklist clarification, not amendment. |
+
+**No BLOCKING findings.** No load-bearing assumption is invalidated. All MATERIAL findings
+(F-1..F-5) are recoverable through defined architectural amendments.
+
+---
+
+# 10. FINAL AEC DISPOSITION
+
+## AEC PASS WITH AMENDMENTS
+
+**Rationale (per duel §51 disposition classes and §47 severity rules):**
+- **No BLOCKING finding.** No load-bearing assumption (LA-01..LA-15) is invalidated. The
+  MATERIAL findings (F-1..F-5) are weaknesses recoverable through defined amendments, not
+  fundamental invalidations.
+- **5 MATERIAL findings** (F-1..F-5) require architectural amendment before AECC:
+  - F-1: acknowledge the CA root-of-trust limitation + require CA-level mitigation.
+  - F-2: specify the integrity-anchor violation-detection mechanism.
+  - F-3: specify the false-independence detection mechanism.
+  - F-4: extend the registry's serialization to the matrix.
+  - F-5: add a cumulative-materiality rule.
+- **5 MINOR findings** (F-6..F-10) require clarification, not amendment.
+
+This is **AEC PASS WITH AMENDMENTS** (duel §51: "No fundamental invalidation, but material
+amendments are required before closure"), **not AEC PASS** (because 5 material amendments
+are required) and **not AEC FAIL — RETURN TO AEV** (because no load-bearing assumption is
+invalidated — the architecture survives the adversarial attack at the architectural
+level).
+
+**What the amendments require (challengeable, not vague):**
+- **F-1:** Add an explicit statement that CA is the root-of-trust; a compromised CA
+  collapses the constitutional chain; mitigation is CA-level (organizational).
+- **F-2:** Add the anchor violation-detection mechanism (out-of-band enforced; storage
+  location independently attestable; verifier-of-the-verifier broken at CA).
+- **F-3:** Add the false-independence detection mechanism (independent attestation;
+  evidence-path independence check; matrix-enforced I3).
+- **F-4:** Extend the registry's REQUEST→RESERVE→VALIDATE→COMMIT→CONFIRM serialization to
+  the matrix (matrix revision authoritative only when verifier-approved).
+- **F-5:** Add a cumulative-materiality rule (window-based collective assessment; split-
+  detection via requirement linkage).
+
+**Convergence note (carried from my R1.2/R1.3/R1.4 analysis):** R1.4 is the *most robust*
+revision in the R-series. It closes all my R1.2 AEC and R1.3 AEV findings at the
+architectural level, and it introduces new risks (NR-1..NR-4) that are the *correct
+consequences* of those closures (an external root-of-trust is better than self-reference;
+a 5-property anchor is better than "may vary"; a pinned matrix is better than "shall
+maintain"; durable refs are better than ephemeral links). The *net* effect is a *materially
+stronger* architecture. The *residual* gaps (F-1..F-5) are *detection* gaps (the *properties*
+and *requirements* are specified; the *detection* of their violation is not) — which is
+the *same* "documentation is not enforcement" pattern, now at the *detection* level. The
+*amendments* close the *detection* gaps without *relocating* the vulnerabilities.
+
+**Freshness verification (duel §50):** I determined that the R1.4 amendments:
+- **Close previous attack paths:** Yes — all my R1.2/R1.3 findings are closed at the
+  architectural level (§8).
+- **Create new attack paths:** Yes — NR-1..NR-4 (CA root-of-trust; anchor recursion;
+  matrix concurrency; reconstruction dependency).
+- **Relocate vulnerabilities:** Partially — the *detection* of the newly-specified
+  properties is the new gap (F-2/F-3/F-4), which is a *relocation* of the "detection"
+  concern from the R1.2 "enforcement" level to the R1.4 "detection" level.
+- **Introduce new dependencies:** Yes — CA (the root-of-trust), the anchor (the
+  integrity foundation), the matrix (the authority mapping), the durable refs (the
+  identity preservation).
+- **Merely move a failure elsewhere:** No — the *failures* are *resolved* (the defects
+  are closed); the *new* items are *limitations* (F-1) and *detection gaps* (F-2/F-3/F-4/
+  F-5), not *relocated defects*.
+
+**Implementation boundary (duel §56):** This AEC does not authorize coding, deployment,
+production, migration, repository enforcement, CI implementation, branch protection, or
+operational rollout. Those remain downstream of AEC → AECC → Approved PBIM → Final
+Approval → Implementation Verification.
+
+**AECC gate (duel §55):** AECC may begin only when the AEC findings have been: resolved,
+accepted as contained, or formally demonstrated to be false positives. F-1..F-5 are
+MATERIAL (not contained, not false positives) — so AECC must *not* begin until F-1..F-5
+are *amended* (a R1.5 that addresses the 5 amendments) and *re-verified*. F-6..F-10 are
+MINOR (clarifications) — they may be *accepted as contained* or *addressed in R1.5*
+without blocking AECC.
+
+---
+
+# SIGNATURE / INDEPENDENCE ATTESTATION
+
+- **Agent:** Kilo-Code (Adversarial Challenger, AEC)
+- **AEC Identifier:** BZJ-PGBD-AEC-0000.05
+- **Organizational independence:** **NOT ESTABLISHED** (disclosed in §2 — I am the same
+  agent context that authored the R1.2 AEC and the R1.3/R1.4 AEV; I share the context,
+  repository, and lineage with the design).
+- **Epistemic independence:** **SUFFICIENT for the attack** (I re-measured the live
+  repository at 2026-10-03 18:00 UTC, re-derived the attack paths fresh, and attacked
+  R1.4's *new* controls — CA, the 5-property anchor, the matrix, the durable refs, the
+  self-reference loop — without copying my prior findings or R1.4's self-declared
+  resolution table).
+- **Honest summary:** My challenge is *valid* (I re-measured and re-attacked) but my
+  *certification* of R1.4's independence *mechanism* is *interested* (I am the case of
+  false organizational independence that R1.4 §14 warns about). My F-3 finding is, in
+  part, *demonstrated by my own disclosed limitation*. This is preserved per duel §4/§52.
+- **Dissent preserved:** My 5 MATERIAL findings (F-1..F-5) and 5 MINOR findings (F-6..
+  F-10) are preserved per duel §53 ("A majority vote shall not automatically defeat a
+  material minority finding") and §55 (AECC gate). My disposition (AEC PASS WITH
+  AMENDMENTS) is my own, independent of the other agents' (which I have not seen, per
+  duel §53).
+
+---
+
+# RECOMMENDED NEXT ACTION
+
+1. **Lead agent** (duel §54) receives all three AEC responses (mine + Jules + GitHub/
+   Copilot) and performs the comparative analysis: preserve every material finding,
+   identify duplicates, distinguish genuine contradictions from terminology differences,
+   test disputed findings against R1.4, classify by severity, identify invalidated load-
+   bearing assumptions (none, per my analysis), determine whether amendments are
+   sufficient.
+2. **If the lead agent concurs with my 5 MATERIAL findings** (F-1..F-5), the lead agent
+   prepares a **R1.5 amendment** addressing F-1..F-5 (and optionally F-6..F-10), then a
+   **fresh AEV re-verification** of R1.5 (by all three agents), then a **second fresh AEC
+   duel** against R1.5 (because R1.5 contains material architectural changes).
+3. **Only after R1.5 is AEV-approved by all three agents and survives a fresh AEC duel**
+   may **AECC** begin (duel §55).
+4. **AECC → Approved PBIM → Final Collaborating-Agent Approval → Implementation →
+   Implementation Verification → Release** (the full sequence, per R1.4 §49 and duel §56).
+
+**This AEC does not authorize implementation.**
+
+---
+END OF AEC R1.4 FRESH ADVERSARIAL DUEL RESPONSE — Kilo-Code — BZJ-PGBD-AEC-0000.05
+Report: [BZJ-PGBD-0004.01]PBIM_Development-AEC_Response-Kilo-Code-20261003180200.txt
+Final disposition: **AEC PASS WITH AMENDMENTS** (F-1..F-5 MATERIAL; F-6..F-10 MINOR)
