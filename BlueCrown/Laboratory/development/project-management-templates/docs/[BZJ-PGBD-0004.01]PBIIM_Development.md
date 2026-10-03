@@ -148,7 +148,7 @@ Complete the following 'PBIIM Architectural Engineering Challenge - Adversarial 
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEC\_Duel-202610031440.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIIM\_Development-AEC\_Adversarial\_Duel-202610031642.txt
 
 
 
