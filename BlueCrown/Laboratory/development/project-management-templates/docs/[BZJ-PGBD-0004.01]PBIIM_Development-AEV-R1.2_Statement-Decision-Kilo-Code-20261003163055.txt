@@ -1,0 +1,283 @@
+# [BZJ-PGBD-0004.01] PBIIM-AEV R1.2 Re-Verification Decision Statement
+
+## Independent Agent Approval / Dissent Response (Re-Verification of R1.2)
+
+**Artifact Under Review:** `BZJ-PGBD` AEV R1.2 — Revised Controlled Baseline Candidate (`PBIIM_Development-AEV_Statement-202610031616`)
+**Reviewer:** Kilo-Code
+**Response Timestamp:** 2026-10-03T16:30:55Z
+**Reviewer Prior Artifacts:**
+- AEA report `…Kilo-Code-202610031156.txt`
+- AEV R1.0 decision `…Kilo-Code-20261003130256.txt`
+- AEC adversarial response `…Kilo-Code-202610031449.txt`
+- AEV R1.1 re-verification `…Kilo-Code-20261003160245.txt` (the review R1.2 answers)
+
+---
+
+## 1. DECISION
+
+### AEV APPROVE WITH CONDITIONS — for advancement to the new AEC duel
+
+```text
+STATUS:    AEV APPROVE WITH CONDITIONS
+SCOPE:     R1.2 is the strongest, most mature-honest revision to date. It
+           RESOLVED my R1.1 new-conflict N-1 (Protected Controls), strengthened
+           the registry/permission/reset/independence design so that R1.2's own
+           "Question A — Architectural Completeness" is now genuinely answered,
+           and it introduced the DESIGNED→ENFORCEABLE→ENFORCED + E0–E4 +
+           Question-A/B split that prevents any future document from claiming
+           enforcement it does not have.
+           Advancement to a NEW AEC duel is permitted (R1.2 §42/§43).
+
+NOT:       An approval that the controls are ENFORCED (E0/E1 at best today).
+NOT:       Implementation authorization (correctly remains NOT GRANTED, §41/§44).
+NOT:       Production authorization.
+NOT:       A clean APPROVE — see §4 (the risk-scaling regression) and §5
+           (the live AGENTS.md defect).
+
+CONDITIONS: C-01..C-07 (updated; the set has SHRUNKEN from R1.1 but a NEW
+             condition R-NEW-1 appeared). Implementation remains gated by the
+             §38 13-item verification list + §41 "not falsely marked complete."
+```
+
+This is a **re-verification of R1.2**, which is a direct amendment to R1.1 following my (and the other agents') R1.1 re-verification. I apply R1.2's *own* decision standard (§39): I answer **Question A (architectural completeness)** for AEV, and I do *not* answer **Question B (operational enforcement)**, which R1.2 correctly defers to implementation verification. My verdict is a verdict on Question A.
+
+---
+
+## 2. THE DECISIVE RE-VERIFICATION TEST (did R1.2 enforce, or only describe better?)
+
+I re-measured `origin/main` at review time (16:30 UTC):
+
+```text
+F1.  No identifier registry file exists on origin/main.                     (FACT)
+F2.  No CI/.github, no CODEOWNERS, no git hooks, no branch protection.      (FACT)
+F3.  No task-packet / ADR / Decision Ledger / RTM files.                   (FACT)
+F4.  origin/main AGENTS.md STILL contains "ChatGPT/Cove", "Claude",
+     and "5. Claude performs adversarial/security review".                 (FACT)
+     -> The live AGENTS.md contradiction is UNCHANGED from R1.1.
+F5.  R1.2 §37 explicitly: "R1.2 does not falsely claim that implementation
+     machinery already exists." §41 lists 8 items "deliberately not falsely
+     marked complete." §39 separates Question A from Question B.            (FACT)
+F6.  R1.2 §36 marks LA-04/05/08/10/11/12 "RESOLVED AT DESIGN — IMPLEMENTATION
+     VERIFY"; LA-06 "RESOLVED"; LA-01/02/03/07/09 "AMENDED — VERIFY".       (FACT)
+```
+
+**Result of the test:** R1.2 has built **zero** enforcement (F1–F4). Every control is at **E0 (Specification)** or **E1 (Configuration)**; none reaches E2 (Automated Enforcement). **This is correct and expected** — R1.2 §41 explicitly defers all enforcement to implementation. The *difference* from R1.0/R1.1 is that R1.2 **no longer overstates**: it cannot call a control ENFORCED below E2 (§35), it separates Question A from Question B (§39), and it self-declares "not falsely marked complete" (§41). So R1.2 passes the honesty test that R1.0 failed and that I was demanding through R1.1.
+
+**The one present-tense item that is still NOT just "build later":** F4 — the operative `AGENTS.md` on `origin/main` *still* contradicts the architecture *right now*, exactly as it did at R1.1 (my F4). R1.2 *described* the fix (§16 conflict rule, §17 drift detector, §15.1 Protected Controls) but did *not conform the actual file*. This is an **implementation defect**, not an architectural one: the *design* now correctly handles the conflict (my N-1 is resolved, §16/§17 contain the failure), but the *data* (the live file) is still wrong. Per R1.2's own §39, a live-data defect belongs to **Question B / implementation**, not to AEV (Question A). So it does **not** block AEV approval — it is a **condition carried into implementation** (it already is: §38 item 5 "AGENTS.md drift detection operates," §41 "actual automated drift detector").
+
+---
+
+## 3. WHAT R1.2 GENUINELY IMPROVED (verified, credited)
+
+R1.2 is materially stronger than R1.1 on the *architecture*, and the improvements are exactly where my R1.1 conditions pointed. I credit:
+
+1. **N-1 RESOLVED — §15.1 Protected Controls.** My R1.1 finding was that §15 (baseline above AGENTS.md) conflicted with §16 (AGENTS.md security rules stay in force). R1.2 inserts **Protected Security/Safety Controls** *above* the Approved Baseline and states "a lower level may strengthen a protected control; it may not weaken it." This cleanly resolves the precedence conflict I raised. **Verified fix.** This was the one *new* architectural conflict I found in R1.1, and R1.2 closed it correctly.
+2. **Maturity model §2 + §33 + §35 (DESIGNED→ENFORCEABLE→ENFORCED; E0–E4; "no control is ENFORCED below E2; high-risk below E4").** This is the operationalization of "documentation is not enforcement" that I have been demanding since R1.0. It gives a *measurable* bridge from design to implementation and *prevents* the R1.0 failure (claiming what isn't built). **Verified improvement.**
+3. **Question A vs Question B split (§39).** AEV now explicitly claims only *architectural completeness*, not *operational enforcement*. This is the correct scoping of what an AEV can honestly assert. **Verified improvement** — and it is the reason I can approve R1.2 for AECC-readiness while noting zero enforcement exists.
+4. **Registry governance §5–§10.** R1.1 had a registry *characteristic list*; R1.2 now specifies canonical *location*, four authority classes (Read/Write/Validation/Governance), branch control (proposal→validation→review→approval→merge; "a local copy is never authoritative"), a concrete *schema* (11 fields + rejection rules), *conflict resolution* (§9: neither branch wins, block, H0 resolves — directly answers my D-2 / MAT-6 single-registry concurrency concern), and a *failure state* (REGISTRY-BLOCKED, §10). **Verified strengthening.** This is now a complete *design* of the registry (Question A answered); only the build remains.
+5. **Permission/Authority matrix §13 + "Permission Reality Rule" §14.** A full H0/H1/H2/Automation capability matrix, plus a declared-authority→actual-permissions audit that produces `AUTHORITY-PERMISSION-DRIFT` and blocks the action. This directly answers my AEC Attack X (hidden authority) / MAT-12 (operationalize authority). **Verified strengthening.**
+6. **Challenge independence §11–§12.** Concrete primary/rotation/tertiary selection model + a *recorded* independence basis (`independence_status = VERIFIED` before AEC-in-progress; the design owner may not select itself). This is more operational than R1.1's generic "independent challenger." **Verified strengthening.**
+7. **Reset §18–§21.** Now includes *initiators* (H0 / H1-on-verified-failure / AEC-on-invalidation / automation-halt-only), an *evidence threshold* (§19), *effects* (§20, including "previous approval cannot automatically survive architectural invalidation"), and an *appeal path* (§21: design owner cannot unilaterally reverse an independent reset). This fully closes my BLK-4 at the design level. **Verified fix.**
+8. **Stop/Resume §25–§28.** `STOPPED` vs `BLOCKED` distinguished; stop triggers (§26), stop enforcement (packets non-executable, verification can't complete, release can't proceed — §27), and *resume authority* (§28: only the designated stop-class authority resumes; a stopped task cannot resume because the implementing agent "believes the problem is fixed"). This closes my BLK/H (stop conditions had no restart authority). **Verified strengthening.**
+9. **Honest self-description §37 + §41.** "R1.2 claims it specifies what the enforcement machinery must be, who controls it, what happens when it fails, and how implementation verification will prove it" — and §41 lists exactly what is *not* done. **Verified:** R1.2 is now mature-honest.
+
+---
+
+## 4. WHERE R1.2 IS STILL NOT SUFFICIENT (my preserved dissent + one NEW regression)
+
+I do not suppress dissent. The following remain genuine concerns:
+
+### 4.1 NEW FINDING — R1.2 regressed the risk-scaling / small-project fast path (material, Question A)
+
+**FINDING R-NEW-1 (material):** R1.1 contained explicit **§26 Risk-Scaled Governance (Light / Standard / High-Assurance profiles), §27 Small-Project Rule, §28 Large-Project Delegation**. **R1.2 dropped all three.** R1.2's §26–§28 are now *Stop/Resume* sections, not risk-scaling. Meanwhile R1.2 §35 imposes an **E2 (Automated Enforcement) floor on *every* control** ("No control may be described as ENFORCED … unless its evidence reaches at least E2"), with E4 for high-risk.
+
+The consequence: R1.2 *improved evidence-scaling* (E2 vs E4 depth scales with risk) but **removed the ceremony-scaling** that R1.1 had. A one-day, low-risk feature now still runs the full AEA→AEV→AEC→AECC cycle with full task-packets, full gates, and must still produce E2 automated-enforcement evidence for *every* control — because there is no longer a Light Profile that reduces documentation/review depth/challenge scope for low-risk work. This **re-introduces the small-project over-governance** I specifically challenged in my AEC (Attack O / S8) and that R1.1 had begun to fix (Light Profile / MAT-5).
+
+R1.2 is *honest* about this: LA-09 "Risk-scaled governance remains practical" is marked **AMENDED — VERIFY**, not RESOLVED (F6). So R1.2 does not overclaim LA-09 — but it has *regressed* from R1.1's explicit risk-scaling design without replacing it. This is a **material architectural (Question A) defect**, not an implementation one, because the *design* no longer provides the fast path. It must be re-introduced (or the E2 floor explicitly waived for a defined low-risk class) before the architecture can satisfy LA-09.
+
+**This is why I am not giving a clean `AEV APPROVE`.** It is a bounded, fixable design gap (re-add the Light Profile / small-project fast path, or scope the E2 floor to "mandatory controls only"), which is why my verdict is `APPROVE WITH CONDITIONS` rather than `RETURN`.
+
+### 4.2 Carried-over design gaps R1.2 did not close (my R1.1 conditions still open)
+
+```text
+GAP-1  [my R1.1 C-06 / MAT-8]  No distinct OPERATIONAL-READINESS gate.
+       R1.2 §13 has "Deployment execution" (H0 APPROVE / H2 AUTHORIZED /
+       automation EXECUTE) but no explicit release-readiness gate (canary,
+       rollback drill, monitoring, on-call) distinct from test-pass.
+       Still a design gap for a payment bridge.
+
+GAP-2  [my R1.1 C-07 / MAT-10]  Requirement-change materiality threshold not
+       crisp. R1.2 §30 defines "PBIIM Constitutional Change" (8 categories of
+       *governance-model* change requiring the full cycle) — good — but for a
+       *project requirement* change (not a governance change), there is still
+       no threshold for AEV-reopen vs AEC-only vs reset. §18.1 reset triggers
+       are broad but not a threshold.
+
+GAP-3  [my R1.1 C-08 / MAT-11]  No "no empty stub sections" rule for the
+       operating template. R1.2 is about the *governance architecture*, not
+       about *instantiating the 49-process template body*; it does not add the
+       rule that a new project may not bootstrap from stub material.
+
+GAP-4  [my R1.1 C-04 / MAT]  H0 is a ROLE, not a NAMED authority. R1.2 §29
+       names "H0" as the higher-level authority and §13/§29/§30 reference it
+       throughout, but no authority *register* or *named individual* exists.
+       The LA-05 "RESOLVED AT DESIGN" claim is only as strong as the H0 that
+       actually gets instantiated. This is defensible as a design-level item,
+       but I keep it open as a condition (name/instantiate H0).
+```
+
+### 4.3 The live AGENTS.md defect is contained but not fixed (implementation, not architectural)
+
+F4: `origin/main` AGENTS.md still has Cove/Claude. R1.2's *design* now contains this (§15.1 Protected Controls + §16 stop/escalate + §17 drift detector), so it is **architecturally handled** (my N-1 resolved, the failure is bounded). But the *file* is not conformed and the *detector* is not built. Per R1.2 §39 this is Question B / implementation — it does not block AEV, it is a condition (it already is: §38 item 5, §41). I restate it so the Lead Agent does not lose it in the revision churn.
+
+---
+
+## 5. R1.1-CONDITIONS RECONCILIATION (did R1.2 close them?)
+
+My R1.1 stated C-01..C-10. R1.2's treatment:
+
+```text
+C-01  [N-1: §15 vs §16 precedence]      RESOLVED        §15.1 Protected Controls
+C-02  [AGENTS.md conform/detector]      DESIGNED, NOT BUILT (§16/§17); NOT CONFORMED
+                                          (F4) -> implementation condition
+C-03  [registry + CI + CODEOWNERS]      DESIGNED (§5–§10); NOT BUILT -> impl condition
+C-04  [name H0]                         PARTIAL — H0 role + matrix defined,
+                                          no named individual/register -> open
+C-05  [registry concurrency model]      RESOLVED AT DESIGN (§9 conflict resolution)
+C-06  [operational-readiness gate]      NOT ADDRESSED -> open (GAP-1)
+C-07  [requirement-change threshold]    PARTIAL (§30 constitutional categories);
+                                          project-requirement threshold still open (GAP-2)
+C-08  [no empty stubs]                  NOT ADDRESSED -> open (GAP-3)
+C-09  [evidence pin + re-run]           STRENGTHENED (§33 E0–E4; E3/E4; §38 item 12)
+                                          -> effectively addressed at design level
+C-10  [B-01..B-14 built before impl]    REINFORCED (§38 13-item list; §41)
+```
+
+**Net: R1.2 resolved 2 of my 10 R1.1 conditions at the design level (C-01, C-05), strengthened 2 more (C-09, C-10), and left 6 open or partial (C-02/03/04/06/07/08).** But the *new* condition R-NEW-1 (risk-scaling regression) is the dominant one, because it is a Question-A defect that R1.2 *introduced* by removing R1.1's risk-scaling sections.
+
+---
+
+## 6. WHAT I CREDIT AS GENUINE IMPROVEMENTS OVER R1.1
+
+To be precise about what moved and why I am *at least* as positive as R1.1:
+
+1. **N-1 closed** (§15.1) — my only *new* architectural conflict from R1.1 is resolved.
+2. **Maturity + evidence model** (§2, §33, §35, §39) — the DESIGNED/ENFORCEABLE/ENFORCED + E0–E4 + Question-A/B split is the single most important addition; it makes "described vs enforced" *measurable* and *un-claimable-falsely*.
+3. **Registry from "characteristic list" to "complete design"** (§5–§10) — location, authority, branch control, schema, conflict, failure.
+4. **Authority now has a matrix + a reality check** (§13, §14).
+5. **Challenge independence now has a selection model + a record** (§11, §12).
+6. **Reset now has initiators + threshold + effects + appeal** (§18–§21).
+7. **Stop/resume now has authority + enforcement + a resume record** (§25–§28).
+8. **Honesty discipline is now structural** (§37, §39, §41) — R1.2 cannot overstate its maturity.
+
+---
+
+## 7. CONDITIONS ATTACHING TO MY APPROVAL
+
+For `AEV APPROVE WITH CONDITIONS` to stand:
+
+```text
+R-NEW-1 [§4.1]  RE-INTRODUCE risk-scaling / small-project fast path (Light
+       Profile) OR explicitly scope the §35 E2 floor to "mandatory controls
+       only," so low-risk one-feature projects are not forced through full
+       ceremony + E2-for-everything. Closes the LA-09 regression.
+       (Question A; must be resolved at AECC / next AEC.)
+
+C-02-r  Live AGENTS.md on main still drifts (F4). Conform the operative
+       AGENTS.md (drop Cove/Claude unless re-adopted; align branch naming)
+       OR formally record that §16 stop-and-escalate + §15.1 Protected
+       Controls is the INTERIM containment until the §17 drift detector is
+       built. Named owner + due date. (Implementation, but present-tense.)
+
+C-03-r  Build B-01/B-02: committed registry + merge-time CI validation
+       (schema, uniqueness, sequence_index, referential integrity) + CODEOWNERS
+       on the registry branch. (§38 items 1–3; §41.)
+
+C-04-r  Instantiate H0: create an authority register naming the H0 (and H1)
+       for this project. The §13 matrix is only as strong as the H0 it names.
+
+GAP-1   Add a distinct operational-readiness gate (canary, rollback drill,
+       monitoring, on-call) before RELEASE, separate from test-pass.
+
+GAP-2   Define the requirement-change materiality threshold (which requirement
+       changes force AEV re-open vs AEC-only vs reset).
+
+GAP-3   Add the rule: the operating template must contain the instantiated
+       49-process body (no empty stub sections) before it bootstraps a project;
+       lint missing content.
+
+C-10-r  Before IMPLEMENTATION is authorized, the §38 13-item verification list
+       must be BUILT and mechanically checkable (registry exists + CI green;
+       task-packet diff-check exists; secret-redaction + E2/E4 evidence exists;
+       artifact content-addressing exists). "RESOLVED AT DESIGN" (F6) is NOT
+       "ENFORCED" (E2+).
+```
+
+**None of R-NEW-1, C-02-r..C-10-r blocks the new AEC duel itself** (the duel attacks the *architecture*, which is now Question-A complete). They block *implementation authorization*, which R1.2 §44 correctly keeps at NOT AUTHORIZED. R-NEW-1 is the only one that should be *designed* before/ during the AEC (it is a Question-A gap); the rest are implementation-deferred.
+
+---
+
+## 8. AUTHORITY STATEMENT
+
+- **Consensus:** I am one of three reviewers. My approval is not a vote count.
+- **Verification:** I re-measured `origin/main` (F1–F6) and re-verified each of my R1.1 conditions and my N-1 against the R1.2 text. I did *not* use the other agents' R1.2 dispositions as evidence.
+- **Authority:** I have **no authority** to approve this as a final baseline or to authorize implementation. That belongs to H0 (not yet instantiated — C-04-r).
+- **Decision ownership:** The accountable decision-maker for "is R1.2 the baseline we build on" is H0, risk-accepting any residual `HIGH` finding (notably R-NEW-1).
+
+I state `READY FOR HUMAN GATE` on the *advancement-to-new-AEC* decision. I do **not** state `BASELINE APPROVED` or `IMPLEMENTATION AUTHORIZED`.
+
+---
+
+## 9. VOTE
+
+```text
+KILO-CODE:  AEV APPROVE WITH CONDITIONS — FOR THE NEW AEC DUEL
+
+Approval scope:      R1.2 is architecturally complete (Question A) and
+                     mature-honest; N-1 resolved; registry/permission/reset/
+                     independence/stops strengthened; the DESIGNED→ENFORCED
+                     + E0–E4 + Question-A/B model prevents false enforcement
+                     claims.
+Findings re-verified:  N-1 RESOLVED; 2/10 R1.1 conditions resolved at design
+                     level (C-01, C-05); 2 strengthened (C-09, C-10);
+                     6 open/partial (C-02/03/04/06/07/08).
+NEW finding:         R-NEW-1 — risk-scaling / small-project fast path
+                     regressed (R1.1 Light/Standard/High profiles dropped;
+                     E2-for-everything floor re-introduces small-project
+                     over-governance). LA-09 still AMENDED-VERIFY.
+Live defect:         F4 — main AGENTS.md still drifts (Cove/Claude);
+                     architecturally contained (§15.1/§16/§17), not yet
+                     conformed (implementation).
+Conditions:          R-NEW-1 + C-02-r..C-10-r (gate to implementation,
+                     not a block on the AEC)
+Do NOT approve as:   enforced architecture / final baseline / implementation /
+                     production
+Next stage:          NEW AEC adversarial duel (R1.2 §42/§43) attacking
+                     registry authority, authority mapping, challenge
+                     independence, protected-security precedence, reset,
+                     stop/resume, task-packet enforcement, governance-of-
+                     governance, emergency changes, scalability, agent
+                     collusion, hidden permissions, stale artifacts,
+                     and failure of automated enforcement.
+```
+
+---
+
+## 10. NOTE ON CONVERGENCE (for the Lead Agent's synthesis)
+
+Across R1.0 → R1.1 → R1.2 the control has *tightened consistently in one direction*: each revision has removed another way for a document to claim more maturity than it has. R1.0 asserted enforcement it lacked; R1.1 stopped asserting and began specifying; R1.2 made the distinction *measurable* (E0–E4) and *un-claimable-falsely* (Question A/B). That is a real, verifiable progression, and it is why my verdict has moved from `RETURN TO AEV` (R1.0) to `APPROVE WITH CONDITIONS` (R1.1 and R1.2).
+
+I have *not* moved to a clean `APPROVE` because R1.2 introduced R-NEW-1 (risk-scaling regression) — a new Question-A defect — while the live AGENTS.md defect (F4) remains un-conformed. The architecture is now *honest about* both; it has not yet *fixed* both. That is the correct, and approvable, state for advancing to a new AEC duel: the next duel should attack R-NEW-1 and the enforcement-design gaps directly.
+
+---
+
+## Artifact Classification
+
+`ARCHITECTURAL ENGINEERING VERIFICATION STATEMENT — INDEPENDENT AGENT RE-VERIFICATION APPROVAL/DISSENT RESPONSE`
+
+**Reviewer:** Kilo-Code
+**Reviewed Artifact:** AEV R1.2 (`PBIIM_Development-AEV_Statement-202610031616`)
+**Decision:** `AEV APPROVE WITH CONDITIONS — FOR THE NEW AEC DUEL`
+**Authority to approve final baseline:** `NONE (H0, not yet instantiated — C-04-r)`
+
+`<<END BZJ-PGBD-0004.01-AEV-R1.2_Statement-Decision_Kilo-Code_20261003163055>>`
