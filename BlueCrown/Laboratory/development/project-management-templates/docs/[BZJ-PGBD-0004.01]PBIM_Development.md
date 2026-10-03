@@ -76,7 +76,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-4\. {{To be shared with each collaborating agent}}
+4\. {{To be shared with each collaborating agents}}
 
 
 
@@ -92,7 +92,7 @@ Thoroughly review and analyze the 'PBIM Architectural Engineering Verification S
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031616.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031715.txt
 
 
 
