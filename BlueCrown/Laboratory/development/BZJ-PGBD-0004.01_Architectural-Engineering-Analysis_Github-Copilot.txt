@@ -1,0 +1,824 @@
+<<START GITHUB>>
+
+# Architectural Engineering Analysis
+
+## 1. Executive Assessment
+
+The proposed Project Base Integration Initialization is conditionally viable, but it is not yet a stable architecture for use before Project Charter Development.
+
+What is sound:
+- The project correctly recognizes that pre-charter work needs structure, evidence, and governance.
+- The separation between AEA, AEV, AEC, and AECC is conceptually useful.
+- The idea of an artifact-controlled workflow is stronger than a prompt-only loop.
+- The distinction between canonical PM processes and custom workflow sections is necessary.
+
+What is not yet sound:
+- The custom lifecycle numbering is not sufficiently distinct from PM numbering, and this will create ambiguity in documents, GitHub, file names, and automation.
+- The proposal contains a likely recursive dependency between project proposal, template generation, and template analysis unless explicitly broken.
+- Many pre-charter activities are being treated as if they are official PM processes when they are not.
+- The no-human-approval assumption is unsafe.
+- The architecture under-specifies evidence ownership, baselining, and convergence policy.
+- The architecture does not yet clearly separate project evidence from production code and from project management documentation.
+- The challenge model is directionally correct but too weak unless it is explicitly adversarial and bounded.
+
+Overall position:
+- This is not ready for final AEV.
+- It is ready for controlled restructuring into a clearer pre-charter architecture with explicit artifact ownership, rigid identifier rules, and a bounded review process.
+
+## 2. Architecture Under Review
+
+The reviewed architecture is a multi-step pre-charter system:
+
+- Project Base Integration Initialization
+- Initial Project Template Generation Prompt
+- Architectural Engineering of Project Proposal Prompt
+- Architectural Challenge of Project Proposal Prompt
+- Project Template Generation
+- Architectural Engineering of Project Template
+- Architectural Challenge of Project Template
+- Project Template Initialization
+- Project Management
+- Develop Project Charter
+
+This is conceptually useful, but it is not yet a coherent dependency graph. It mixes:
+- governance processes;
+- engineering artifacts;
+- prompt artifacts;
+- proposal artifacts;
+- template artifacts;
+- project management artifacts;
+- execution artifacts.
+
+The main issue is not the existence of those stages; it is that the sequence does not yet encode a strict dependency model and therefore risks circular review, duplicated work, and unnecessary recursion.
+
+## 3. Requirements
+
+Explicit requirements from the supplied query:
+- The workflow must support project start before charter.
+- It must be evidence-driven and artifact-controlled.
+- It must support multi-agent independent analysis.
+- It must distinguish canonical PM identifiers from custom workflow identifiers.
+- It must preserve a lifecycle view for both PM and engineering.
+- It must include AEA → AEV → AEC → AECC.
+- It must support project template reuse.
+- It must govern repository, branch, evidence, and ADR decisions.
+- It must preserve human authority.
+- It must support bounded convergence and escalation.
+
+Implicit requirements:
+- A project manager should be able to understand project status without reading raw prompts.
+- A developer should know where the project sits in the lifecycle without needing PM taxonomy translation.
+- A repository should not mix evidence, code, and PM artifacts without explicit separation.
+- The architecture must work across small and large projects.
+- The workflow must not require every team to use the same tools and branch model.
+- The architecture must be portable enough for future generic reuse across projects.
+- The system must be able to detect and stop infinite review loops.
+
+## 4. Lifecycle Analysis
+
+The canonical PM lifecycle is valid and should be preserved. The project should not redefine it. However, the pre-charter custom workflow should live adjacent to the PM lifecycle without pretending to be PM process control.
+
+The major issue is lifecycle placement:
+- Architecture review, challenge, evidence validation, and security review belong before baseline approval but after requirements are reasonably stable.
+- Code review, testing, integration verification, and deployment verification are not pre-charter tasks; they belong after approved baseline and after implementation begins.
+- Assigning implementation verification activities to early identifiers is architecturally wrong if it makes them look like pre-charter governance steps.
+- Some activities described as “initialization” are in fact later-lifecycle controls and should be relocated.
+
+Recommended lifecycle bands:
+- Pre-charter: identity, repository setup, project definition, evidence model, task packet schema, initial proposal, AEA, AEV, challenge, baseline gate.
+- Post-charter: scope, schedule, cost, risk, procurement, resource planning, implementation, reviews, testing, deployment checks.
+- Monitoring and control: quality, change control, schedule, risk, stakeholder engagement.
+- Closing: formal closure, lessons learned, archive, final evidence lock.
+
+The leading lifecycle digit is useful but only when attached to a disciplined taxonomy. It is not sufficient by itself to govern workflow semantics.
+
+## 5. Identifier Architecture
+
+This is one of the most important defects in the current proposal.
+
+The critical issue:
+- `0004.1` and `0004.01` are currently being proposed as separate classes, but without a strict naming convention they will be ambiguous.
+- In practice, people, scripts, search, file naming, sorting, and APIs will treat them as near-identical strings.
+- This is especially dangerous in Markdown documents, filenames, Git branches, and automation.
+
+Recommended rule:
+- Canonical PM identifiers remain as they are and are never rewritten.
+- Custom workflow identifiers must always carry an explicit class prefix or namespace.
+- Example pattern:
+  - PM: `0004.1` = canonical PM process
+  - Workflow: `BZJ-PGBD-WF-0004.01` = custom engineering workflow item
+  - Artifact: `BZJ-PGBD-AEA-0004.01`
+  - Baseline: `BZJ-PGBD-BL-0004.01`
+- Do not use unprefixed `0004.01` as a generic identifier in the same namespace as canonical PM IDs.
+
+For identifiers like:
+- `BZJ-[PROJECT]-0005.0`
+- `BZJ-[PROJECT]-0620`
+- `BZJ-[PROJECT]-8010.3`
+- `BZJ-[PROJECT]-9004.7`
+- `BZJ-[PROJECT]-9999.9`
+
+The correct behavior is:
+- they should only be used if they are clearly custom project-specific identifiers, not canonical PM identifiers;
+- they should never masquerade as PM process IDs;
+- they must be assigned according to a controlled format and registry;
+- they should be searchable by class and lifecycle band.
+
+The architecture should not allow users to confuse:
+- PM process ID,
+- project artifact ID,
+- task packet ID,
+- execution stage,
+- baseline version.
+
+## 6. Project Base Integration Initialization
+
+The Project Base Integration Initialization should accomplish a narrow and controlled pre-charter setup, not a full project management platform.
+
+It should establish:
+- project identity;
+- project naming and ownership;
+- repository roles and source-of-truth;
+- documentation and evidence locations;
+- authorizations and human approval flow;
+- agent roles and responsibility boundaries;
+- task packet model;
+- project-specific instructions and AGENTS.md inheritance;
+- repository and branch policy;
+- ADR and decision ledger structure;
+- initial evidence capture model;
+- challenge/evaluation process;
+- stop conditions, escalation rules, and approval gates.
+
+It should not attempt to fully define:
+- final scope management;
+- cost and schedule management;
+- procurement and resource planning;
+- deployment rules and operational controls;
+- final implementation strategy;
+- final architecture beyond the baseline gate.
+
+The architecture should be treated as a project startup and governance enclosure, not a substitute for Project Charter Development or the PM plan.
+
+## 7. Proposal / Template Architecture
+
+This is where the current design has the strongest structural risk.
+
+The proposed sequence:
+- Project Base Integration Initialization
+- Initial Project Proposal
+- Project Template Generation Prompt
+- Project Template
+- Project Initialization
+- Project Charter
+
+This creates a real recursive risk unless explicitly constrained.
+
+The dependency model should be:
+- Initialization rules identify project identity, facts, constraints, and repository policy.
+- Initial project proposal establishes purpose, scope assumptions, and constraints.
+- Template generation is built from project proposal + initialization rules + reusable framework.
+- Template is reviewed using AEA and AEV.
+- Challenge occurs before baseline approval.
+- Only after challenge closure and approval does the project template become the controlled baseline for chartering.
+- Charter is then produced from the approved baseline and PM planning processes.
+
+The wrong architecture is:
+- proposal -> template -> proposal
+- proposal prompt -> analysis -> proposal prompt again
+- template generation without a controlled input model
+- template causing project proposal mutation without governance
+
+The correct model is linear with controlled gates, not recursive. A project proposal may feed a template, but the template should not re-enter the authorization loop unless a change request is explicitly made.
+
+## 8. AEA → AEV → AEC → AECC
+
+These artifacts are useful only if they have strict ownership and clear evidence requirements.
+
+AEA:
+- creates the initial engineering assessment;
+- documents assumptions, dependencies, gaps, and risks;
+- identifies explicit and implicit requirements;
+- should be created by the assigned analytical agent(s);
+- must not be treated as fact by default.
+
+AEV:
+- is the lead-agent controlled verification of AEA;
+- must integrate evidence and resolve contradictions;
+- must record which findings are accepted, modified, deferred, or rejected;
+- should decide whether the architecture can proceed to challenge.
+
+AEC:
+- is the challenge artifact;
+- must attack the architecture to falsify it;
+- should not be a polishing draft;
+- every significant objection must be traceable to a risk, assumption, gap, or design flaw;
+- rejected objections must be recorded with reasoning.
+
+AECC:
+- is challenge closure;
+- decides whether each challenge is fixed, accepted, rejected, deferred, or escalated;
+- is the control point for moving from analysis to baseline.
+
+Important requirement:
+- The challenge model must be formalized as adversarial but bounded.
+- An unresolved objection cannot be ignored merely because it is inconvenient.
+- The artifacts should be versioned, but not treated as immutable in perpetuity; they should be revisioned when decisions change.
+
+## 9. Multi-Agent Architecture
+
+The four-agent model is workable if role separation is real and not just cosmetic.
+
+Recommended structure:
+- ChatGPT Codex: architecture, dependency model, lifecycle coherence, governance, artifact integration.
+- Kilo Code: implementation feasibility, repository and code workflow, branch realism, testing practicality, failure recovery.
+- Google Jules: automation, Git and GitHub mechanics, reproducibility, orchestration, evidence generation.
+- GitHub Copilot: developer workflow, code review, CI, PR discipline, AGENTS.md, traceability.
+
+This model is useful because:
+- each agent sees a different failure mode;
+- the same issue will be analyzed by different lenses;
+- the lead agent can integrate rather than simply accept majority opinion.
+
+However, this model fails if:
+- agents are merely asked to rephrase the same prompt;
+- they all produce near-identical output;
+- one agent is treated as a “rubber stamp.”
+
+Independence must be protected by role-specific prompts, evidence expectations, and specific review criteria.
+
+## 10. Task Packet Architecture
+
+The Task Packet concept is valid and should be adopted as the standard interface between PM, lead agent, collaborators, artifacts, and review.
+
+A work item should not be a loose prompt; it should carry:
+- Task ID
+- Project ID
+- Section ID
+- Artifact ID
+- Objective
+- Context
+- Inputs
+- Required References
+- Assigned Agent
+- Role
+- Expected Output
+- Constraints
+- Evidence Requirements
+- Acceptance Criteria
+- Dependencies
+- Previous Artifacts
+- Repository
+- Branch
+- Destination Folder
+- Status
+- Reviewer
+- Approval Requirement
+- Stop Condition
+
+This is especially useful for:
+- pre-charter architecture work;
+- repository setup tasks;
+- artifact reviews;
+- challenge tracking;
+- issue routing;
+- evidence generation.
+
+Recommended model:
+- each work item receives its own task packet;
+- a centralized task packet registry may exist, but not as a substitute for item-level tasks;
+- task packets should be project-scoped and artifact-linked.
+
+## 11. Repository and Branch Architecture
+
+The supplied geometry is sensible:
+- production repo: `https://github.com/cupidblack/buzzjuice.net`
+- project management repo: `https://github.com/cupidblack/Koware_Management`
+- development folder under `BlueCrown/Laboratory/development/payment-gateway/`
+- docs folder under same.
+
+This separation should be preserved.
+
+Recommendations:
+- project evidence and governance artifacts belong in `Koware_Management`;
+- production code remains in `buzzjuice.net`;
+- agent-generated project documents should be stored in the project development docs area only if they are part of the project evidence domain;
+- code branches and doc/evidence branches must remain separate;
+- branch naming should differentiate purpose and ownership;
+- PRs should be used for evidence review and code review, not as a replacement for human approvals;
+- Issues/Projects can be incorporated for traceability, but they are not substitutes for formal evidence and ADR tracking.
+
+Branch model:
+- `docs/aea/<id>`
+- `docs/aev/<id>`
+- `docs/aec/<id>`
+- `prod/feature/<id>`
+- `prod/fix/<id>`
+- `ops/release/<id>`
+
+Do not make every branch agent-specific by default. That creates uncontrolled branch sprawl and makes evidence difficult to track.
+
+## 12. AGENTS.md / Skills Architecture
+
+`AGENTS.md` is useful, but only if explicitly scoped.
+
+Recommended approach:
+- root `AGENTS.md` for project-global rules;
+- subsystem-specific `AGENTS.md` files only where the subsystem has different operational constraints;
+- do not duplicate general instructions unnecessarily;
+- inheritance should be explicit and deterministic;
+- conflicts should be resolved according to:
+  1. root/global policy;
+  2. nearest directory scope;
+  3. explicit local override;
+  4. human authority.
+
+For skills:
+- avoid `.git/skills` because it is not a stable project artifact and is not portable;
+- `.github/skills` is more GitHub-compatible and discoverable;
+- however, a custom tracked skill directory may still be preferable if the team wants portability across local tooling and GitHub environments.
+- the important rule is not where a skill folder sits, but how discoverable and version-controlled it is.
+
+The chosen structure should support:
+- local development;
+- GitHub compatibility;
+- project reuse;
+- governance;
+- safe override behavior.
+
+## 13. ADR / Decision Ledger Architecture
+
+The ADR and Decision Ledger should be distinct but linked.
+
+ADR:
+- records formal architectural decisions;
+- should carry rationale, alternatives, rejected options, impact, and owner;
+- should be stable and reviewable.
+
+Decision Ledger:
+- records decisions made during execution;
+- includes operational, configuration, branch, review, and escalation decisions;
+- should be traceable to a project section, artifact, or task packet.
+
+Recommended relationship:
+- ADR is authoritative for architecture decisions;
+- Decision Ledger is authoritative for project execution decisions;
+- link both by decision ID and by project section ID;
+- preserve rejected alternatives and unresolved objections;
+- capture human decisions explicitly as human-owned decisions;
+- record both agent disagreements and final dispositions.
+
+This prevents architectural decisions from disappearing inside conversation history or private prompts.
+
+## 14. Evidence Architecture
+
+The evidence model should be formal and classification-based.
+
+Required classifications:
+- FACT
+- INFERENCE
+- ASSUMPTION
+- PROPOSAL
+- RECOMMENDATION
+- DECISION
+- CONSTRAINT
+- RISK
+- UNKNOWN
+
+Optional but useful:
+- OBSERVED
+- VALIDATED
+- DISPUTED
+- REJECTED
+- DEFERRED
+- ESCALATED
+
+For each significant finding, store:
+- Finding
+- Evidence
+- Source
+- Confidence
+- Impact
+- Severity
+- Affected Artifact
+- Recommendation
+- Disposition
+- Decision
+- Decision Owner
+- Status
+
+This is necessary because current pre-charter architecture is easy to drift into “agent consensus” without evidence traceability.
+
+## 15. Approval and Convergence
+
+The workflow must distinguish:
+- Agent approval: technically acceptable from one analytical perspective;
+- Lead agent verification: integrated evidence baseline;
+- Human approval: authorized baseline acceptance.
+
+All three are not equivalent.
+- Agent approval alone is not baseline approval.
+- Lead-agent verification alone is not human acceptance.
+- Human approval is mandatory for baseline acceptance, critical security approvals, production access, and irreversible changes.
+
+Convergence model should be bounded:
+- PASS
+- PASS WITH CONDITIONS
+- REVISION REQUIRED
+- BLOCKED
+- ESCALATE
+
+Rules:
+- maximum review cycles should be enforced;
+- severity-based escalation should trigger automatically;
+- unresolved objection thresholds should trigger escalation;
+- unresolved critical risks should block baseline approval;
+- major scope changes should re-enter AEA/AEV.
+
+This prevents the current “review and fix until approved” loop from becoming unbounded.
+
+## 16. Architectural Challenge
+
+The challenge should occur:
+- before baseline approval;
+- optionally again after implementation for architecture drift review;
+- before production deployment for critical system changes.
+
+A challenge must attempt to falsify the architecture.
+
+It should target:
+- correctness;
+- security;
+- reliability;
+- maintainability;
+- scalability;
+- compatibility;
+- cost;
+- operational recovery;
+- changeability;
+- rollback readiness;
+- vendor lock-in;
+- human workflow and automation risks.
+
+The challenge should not merely ask, “Can this be improved?” It should ask, “Under what conditions does this fail?” That is the right adversarial contract.
+
+## 17. Implementation Workflow
+
+The current proposed workflow is too early for implementation logic to be captured in a start-up architecture.
+
+The correct flow is:
+- Requirement
+- Analysis
+- Verification
+- Challenge
+- Baseline
+- Implementation
+- Code Review
+- Testing
+- Integration
+- Deployment Verification
+
+Code review and testing must not be assigned early lifecycle IDs simply because they were observed early in the design. They belong after the baseline and during implementation and integration.
+
+The pre-charter phase should stop at:
+- baseline candidate,
+- challenge closure,
+- approval gate,
+- then implementation assignment.
+
+## 18. Change Management
+
+After baseline approval:
+- changes must be classified:
+  - NO-IMPACT CHANGE
+  - MINOR CHANGE
+  - ARCHITECTURAL CHANGE
+  - SCOPE CHANGE
+  - SECURITY-CRITICAL CHANGE
+  - EMERGENCY CHANGE
+
+Requirements:
+- who can request a change;
+- who analyzes it;
+- whether AEA/AEV/AEC are required;
+- whether ADR and Decision Ledger are updated;
+- whether baseline version changes;
+- whether downstream artifacts require revalidation.
+
+The architecture should state explicitly that not every change triggers a full AEA; but architectural and security-critical changes should.
+
+## 19. Automation
+
+Automation is valuable only where it reduces error and improves traceability without adding opaque control.
+
+Practical automation:
+- GitHub Actions for evidence checks and validation;
+- PR templates;
+- issue templates;
+- branch protection;
+- CODEOWNERS;
+- identifier validation;
+- artifact status checks;
+- ADR indexing;
+- Decision Ledger indexing;
+- markdown linting;
+- link validation;
+- release/baseline tag checks.
+
+Not recommended by default:
+- fully autonomous approval loops;
+- automatic code deployment without human authorization;
+- one-click architecture approval by agents.
+
+Evaluation criteria should be:
+- value;
+- complexity;
+- reliability;
+- maintenance cost;
+- security;
+- portability;
+- human oversight.
+
+## 20. Security
+
+This area requires explicit human gatekeeping.
+
+Mandatory human authority:
+- production repository access;
+- production data access;
+- secrets and credentials;
+- deployment permissions;
+- branch protection exceptions;
+- database credentials;
+- environment variables;
+- automated deploy pipelines with production write access.
+
+Security principles:
+- never embed secrets in prompts;
+- no autonomous code execution with production permissions;
+- separate evidence branches from production code branches;
+- require human review for any system that touches production infrastructure.
+
+## 21. Scalability
+
+The current architecture is likely to scale only if it remains simple and explicit.
+
+Small project:
+- can work with one repo and a small task packet set.
+
+Medium project:
+- requires role separation and explicit artifact traceability.
+
+Large project:
+- requires repository boundaries, multiple teams, and separate evidence and code tracks.
+
+Multi-project Koware environment:
+- requires a generic reusable template and strict naming rules.
+- otherwise, cross-project confusion becomes the dominant failure mode.
+
+Clarifying principle:
+- generic framework should remain reusable;
+- project-specific configuration should remain isolated and explicit.
+
+## 22. Failure Modes
+
+Key failure modes include:
+- Agent unavailable
+- Agent produces poor analysis
+- Agents disagree
+- Lead agent misinterprets evidence
+- Human approval delayed
+- Repository unavailable
+- Branch conflict
+- Wrong artifact version
+- Stale reference
+- Broken link
+- Incorrect identifier
+- Duplicate identifier
+- Missing evidence
+- Unresolved objection
+- Infinite review loop
+- Scope drift
+- Prompt drift
+- Architecture drift
+- Code/document divergence
+- Production branch contamination
+- Secret exposure
+- Failed deployment
+- Rollback failure
+
+Detection, prevention, mitigation, ownership, escalation, recovery, and evidence should be recorded for each material failure mode.
+
+The most critical structural failures are:
+- incorrect identifier namespace;
+- recursive dependency loop;
+- challenge not adversarial enough;
+- approval gate lacking human control;
+- branch contamination between documentation and production flow.
+
+## 23. Migration
+
+Migration should be hybrid, not immediate or full-scope rewrite.
+
+Recommended approach:
+- new projects should adopt the controlled architecture immediately;
+- active projects should migrate in stages;
+- legacy prompt loops should be archived and mapped to new artifacts;
+- old identifiers should be documented and preserved in a migration log;
+- branches should be normalized by purpose;
+- ADRs and decisions should be imported into the new evidence model.
+
+Immediate full migration is too risky, because existing projects have active implementation and historical decisions. A project-by-project hybrid approach is safer and more realistic.
+
+## 24. Findings Register
+
+1. Finding: The architecture is conceptually valid but structurally under-specified.
+   - Evidence: The proposed lifecycle is coherent but the dependency graph is not explicit.
+   - Severity: High
+   - Impact: Recursion, delays, inconsistent artifact ownership
+   - Recommendation: Define a strict dependency model and remove recursive loops.
+   - Confidence: High
+
+2. Finding: Canonical PM identifiers and custom workflow identifiers are likely to collide.
+   - Evidence: `0004.1` vs `0004.01` can be confused in Markdown, files, Git, scripts, and APIs.
+   - Severity: High
+   - Impact: Search, sorting, automation failure
+   - Recommendation: Keep canonical PM IDs unchanged; require explicit custom namespace prefixes.
+   - Confidence: High
+
+3. Finding: The proposed section order can create a template/proposal recursion loop.
+   - Evidence: Project template generation and proposal analysis are linked without a clear flow.
+   - Severity: High
+   - Impact: Unbounded rework and wasted review cycles
+   - Recommendation: Sequence proposal -> template generation -> AEA -> AEV -> challenge -> charter, with no bidirectional re-entry.
+   - Confidence: High
+
+4. Finding: Early lifecycle assignment for implementation controls is misaligned.
+   - Evidence: code review, testing, deployment verification are not pre-charter activities.
+   - Severity: High
+   - Impact: Lifecycle false positives and governance confusion
+   - Recommendation: Place implementation verification after baseline and implementation start.
+   - Confidence: High
+
+5. Finding: Human authority is under-specified.
+   - Evidence: The workflow requires approval but does not define mandatory human gates.
+   - Severity: High
+   - Impact: unsafe automation, non-reviewable decisions
+   - Recommendation: Define mandatory human authorization for baseline approval, production access, secret handling, and critical changes.
+   - Confidence: High
+
+6. Finding: The evidence model is currently implicit rather than formalized.
+   - Evidence: Proposed artifacts do not clearly define evidence typing, source, disposition, confidence, or decision linkage.
+   - Severity: Medium
+   - Impact: weakened traceability and accountability
+   - Recommendation: Introduce formal evidence classification and storage.
+   - Confidence: High
+
+7. Finding: AEC is not sufficiently adversarial unless explicitly defined as falsification.
+   - Evidence: Current challenge language can degrade into wording improvement instead of architecture attack.
+   - Severity: High
+   - Impact: weak challenge process
+   - Recommendation: Require challenge artifacts to test assumptions, failure modes, and invalidation conditions.
+   - Confidence: High
+
+8. Finding: Branch and repository strategy needs stronger separation of evidence from code.
+   - Evidence: `Koware_Management` is PM/documentation repo, `buzzjuice.net` is production repo.
+   - Severity: Medium
+   - Impact: cross-contamination and confusion between proof and execution
+   - Recommendation: keep evidence/document branches separate from code branches.
+   - Confidence: High
+
+9. Finding: The Task Packet concept is strong but should be per-item, not centralized only.
+   - Evidence: workflow needs traceability for independent work items.
+   - Severity: Medium
+   - Impact: weak ownership and inconsistent progress tracking
+   - Recommendation: use item-level task packets with centralized registry.
+   - Confidence: Medium
+
+10. Finding: Project template should be reusable but not over-generalized.
+   - Evidence: The project must move from `BZJ-PGBD` to `BZJ-[PROJECT]` eventually.
+   - Severity: Medium
+   - Impact: template becomes too rigid or too vague
+   - Recommendation: distinguish generic framework from project-specific config.
+   - Confidence: Medium
+
+## 25. Proposed Changes
+
+RETAIN:
+- distinction between project initialization and charter;
+- use of AEA, AEV, AEC, AECC;
+- role-specialized multi-agent analysis;
+- evidence-based architecture;
+- task packet concept;
+- separate PM governance and custom workflow identifiers;
+- project management repo and production repo separation.
+
+MODIFY:
+- identifier naming scheme;
+- lifecycle placement of review/testing and implementation verification;
+- dependency model between proposal and template;
+- challenge protocol to force adversarial testing;
+- approval model to include mandatory human gates;
+- convergence process to be bounded and escalated;
+- decision ledger/ADR linkage.
+
+REMOVE:
+- the idea that custom workflow numbers can approximate PM IDs without explicit namespace;
+- recursive proposal/template cycle;
+- the concept that repeated agent agreement equals evidence;
+- the assumption that implementation may begin before baseline gate and challenge closure.
+
+ADD:
+- explicit evidence registry and classification;
+- explicit decision ledger and ADR linkage;
+- task packet registry;
+- branch taxonomy;
+- bounded review model;
+- mandatory human approval gates;
+- risk escalation thresholds.
+
+DEFER:
+- full project-template automation;
+- broad workspace automation;
+- production integration automation until baseline is approved.
+
+ESCALATE:
+- any unresolved critical security, platform, or production-risk issue;
+- any architectural issue affecting scope, safety, or human authority.
+
+## 26. Proposed Lifecycle Map
+
+Recommended lifecycle sequence:
+
+1. Project identity and repository setup
+2. Initial project proposal
+3. Initialization rules and constraints
+4. Template generation input package
+5. AEA for proposal/template input
+6. AEV candidate review
+7. AEC challenge
+8. AECC closure
+9. Pre-charter baseline approval
+10. Project Charter Development
+11. PM planning processes
+12. Implementation
+13. Code review
+14. Testing
+15. Integration verification
+16. Deployment verification
+17. Monitoring and control
+18. Closure
+
+This map preserves the intent of the architecture while preventing early confusion between charter work and implementation work.
+
+## 27. Proposed Identifier Map
+
+Recommended identifier format:
+- PM canonical: `0004.1`
+- Workflow: `BZJ-PGBD-WF-0004.01`
+- Artifact: `BZJ-PGBD-AEA-0004.01`
+- Challenge: `BZJ-PGBD-AEC-0004.07`
+- Baseline: `BZJ-PGBD-BL-0004.09`
+- Charter: `BZJ-PGBD-CH-0004.1` or maintain project-charter numbering under PM conventions as needed
+
+Rules:
+- canonical PM identifiers should remain unchanged;
+- custom identifiers must not be silently translated into PM IDs;
+- all workflow and artifact IDs must carry project and class prefixes;
+- baseline and artifact IDs should be searchable and script-friendly.
+
+## 28. Unresolved Questions
+
+1. Should the initial Project Proposal be an optional artifact or mandatory gate before template generation?
+2. What is the exact source-of-truth rule for project evidence across `Koware_Management` and `buzzjuice.net`?
+3. Should a single task packet registry exist for all work items, or should each project have separate packet registries?
+4. Should AGENTS.md be inherited by directory by default or only when explicitly configured?
+5. Who has the final authority to resolve an unresolved challenge verdict?
+6. Should project branches be named by function or by owner?
+7. What is the minimum artifact set required before the first project charter can be approved?
+8. What level of automation is acceptable before human approval is required?
+9. What constitutes a “baseline” for a project-specific template vs a generic framework template?
+10. Should a project-specific ADR ever mutate into a generic template ADR?
+
+## 29. Conditions for AEV
+
+The architecture should not proceed to AEV until the following conditions are met:
+
+- the recursion between proposal and template is broken and dependency flow is explicit;
+- canonical PM IDs are separated from custom workflow IDs with no ambiguity;
+- the lifecycle placement of implementation review/testing is corrected;
+- human approval gates are formalized;
+- evidence classification and traceability are defined;
+- challenge artifacts are explicitly adversarial, not merely editorial;
+- repository and branch separation is defined;
+- project evidence and production code ownership are resolved;
+- AGENTS.md and skill architecture are explicitly scoped;
+- task packet standard is defined;
+- bounded convergence and escalation rules are included;
+- the generic reusable template is separated from the project-specific configuration.
+
+Until those conditions are satisfied, the architecture is not ready for controlled AEV baseline approval.
+
+This analysis is intentionally adversarial, because the purpose of the Architectural Engineering Analysis phase is to prevent a weak or recursive initialization model from becoming a permanent project governance system.
+
+<<STOP GITHUB>>

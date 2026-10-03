@@ -20,7 +20,31 @@
 
 
 
-### \[KOWARE-IAPD-PMO-\[BASE-IDENTIFIER]-\[PROJECT-ABBREVIATION]-\[IDENTIFIER]]
+### \[\[KOWARE-IAPD-PMO]-\[BASE-IDENTIFIER]-\[PROJECT-ABBREVIATION]-\[IDENTIFIER]]
+
+
+
+BASE PROJECT R\&D FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-management-templates
+
+
+
+BASE PROJECT R\&D DOCS FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-management-templates/docs
+
+
+
+BASE PROJECT PRODUCTION REPOSITORY: https://github.com/cupidblack/buzzjuice.net
+
+
+
+LEAD AGENT: ChatGPT Codex
+
+SUPPORTING AGENTS: Kilo Code, Google Jules, GitHub Copilot
+
+
+
+TIMESTAMP: 2026-10-03T00:02:13Z
+
+
 
 #### **DEVELOPMENT WORKFLOW REVIEW**
 
@@ -118,11 +142,11 @@ The previous production workflow for our programming and coding was as follows:
 
 
 
-Referencing the 49 project management processes and the partially developed project identity structure, thoroughly review and analyze the previous workflow and this 'Project Base Integration Initialization' development strategy then develop the section into an 'Architectural Engineering Analysis' of the 'Project Base Integration Initialization' that would be shared with collaborating agents. The agent responses to the 'Architectural Systems and Engineering Analysis' would be shared here to assist in producing an 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization' that would be used to generate the appropriate finalized 'Project Base Integration Initialization' that would be used to produce the desired Project Template.
+Referencing the 49 project management processes and the partially developed project identity structure, thoroughly review and analyze the previous workflow and this 'Project Base Integration Initialization' development strategy then develop this whole section into an 'Architectural Engineering Analysis Query' of the 'Project Base Integration Initialization' that would be shared with collaborating agents. The agent responses to the 'Architectural Engineering Analysis Query' would be shared with the lead agent to assist in producing a controlled 'Architectural Engineering Verification' baseline candidate document of the 'Project Base Integration Initialization' that would be used to generate the appropriate finalized 'Project Base Integration Initialization' that would be used to produce the desired project proposal and template.
 
 
 
-Review '\[KOWARE-IAPD-PMO-BZJ-PGBD-0004.01] PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT' as an example.
+Review '\[KOWARE-IAPD-PMO]-\[BZJ-PGBD-0004.01] PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT' as an example.
 
 
 
@@ -156,27 +180,27 @@ Review and develop this section 0004.01 to 0004.09 before Project Charter Develo
 
 
 
-1\. Initial 'Project Base Integration Initialization' is shared with the lead agent to generate an 'Architectural Systems and Engineering Analysis' of the 'Project Base Integration Initialization'.
+1\. The 'Project Base Integration Initialization' is shared with the lead agent to generate an 'Architectural Engineering Analysis Query' of the 'Project Base Integration Initialization'.
 
 
 
-2\. 'Architectural Systems and Engineering Analysis' of the 'Project Base Integration Initialization' is shared with all collaborating agents.
+2\. The 'Architectural Engineering Analysis Query' of the 'Project Base Integration Initialization' is shared with all collaborating agents.
 
 
 
-3\. Responses from all collaborating agents shared with lead agent for review and to generate an 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization'.
+3\. The 'Architectural Engineering Analysis Query' responses from all collaborating agents are shared with the lead agent for review and to generate a controlled 'Architectural Engineering Verification' baseline candidate document based on the 'Project Base Integration Initialization'.
 
 
 
-4\. 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization' is shared with collaborating agents for review, further developments and approval.
+4\. The controlled 'Architectural Engineering Verification' baseline candidate document based on the 'Project Base Integration Initialization' is shared with collaborating agents for review, further developments and approval.
 
 
 
-5\. If any collaborating agent disapproves the 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization', then the lead agent addresses the blocking issues and prepares an updated 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization' and shares it with all collaborating agents for review, further developments and approval as in step 4. Repeat steps 4 and 5 till all collaborating agents approve the 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization'.
+5\. If any collaborating agent disapproves the 'Architectural Engineering Verification', then the lead agent addresses the blocking issues and prepares an updated controlled 'Architectural Engineering Verification' baseline candidate document and shares it with all collaborating agents for review, further developments and approval as in step 4. Repeat steps 4 and 5 till all collaborating agents approve the 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization'.
 
 
 
-6\. If all collaborating agents approved the 'Architectural Systems and Engineering Verification' of the 'Project Base Integration Initialization', then final 'Project Base Integration Initialization' is generated.
+6\. If all collaborating agents approved the 'Architectural Engineering Verification', then the final 'Project Base Integration Initialization' is generated.
 
 
 
@@ -184,19 +208,23 @@ Review and develop this section 0004.01 to 0004.09 before Project Charter Develo
 
 
 
-7\. The development of the 'Project Base Integration Initialization' is complete by this stage so the 'Project Base Integration Initialization' is used to generate an 'Architectural Systems and Engineering Analysis' of the 'Project Proposal Prompt'.
+7\. The development of the 'Project Base Integration Initialization' is complete by this stage so the updated 'Project Base Integration Initialization' is used to generate and share an 'Architectural Engineering Analysis Query' of the 'Project Proposal Prompt'.
 
 
 
-8\. 'Architectural Systems and Engineering Verification' of the 'Project Proposal Prompt' is shared with collaborating agents for review, further developments and approval.
+8\. The 'Architectural Engineering Analysis Query' responses from all collaborating agents are shared with the lead agent to produce a controlled 'Architectural Engineering Verification' baseline candidate document based on the 'Project Proposal Prompt'
 
 
 
-9\. If any collaborating agent disapproves the 'Architectural Systems and Engineering Verification' of the 'Project Proposal Prompt', then the lead agent addresses the blocking issues and prepares an updated 'Architectural Systems and Engineering Verification' of the 'Project Proposal Prompt' and shares it with all collaborating agents for review, further developments and approval as in step 8. Repeat steps 8 and 9 till all collaborating agents approve the 'Architectural Systems and Engineering Verification' of the 'Project Proposal Prompt'.
+9\. The 'Architectural Engineering Verification' of the 'Project Proposal Prompt' is shared with collaborating agents for review, further developments and approval.
 
 
 
-10\. If all collaborating agents approved the 'Architectural Systems and Engineering Verification' of the 'Project Proposal Prompt', then the final 'Project Proposal Prompt' is generated.
+10\. If any collaborating agent disapproves the 'Architectural Engineering Verification' of the 'Project Proposal Prompt', then the lead agent addresses the blocking issues and prepares an updated 'Architectural Engineering Verification' document then shares it with all collaborating agents for review, further developments and approval as in step 9. Repeat steps 9 and 10 till all collaborating agents approve the controlled 'Architectural Engineering Verification' baseline candidate document.
+
+
+
+10\. If all collaborating agents approved the 'Architectural Engineering Verification' document, then the final 'Project Proposal Prompt' is generated.
 
 
 
@@ -204,7 +232,7 @@ Review and develop this section 0004.01 to 0004.09 before Project Charter Develo
 
 
 
-11\. The development of the 'Project Proposal Prompt' is complete by this stage so the 'Project Proposal Prompt' is used to generate an 'Architectural Systems and Engineering Analysis' of the 'Project Proposal Prompt'.
+11\. The development of the 'Project Proposal Prompt' is complete by this stage so the 'Project Proposal Prompt' is used to generate an 'Architectural Engineering Analysis Query' of the unique 'Project Template'.
 
 
 
@@ -252,15 +280,15 @@ Referencing the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt'
 
 
 
-1\. Thoroughly review and analyze the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt' then develop it into an 'Architectural Engineering Analysis' document. Agent responses would be shared here to produce an 'Architectural Engineering Verification' document.
+1\. Thoroughly review and analyze the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt' then develop it into an 'Architectural Engineering Analysis Query' document to share with collaborating agents. Agent responses would be shared here to produce a controlled 'Architectural Engineering Verification' baseline candidate document.
 
 
 
-2\. Thoroughly review and analyze the 'Architectural Engineering Analysis' documents shared by the collaborating agents to develop an 'Architectural Engineering Verification' document.
+2\. Thoroughly review and analyze the 'Architectural Engineering Analysis' documents shared by the collaborating agents to develop a controlled 'Architectural Engineering Verification' baseline candidate document.
 
 
 
-<<START Architectural Engineering Analysis Reports>>
+**<<START Architectural Engineering Analysis Reports>>**
 
 
 
@@ -268,11 +296,11 @@ Referencing the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt'
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/jules-16045588484820241806-d33c5a89/BlueCrown/Laboratory/development/bcrd-production-workflow-0.6.txt
+https://github.com/cupidblack/Koware\_Management/blob/kilo/mute-summit-kd9/IAPD/AGENCY/BZJ-PGBD-0000.01\_Architectural-Engineering-Analysis\_Kilo-Code\_202610030009.md
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/kilo/mute-summit-kd9/IAPD/AGENCY/IAPD-PMO-BZJ-PGBD-Architectural-Engineering-Analysis.md
+https://github.com/cupidblack/Koware\_Management/blob/jules-16045588484820241806-d33c5a89/BlueCrown/Laboratory/development/payment-gateway/docs/BZJ-PGBD-0004.01\_Architectural-Engineering-Analysis\_Google-Jules.md
 
 
 
@@ -280,15 +308,34 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-<<STOP Architectural Engineering Analysis Reports>>
+**<<STOP Architectural Engineering Analysis Reports>>**
 
 
 
-3\. If any agent disapproves of the 'Architectural Engineering Verification' document, resolve all issues, update the 'Architectural Engineering Verification' document then reshare with all collaborating agents for review and approval.
+3\. Thoroughly review and analyze the 'Architectural Engineering Verification' document for approval:
 
 
 
-4\. Once all the collaborating agents review and approve the 'Architectural Engineering Verification' document, an architectural challenge would be prepared to attack the proposed architecture rather than merely refining it.
+**<<START Architectural Engineering Verification Report>>**
+
+
+
+{{A link to the 'Architectural Engineering Verification' document should be posted here}}
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/Architectural-Engineering-Verification-Codex.txt
+
+
+**<<STOP Architectural Engineering Verification Report>>**
+
+
+
+4\. If any agent disapproves of the 'Architectural Engineering Verification' document, resolve all issues, update the 'Architectural Engineering Verification' document then reshare with all collaborating agents for review and approval.
+
+
+
+5\. Once all the collaborating agents review and approve the 'Architectural Engineering Verification' document, an architectural challenge would be prepared to attack the proposed architecture rather than merely refining it.
 
 
 
