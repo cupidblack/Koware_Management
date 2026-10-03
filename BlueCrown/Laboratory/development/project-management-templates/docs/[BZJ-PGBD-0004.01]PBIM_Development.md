@@ -92,7 +92,7 @@ Thoroughly review and analyze the 'PBIM Architectural Engineering Verification S
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031556.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
 
 
 
@@ -116,7 +116,7 @@ The following are 'PBIM Architectural Engineering Verification' responses from t
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031733.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
 
 
 
@@ -124,7 +124,31 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-If any agent disapproves of the 'PBIM Architectural Engineering Verification' document, resolve all issues, update the 'PBIM Architectural Engineering Verification' document then reshare with all collaborating agents for review and approval
+If the 'PBIM Architectural Engineering Verification' document does not get approval after revisions 1.0, 1.1, 1.2, 1.3 and 1.4, do not produce any more revisions after revision 1.4. Instead, request for:
+
+
+
+1\. The current PBIM document
+
+2\. The 'PBIM Architectural Engineering Analysis Query' document
+
+3\. All 'PBIM Architectural Engineering Analysis' responses
+
+4\. All revisions of the 'PBIM Architectural Engineering Verification' statement documents
+
+5\. All responses to the 'PBIM Architectural Engineering Verification' statement documents
+
+6\. All versions of the 'PBIM Architectural Engineering Challenge - Adversarial Duel' documents
+
+7\. All results from the 'PBIM Architectural Engineering Challenge - Adversarial Duel'.
+
+
+
+An updated PBIM document would be produced then manually updated again before have a new 'PBIM Architectural Engineering Analysis Query' document prepared.
+
+
+
+If any agent disapproves of the 'PBIM Architectural Engineering Verification' document, resolve all issues, update the 'PBIM Architectural Engineering Verification' document then reshare with all collaborating agents for review and approval.
 
 
 
@@ -148,7 +172,7 @@ Complete the following 'PBIM Architectural Engineering Challenge - Adversarial D
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031642.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
 
 
 
@@ -172,7 +196,7 @@ The following are the results of the 'PBIM Architectural Engineering Challenge D
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031650.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
 
 
 
