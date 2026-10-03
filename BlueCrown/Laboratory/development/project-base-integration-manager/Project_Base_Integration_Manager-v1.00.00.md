@@ -308,27 +308,71 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-If the 'PBIM Architectural Engineering Verification' document does not get approval after revisions 1.0, 1.1, 1.2, 1.3 and 1.4, do not produce any more revisions after revision 1.4. Instead, request for:
+If the 'PBIM Architectural Engineering Verification' document does not get approval after revisions 1.0, 1.1, 1.2, 1.3 and 1.4, do not produce any more revisions after revision 1.4. Instead, request for all documents to generate an updated PBIM document to restart the cycle with.
 
 
 
-1\. The current PBIM document
-
-2\. The 'PBIM Architectural Engineering Analysis Query' document
-
-3\. All 'PBIM Architectural Engineering Analysis' responses
-
-4\. All revisions of the 'PBIM Architectural Engineering Verification' statement documents
-
-5\. All responses to the 'PBIM Architectural Engineering Verification' statement documents
-
-6\. All versions of the 'PBIM Architectural Engineering Challenge - Adversarial Duel' documents
-
-7\. All results from the 'PBIM Architectural Engineering Challenge - Adversarial Duel'.
+Here is a compiled list of all documents generated so far:
 
 
 
-An updated PBIM document would be produced then manually updated again before have a new 'PBIM Architectural Engineering Analysis Query' document prepared.
+1\. The current PBIM document:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
+
+
+
+2\. The 'PBIM Architectural Engineering Analysis Query' document:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
+
+
+
+3\. All 'PBIM Architectural Engineering Analysis Query' reports:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
+
+
+
+4\. All revisions of the 'PBIM Architectural Engineering Verification' statement documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
+
+
+
+5\. All responses to the 'PBIM Architectural Engineering Verification' statement documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
+
+
+
+6\. All versions of the 'PBIM Architectural Engineering Challenge - Adversarial Duel' documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+
+
+
+7\. All results from the 'PBIM Architectural Engineering Challenge - Adversarial Duel':
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+
+
+
+Generate an updated PBIM document based on the current PBIM document structure and requirements. Particularly update each section in the PBIM document with a identifier headings for implementation. Include updated prompts for the lead agent and collaborating agents. The PBIM would finally be manually updated again before a new 'PBIM Architectural Engineering Analysis Query' document would be prepared.
 
 
 
