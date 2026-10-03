@@ -1,4 +1,4 @@
-# **PROJECT BASE INTEGRATION INITIALIZATION MANAGER \[PBIIM]**
+# **PROJECT BASE INTEGRATION MANAGER \[PBIM]**
 
 # 
 
@@ -532,7 +532,7 @@ ChatGPT Codex: 'main/chatgpt-codex'
 
 ### **\[BZJ-PGBD-0004.09]**
 
-### **Project Management**
+### **Project Initialization**
 
 
 
