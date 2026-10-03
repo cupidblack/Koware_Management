@@ -320,11 +320,11 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-Thoroughly review and analyze the 'Architectural Engineering Verification' document for approval:
+Thoroughly review and analyze the 'Architectural Engineering Verification' document then share your decision for approval here:
 
 
 
-**<<START Architectural Engineering Verification Report>>**
+**<<START Architectural Engineering Verification Statement>>**
 
 
 
@@ -332,11 +332,11 @@ Thoroughly review and analyze the 'Architectural Engineering Verification' docum
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/Architectural-Engineering-Verification-Codex-202610030035.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Statement-Codex-202610030842.txt
 
 
 
-**<<STOP Architectural Engineering Verification Report>>**
+**<<STOP Architectural Engineering Verification Statement>>**
 
 
 
