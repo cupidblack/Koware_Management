@@ -254,6 +254,10 @@ Generate a PBIM document based on the shared PBIM reference documents, paying pa
 
 
 
+3\. The created PBIM document should conform to modern project management principles, structures and standards. 
+
+
+
 The created PBIM would finally be manually updated again before the PBIM document would go through the Architectural Engineering development.
 
 
