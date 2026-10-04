@@ -60,11 +60,11 @@ As the project development tools and techniques being implemented have been evol
 
 
 
-Referencing the 49 project management processes and the suggested development workflow of the projects, a workflow has been developed with titles and project identifiers based on the 49 project management processes.
+Referencing the 40 project management processes outlined in PMPBOK 8th edition and the suggested development workflow of the projects, a workflow has been developed with titles and project identifiers based on the 40 project management processes.
 
 
 
-Basically, the 49 project management processes have been ordered so that each item is tackled in sequence from the '4.1 Develop Project Charter' to the '4.7 Close Project or Phase'. To keep the processes in the sequential order, a prefix has been attached to the numbering. For instance, "0004.1 Develop Project Charter" to "9004.7 Close Project or Phase".
+Basically, the 40 project management processes have been ordered so that each item is tackled in sequence from the legacy '4.1 Develop Project Charter' to the '4.7 Close Project or Phase'. To keep the processes in the sequential order, a prefix has been attached to the numbering. For instance, "0004.1 Develop Project Charter" to "9004.7 Close Project or Phase".
 
 
 
@@ -72,43 +72,43 @@ Here is the updated list of processes with the prefix on each numbered process:
 
 
 
-#### **<<START 49 PROCESSES OF PROJECT MANAGEMENT>>**
+#### **<<START 40 PROCESSES OF PROJECT MANAGEMENT>>**
 
 
 
-0004.1 Develop Project Charter, 0013.1 Identify Stakeholders, 1004.2 Develop Project Management Plan, 1005.1 Plan Scope Management, 1005.2 Collect Requirements, 1005.3 Define Scope, 1005.4 Create WBS, 1006.1 Plan Schedule Management, 1006.2 Define Activities, 1006.3 Sequence Activities, 2006.4 Estimate Activity Durations, 2006.5 Develop Schedule, 2007.1 Plan Cost Management, 2007.2 Estimate Costs, 2007.3 Determine Budget, 2008.1 Plan Quality Management, 2009.1 Plan Resource Management, 2009.2 Estimate Activity Resources, 2010.1 Plan Communications Management, 2011.1 Plan Risk Management, 3011.2 Identify Risks, 3011.3 Perform Qualitative Risk Analysis, 3011.4 Perform Quantitative Risk Analysis, 3011.5 Plan Risk Responses, 3012.1 Plan Procurement Management, 3013.2 Plan Stakeholder Engagement, 4004.3 Direct and Manage Project Work, 4004.4 Manage Project Knowledge, 5008.2 Manage Quality, 5009.3 Acquire Resources, 6009.4 Develop Team, 6009.5 Manage Team, 6010.2 Manage Communications, 6011.6 Implement Risk Responses, 6012.2 Conduct Procurements, 6013.3 Manage Stakeholder Engagement, 7004.5 Monitor and Control Project Work, 7004.6 Perform Integrated Change Control, 7005.5 Validate Scope, 7005.6 Control Scope, 8006.6 Control Schedule, 8007.4 Control Costs, 8008.3 Control Quality, 8009.6 Control Resources, 8010.3 Monitor Communications, 8011.7 Monitor Risks, 8012.3 Control Procurements, 8013.4 Monitor Stakeholder Engagement, 9004.7 Close Project or Phase
+GOV-01-0004.1 Initiate Project or Phase, STK-01-0013.1 Identify Stakeholders, GOV-02-1004.2 Integrate and Align Project Plans (ref: 8.1), SCP-01-1005.1 Plan Scope Management, SCP-02-1005.2 Elicit and Analyze Requirements, SCP-03-1005.3 Define Scope, SCP-04-1005.4 Develop Scope Structure, SCH-01-1006.1 Plan Schedule Management, SCH-02-1006.2 Develop Schedule (ref: 6.3, 6.4, 6.5), FIN-01-2007.1 Plan Financial Management, FIN-02-2007.2 Estimate Costs, FIN-03-2007.3 Develop Budget, GOV-05-2008.1 Manage Quality Assurance (ref: 8.2), RES-01-2009.1 Plan Resource Management, RES-02-2009.2 Estimate Resources, STK-03-2010.1 Plan Communications Management, RSK-01-2011.1 Plan Risk Management, RSK-02-3011.2 Identify Risks, RSK-03-3011.3 Perform Risk Analysis (ref: 11.4), RSK-04-3011.5 Plan Risk Responses, GOV-03-3012.1 Plan Sourcing Strategy, STK-02-3013.2 Plan Stakeholder Engagement, GOV-04-4004.3 Manage Project Execution (ref: 12.2), GOV-06-4004.4 Manage Project Knowledge, RES-03-5009.3 Acquire Resources, RES-04-6009.4 Lead the Team (ref: 9.5), STK-05-6010.2 Manage Communications, RSK-05-6011.6 Implement Risk Responses, STK-04-6013.3 Manage Stakeholder Engagement, GOV-08-7004.5 Monitor and Control Project Performance (ref: 12.3), GOV-07-7004.6 Assess and Implement Changes, SCP-06-7005.5 Validate Scope (ref: 8.3), SCP-05-7005.6 Monitor and Control Scope, SCH-03-8006.6 Monitor and Control Schedule, FIN-04-8007.4 Monitor and Control Finances, RES-05-8009.6 Monitor and Control Resourcing, STK-07-8010.3 Monitor Communications, RSK-06-8011.7 Monitor Risks, STK-06-8013.4 Monitor Stakeholder Engagement, GOV-09-9004.7 Close Project or Phase
 
 
 
-#### **<<STOP 49 PROCESSES OF PROJECT MANAGEMENT>>**
+#### **<<STOP 40 PROCESSES OF PROJECT MANAGEMENT>>**
 
 
 
-The current methods, tools and techniques being used in the Koware Group's programming and coding techniques have not been developed to be based on the 49 project management processes. Here is an outline that has been developed with content and some instructions that are supposed to support each subsequent section.
+The current methods, tools and techniques being used in the Koware Group's programming and coding techniques have not been developed to be based on the 40 project management processes. Here is an outline that has been developed with content and some instructions that are supposed to support each subsequent section.
 
 
 
-Identifiers and phase titles have been partially established to give the project some structure but it still needs to be developed even further. An example identifier is \[BZJ-PGB-0200]; 'BZJ-PGB' is the project name identifier, it is basically an abbreviation of the project name 'Buzzjuice Payment Gateway Bridge (BZJ-PGB)' in this case. the last numbers are the suffix identifier for the project section. This suffix is attached to a name, just like the project management phase '8013.4' is attached to 'Monitor Stakeholder Engagement' in the project management phases.
+Identifiers and phase titles have been partially established to give the project some structure but it still needs to be developed even further. An example identifier is \[BZJ-PGB]-\[0200]; 'BZJ-PGB' is the project name identifier, it is basically an abbreviation of the project name 'Buzzjuice Payment Gateway Bridge (BZJ-PGB)' in this case. the last numbers are the suffix identifier for the project section. This suffix is attached to a name, just like the project management phase 'STK-06-8013.4' is attached to 'Monitor Stakeholder Engagement' in the project management phases.
 
 
 
-The current workflow that is being implemented needs to be updated. It would be good if the current workflow would align with the 49 project management processes where the section names could be updated, referencing each project management process; but unique to the workflow being developed. The names do not have to be exactly the same. Where the name to be used is different from the existing name then the number should be reviewed.
+The current workflow that is being implemented needs to be updated. It would be good if the current workflow would align with the presented 40 project management processes where the section names could be updated, referencing each project management process; but unique to the workflow being developed. The names do not have to be exactly the same. Where the name to be used is different from the existing name then the number should be reviewed.
 
 
 
-There also do not need to be exactly 49 sections and they do not need to share the exact numbers but the numbers can vary depending on the position of the section.
+There also do not need to be exactly 40 sections and they do not need to share the exact numbers but the numbers can vary depending on the position of the section.
 
 
 
-For example, "0004.1 Develop Project Charter" cannot be changed but we could implement "\[BZJ-PGB-0005.0] Develop Initial Project Proposal". Maintaining the numeric sequence, \[BZJ-PGB-0005.0] would come after "0004.1 Develop Project Charter". This could logically and feasibly fit with the Project Scope Management Knowledge area and the Initiating process group.
+For example, "GOV-01-0004.1 Initiate Project or Phase" cannot be changed but we could implement something like "\[BZJ-PGB]-\[GOV-01-0005.0] Develop Initial Project Proposal". Maintaining the numeric sequence, \[BZJ-PGB]-\[GOV-01-0005.0] would come after "GOV-01-0004.1 Develop Project Charter". This could logically and feasibly fit with the Project Scope Management Knowledge area and the Initiating process group.
 
 
 
-To clear up the discrepancy about 0004.1 and 0004.01. 0004.1 is the same as 0004.1000000\~..., however, because there are an infinite number of zeros, no other digits are displayed after the 1. The same applies to 0004.0100000\~.... So 0004.01 comes before 0004.1.
+To clear up the discrepancy about 0004.1 and 0004.01. 0004.1 is the same as 0004.1000000\~..., however, because there are an infinite number of zeros, no other digits are displayed after the 1, making it 0004.1. The same applies to 0004.0100000\~.... becomes 0004.01. So 0004.01 comes before 0004.1.
 
 
 
-A section could be "\[BZJ-PGB-0010.9] Architecture Brief Quality Monitoring" for instance. This would represent an item in the Project Quality Management Knowledge Area and either Monitoring \& Controlling or Closing process group but is specific to this workflow template being developed.
+A section could be "\[BZJ-PGB]-\[STK-03-0010.9] Architecture Brief Settlement" for instance. This would represent an item in the Stakeholders Performance Domain and Plan Communications Management PMBOK 8 process, but this item would be unique to the project as it doesn't exist in the PMBOK manual but may have been seen necessary for the particular project.
 
 
 
@@ -148,11 +148,11 @@ The previous production workflow for our programming and coding was as follows:
 
 
 
-Referencing the 49 project management processes and the partially developed project identity structure, thoroughly review and analyze the previous workflow and this 'Project Base Integration Initialization' development strategy then develop this whole section into an 'Architectural Engineering Analysis Query' of the 'Project Base Integration Initialization' that would be shared with collaborating agents. The agent responses to the 'Architectural Engineering Analysis Query' would be shared with the lead agent to assist in producing a controlled 'Architectural Engineering Verification' baseline candidate document of the 'Project Base Integration Initialization' that would be used to generate the appropriate finalized 'Project Base Integration Initialization' that would be used to produce the desired project proposal and template.
+Referencing the 40 project management processes and the partially developed project identity structure, thoroughly review and analyze the previous workflow and this 'Project Base Integration Initialization' development strategy then develop this whole section into an 'Architectural Engineering Analysis Query' of the 'Project Base Integration Initialization' that would be shared with collaborating agents. The agent responses to the 'Architectural Engineering Analysis Query' would be shared with the lead agent to assist in producing a controlled 'Architectural Engineering Verification' baseline candidate document of the 'Project Base Integration Initialization' that would be used to generate the appropriate finalized 'Project Base Integration Initialization' that would be used to produce the desired project proposal and template.
 
 
 
-Review '\[KOWARE-IAPD-PMO]-\[BZJ-PGBD-0004.01] PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT' as an example.
+Review '\[KOWARE-IAPD-PMO]-\[BZJ-PGBD]-\[GOV-01-0004.01] PROJECT BASE INTEGRATION INITIALIZATION DEVELOPMENT' as an example.
 
 
 
@@ -168,9 +168,107 @@ Here is the current 'Project Base Integration Initialization':
 
 
 
-### **\[KOWARE-IAPD-PMO]-\[BZJ-PGBD-0004.01]**
+### **\[KOWARE-IAPD-PMO]-\[BZJ-PGBD]-\[RES-03-0004.01]**
 
-### **PBIM DEVELOPMENT**
+### **PBIM Document Creation**
+
+
+
+Before creating the PBIM document, all necessary resources must be compiled. The following is a compilation of available PBIM documents that should be referenced to create a generic version of the PBIM document:
+
+
+
+**<<START PBIM reference documents>>**
+
+
+
+1\. The current PBIM document:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
+
+
+
+2\. The 'PBIM Architectural Engineering Analysis Query' document:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
+
+
+
+3\. All 'PBIM Architectural Engineering Analysis Query' reports:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
+
+
+
+4\. All revisions of the 'PBIM Architectural Engineering Verification' statement documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
+
+
+
+5\. All responses to the 'PBIM Architectural Engineering Verification' statement documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
+
+
+
+6\. All versions of the 'PBIM Architectural Engineering Challenge - Adversarial Duel' documents:
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+
+
+
+7\. All results from the 'PBIM Architectural Engineering Challenge - Adversarial Duel':
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+
+
+
+**<<STOP PBIM reference documents>>**
+
+
+
+Generate a PBIM document based on the shared PBIM reference documents, paying particular attention to the structure and requirements of the initial PBIM document.
+
+
+
+1\. Review and analyze all sections that have an identifier then develop and update the identifiers and sections so that they are ready for implementation.
+
+
+
+2\. Review and analyze the prompts used in each section then develop and update the prompts for so that the implementer would get optimal responses when shared with the lead or collaborating agents.
+
+
+
+The created PBIM would finally be manually updated again before the PBIM document would go through the Architectural Engineering development.
+
+
+
+
+
+
+
+### **\[SCP-04-0004.02]**
+
+### **PBIM Document Development**
+
+
+
+**Architectural Engineering of Project Proposal**
 
 
 
@@ -178,7 +276,7 @@ Review and develop this section 0004.01 to 0004.09 before Project Charter Develo
 
 
 
-#### **<<START ANALYSYS AND DEVELOPMENT OF THE 'Project Base Integration Initialization'>>**
+#### **<<START ANALYSYS AND DEVELOPMENT OF THE 'Project Base Integration Management Document'>>**
 
 
 
@@ -312,70 +410,6 @@ If the 'PBIM Architectural Engineering Verification' document does not get appro
 
 
 
-Here is a compiled list of all documents generated so far:
-
-
-
-1\. The current PBIM document:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
-
-
-
-2\. The 'PBIM Architectural Engineering Analysis Query' document:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
-
-
-
-3\. All 'PBIM Architectural Engineering Analysis Query' reports:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
-
-
-
-4\. All revisions of the 'PBIM Architectural Engineering Verification' statement documents:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
-
-
-
-5\. All responses to the 'PBIM Architectural Engineering Verification' statement documents:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
-
-
-
-6\. All versions of the 'PBIM Architectural Engineering Challenge - Adversarial Duel' documents:
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
-
-
-
-7\. All results from the 'PBIM Architectural Engineering Challenge - Adversarial Duel':
-
-
-
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
-
-
-
-Generate an updated PBIM document based on the current PBIM document structure and requirements. Particularly update each section in the PBIM document with a identifier headings for implementation. Include updated prompts for the lead agent and collaborating agents. The PBIM would finally be manually updated again before a new 'PBIM Architectural Engineering Analysis Query' document would be prepared.
-
-
-
 If any agent disapproves of the 'PBIM Architectural Engineering Verification' document, resolve all issues, update the 'PBIM Architectural Engineering Verification' document then reshare with all collaborating agents for review and approval.
 
 
@@ -472,7 +506,7 @@ Once all the collaborating agents review and approve the implementation and prod
 
 
 
-#### **<<STOP ANALYSYS AND DEVELOPMENT OF THE 'Project Base Integration Initialization'>>**
+#### **<<STOP ANALYSYS AND DEVELOPMENT OF THE 'Project Base Integration Management Document'>>**
 
 
 
@@ -480,9 +514,9 @@ Once all the collaborating agents review and approve the implementation and prod
 
 
 
-### **\[BZJ-PGBD-0004.02]**
+### **\[SCP-03-0004.03]**
 
-### **Initial Project Template Generation Prompt**
+### **Project Proposal Creation**
 
 
 
@@ -490,7 +524,7 @@ Once all the collaborating agents review and approve the implementation and prod
 
 
 
-**<<START \[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt>>**
+**1. <<START \[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt>>**
 
 
 
@@ -506,13 +540,17 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-### **\[BZJ-PGBD-0004.03]**
+### **\[SCP-04-0004.04]**
 
-### **Architectural Engineering of Project Proposal Prompt**
+### **Project Proposal Development**
 
-###### 
 
-Referencing the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt' that would generate a custom project template that is unique to this project and would guide me step by step through to the completion of the project:
+
+**Architectural Engineering of Project Proposal**
+
+
+
+Referencing the '\[RSK-02-0004.02] Initial Project Template Generation Prompt' that would generate a custom project template that is unique to this project and would guide me step by step through to the completion of the project:
 
 
 
@@ -520,7 +558,7 @@ Referencing the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt'
 
 
 
-Thoroughly review and analyze the '\[BZJ-PGBD-0004.02] Initial Project Template Generation Prompt' then develop it into an 'Architectural Engineering Analysis Query' document to share with collaborating agents. Agent responses would be shared here to produce a controlled 'Architectural Engineering Verification' baseline candidate document.
+Thoroughly review and analyze the '\[RSK-02-0004.02] Initial Project Template Generation Prompt' then develop it into an 'Architectural Engineering Analysis Query' document to share with collaborating agents. Agent responses would be shared here to produce a controlled 'Architectural Engineering Verification' baseline candidate document.
 
 
 
@@ -612,13 +650,7 @@ Once all the collaborating agents review and approve the 'Architectural Engineer
 
 
 
-
-
-
-
-### **\[BZJ-PGBD-0004.04]**
-
-### **Architectural Challenge of Project Proposal Prompt**
+5\. Architectural Challenge of Project Proposal
 
 
 
@@ -630,35 +662,27 @@ Architecture Challenge and Closure
 
 
 
-### **\[BZJ-PGBD-0004.05]**
+### **\[RES-03-0004.05]**
 
-### **Project Template Generation**
-
-
+### **Project Template Creation**
 
 
 
+Creation of project template
 
 
-### **\[BZJ-PGBD-0004.06]**
 
-### **Architectural Engineering of Project Template**
+
+
+
+
+### **\[SCP-04-0004.06]**
+
+### **Project Template Development**
 
 
 
 #### Analysis and verification approval
-
-
-
-
-
-
-
-### **\[BZJ-PGBD-0004.07]**
-
-### **Architectural Challenge of Project Template**
-
-
 
 #### Architecture Challenge and Closure
 
@@ -668,7 +692,7 @@ Architecture Challenge and Closure
 
 
 
-### **\[BZJ-PGBD-0004.08]**
+### **\[GOV-01-0004.07]**
 
 ### **Project Template Initialization**
 
@@ -758,9 +782,9 @@ ChatGPT Codex: 'main/chatgpt-codex'
 
 
 
-### **\[BZJ-PGBD-0004.09]**
+### **\[GOV-02-0004.08]**
 
-### **Project Initialization**
+### **Project Template Implementation**
 
 
 
@@ -772,9 +796,19 @@ Team-up, brief, run through project processes, change management process, templa
 
 
 
-### **\[BZJ-PGBD-0004.1]**
+### **\[GOV-02-0004.09]**
 
-**Develop Project Charter**
+### **PBIM** 
+
+
+
+
+
+
+
+### **\[GOV-01-0004.1]**
+
+**Initiate Project or Phase**
 
 \---
 
@@ -814,11 +848,11 @@ Team-up, brief, run through project processes, change management process, templa
 
 
 
-4\. The last suffix identifier is '9999.9', so BZJ-PGB-9999.9 is possible... although might never or rarely ever be used. Close project would be '\[BZJ-PGB-9004.7]'.
+4\. The last suffix identifier is '9999.9', so GOV-09-9999.9 is possible... although might never or rarely ever be used. Close project or phase would be '\[GOV-09-9004.7]'.
 
 
 
-5\. Include notes, prompts and placeholders within sections of the developed template where they would naturally be encountered when the template is being used in production, not all at the end of the template for reference. This way the project manager can encounter the notes, prompts and placeholder while using the template to conduct the project. The notes, prompts and placeholders should be in reference to the project detailed in the shared '\[BZJ-PGB-0004.02] Initial Project Proposal'. For example:
+5\. Include notes, prompts and placeholders within sections of the developed template where they would naturally be encountered when the template is being used in production, not all at the end of the template for reference. This way the project manager can encounter the notes, prompts and placeholder while using the template to conduct the project. The notes, prompts and placeholders should be in reference to the project detailed in the shared '\[SCP-04-0004.02] PBIM Document Development'. For example:
 
 
 
@@ -826,9 +860,9 @@ Team-up, brief, run through project processes, change management process, templa
 
 
 
-BZJ-PGB-0005.0
+\[SCP-04-0004.02]
 
-Develop Initial Project Proposal
+PBIM Document Development
 
 
 
@@ -842,7 +876,7 @@ Develop Initial Project Proposal
 
 \[Prompt to share with Agents]
 
-<<START include references from previous section to attach with prompt but label appropriately {{maybe Draft 'BZJ-PGB-0005.01.01 Agent Developed Initial Project Proposal' for example}}>>
+<<START include references from previous section to attach with prompt but label appropriately {{maybe Draft 'SCP-04-0004.02.01 Agent Developed Initial Project Proposal' for example}>>
 
 
 
@@ -850,7 +884,7 @@ Develop Initial Project Proposal
 
 
 
-<<STOP include references from previous section to attach with prompt but label appropriately {{maybe Draft 'BZJ-PGB-0005.01.01 Agent Developed Initial Project Proposal' for example}}>>
+<<STOP include references from previous section to attach with prompt but label appropriately {{maybe Draft 'SCP-04-0004.02.01 Agent Developed Initial Project Proposal' for example}}>>
 
 
 
@@ -858,7 +892,7 @@ Develop Initial Project Proposal
 
 
 
-<<START Section name {{maybe Final 'BZJ-PGB-0005.01 Agent Developed Initial Project Proposal' for example}}>>
+<<START Section name {{maybe Final 'SCP-04-0004.02 Agent Developed Initial Project Proposal' for example}}>>
 
 
 
@@ -866,7 +900,7 @@ Develop Initial Project Proposal
 
 
 
-<<STOP Section name {{maybe BZJ-PGB-0005.01 Agent Developed Initial Project Proposal for example}}>>
+<<STOP Section name {{maybe Final 'SCP-04-0004.02 Agent Developed Initial Project Proposal' for example}}>>
 
 
 
@@ -882,11 +916,11 @@ Develop Initial Project Proposal
 
 
 
-8\. formatted as a generic template BZJ-\[PROJECT] (with BZJ-PGBD as the concrete example)
+8\. formatted as a generic template \[BZJ-\[PROJECT]] (with BZJ-PGBD as the concrete example)
 
 
 
-9\. intermediate/custom section suffixes (like \[BZJ-PGBD-0005.0]) should be inserted into logical positions between the PM process numbers to maintain exact numerical sequence throughout the lifecycle
+9\. intermediate/custom section suffixes (like \[BZJ-PGBD]\[SCP-04-0004.2]) could be inserted into logical positions between the PM process numbers to maintain exact numerical sequence throughout the lifecycle
 
 
 
@@ -898,7 +932,7 @@ Develop Initial Project Proposal
 
 
 
-12\. The numeric identifiers need to be updated such as \[BZJ-\[PROJECT]-0620] — COPILOT PR REVIEW should not be '0620' that references the start of the project whereas the review are nearing the end of the project.
+12\. The numeric identifiers need to be updated such as \[BZJ-\[PROJECT]]-\[0620] — COPILOT PR REVIEW should not be '0620' that references the start of the project whereas the review are nearing the end of the project.
 
 
 
