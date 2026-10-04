@@ -186,7 +186,7 @@ Before creating the PBIM document, all necessary resources must be compiled. The
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.00.00.md
 
 
 
@@ -194,7 +194,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.00.00.md
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
 
 
 
