@@ -194,7 +194,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.00.00.md
 
 
 
