@@ -190,6 +190,28 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.03.00.md
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/kilo/able-willow-mum/BlueCrown/Laboratory/development/project-management-templates/Project\_Base\_Integration\_Manager-v1.03.00-generic.md
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.04.00.md
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.05.00.md
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.10.00.md
+
+
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.12.00.md
+
 2\. The 'PBIM Architectural Engineering Analysis Query' document:
 
 
@@ -242,19 +264,27 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-Generate a PBIM document based on the shared PBIM reference documents, paying particular attention to the structure and requirements of the initial PBIM document.
+Generate a PBIM document based on the shared PBIM reference documents, paying particular attention to the structure and requirements of the initial Project\_Base\_Integration\_Manager-v1.00.00.md document.
 
 
 
-1\. Review and analyze all sections that have an identifier then develop and update the identifiers and sections so that they are ready for implementation.
+Note the following:
 
 
 
-2\. Review and analyze the prompts used in each section then develop and update the prompts for so that the implementer would get optimal responses when shared with the lead or collaborating agents.
+1\. Review and analyze all sections that have an identifier then develop and update the identifier heading/labels appropriately and each sections content so that they are ready for step-by-step implementation.
 
 
 
-3\. The created PBIM document should conform to modern project management principles, structures and standards. 
+2\. Review and analyze the prompts used in each section of the initial PBIM document, their format and structure, then develop and update the prompts in each section so that the implementer would obtain optimal responses when shared with the lead or collaborating agents. Take note of the PBIM document creation prompt and how the required resources are shared. 
+
+
+
+3\. The created PBIM document should conform to modern project management principles, structures and standards.
+
+
+
+4\. The PBIM document may have outdated architecture, project management, engineering principles and industry policies, practices and standards. The created PBIM document must be updated to conform with modern architecture, project management, engineering principles and industry policies, practices and standards.
 
 
 
