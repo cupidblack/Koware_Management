@@ -262,6 +262,10 @@ Note the following:
 
 
 
+4\. The PBIM identifiers end at the development of the project charter, where the PBIM officially integrates with project.
+
+
+
 The created PBIM would finally be manually updated again before the PBIM document would go through the Architectural Engineering development.
 
 
