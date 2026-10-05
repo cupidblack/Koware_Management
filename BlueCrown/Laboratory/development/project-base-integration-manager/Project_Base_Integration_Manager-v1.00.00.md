@@ -30,11 +30,11 @@ TIMESTAMP: 2026-10-03T00:02:13Z
 
 
 
-BASE PROJECT R\&D FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-management-templates
+BASE PROJECT R\&D FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-base-integration-manager
 
 
 
-BASE PROJECT R\&D DOCS FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-management-templates/docs
+BASE PROJECT R\&D DOCS FOLDER: https://github.com/cupidblack/Koware\_Management/tree/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs
 
 
 
@@ -194,7 +194,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
 
 
 
@@ -202,7 +202,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
 
 
 
@@ -210,7 +210,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
 
 
 
@@ -218,7 +218,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
 
 
 
@@ -226,7 +226,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
 
 
 
@@ -234,7 +234,7 @@ https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
 
 
 
@@ -312,7 +312,7 @@ Thoroughly review and analyze the entire 'Project Base Integration Manager (PBIM
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5B%5BKOWARE-IAPD-PMO%5D-%5BBASE-IDENTIFIER%5D-%5BPROJECT-ABBREVIATION%5D-%5BIDENTIFIER%5D%5D.md
 
 
 
@@ -336,7 +336,7 @@ Thoroughly review and analyze the following 'PBIM Architectural Engineering Anal
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query-Codex-202610031035.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query-Codex-202610031035.txt
 
 
 
@@ -362,7 +362,7 @@ Thoroughly review and analyze the 'PBIM Architectural Engineering Analysis Query
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query\_Reports-202610031251.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIID-AEA\_Query\_Reports-202610031251.txt
 
 
 
@@ -386,7 +386,7 @@ Thoroughly review and analyze the 'PBIM Architectural Engineering Verification S
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
 
 
 
@@ -410,7 +410,7 @@ The following are 'PBIM Architectural Engineering Verification' responses from t
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
 
 
 
@@ -446,7 +446,7 @@ Complete the following 'PBIM Architectural Engineering Challenge - Adversarial D
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
 
 
 
@@ -470,7 +470,7 @@ The following are the results of the 'PBIM Architectural Engineering Challenge D
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
 
 
 
@@ -622,7 +622,7 @@ Thoroughly review and analyze the 'Architectural Engineering Verification' docum
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Statement-Codex-202610030911.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Statement-Codex-202610030911.txt
 
 
 
@@ -646,7 +646,7 @@ The following are 'Architectural Engineering Verification' responses from the co
 
 
 
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-management-templates/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Responses-202603100916.txt
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Responses-202603100916.txt
 
 
 
