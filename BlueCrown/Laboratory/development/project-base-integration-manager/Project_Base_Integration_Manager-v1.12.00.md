@@ -4,27 +4,35 @@ TIMESTAMP: 2026-10-03T00:02:13Z
 
 
 
-# **\[PROJECT-NAME: \[PROJECT-FULL-NAME] \[\[PROJECT-ABBREVIATION]]]**
+# **PROJECT-NAME: \[PROJECT-FULL-NAME] \[PROJECT-ID]**
 
 
 
-# \[PROJECT-BASE: \[PROJECT-BASE-NAME] \[\[BASE-IDENTIFIER]]]
+# PROJECT-BASE: \[PROJECT-BASE-NAME] \[BASE-ID]
 
 
 
-## **Project Management Office**
+## **Project Management Office \[PMO]**
 
-## Independent Assignments \& Project Development National Department \[IAPD National]
+## Independent Assignments \& Project Development National Department \[IAPD]
 
-### 
 
-### **Koware Group**
 
-### 
+### **Koware Group** \[KOWARE]
 
-### \[\[KOWARE-IAPD-PMO]\[BASE-IDENTIFIER]\[PROJECT-ABBREVIATION]\[IDENTIFIER]]
 
-Generic Format: \[BASE-IDENTIFIER]\[PROJECT-ABBREVIATION]\[IDENTIFIER]
+
+Generic Format: \[KOWARE]\[IAPD]\[PMO]\[BASE-ID]\[PROJECT-ID]\[PBIM]\[SECTION-ID]
+
+
+
+\[PROJECT-LOCATION]: \[TOWN]\[DISTRICT]\[CITY]\[REGION]
+
+\[PROJECT-DURATION]: {{hours referencing the project management standards for official valid daily and weekly maximum hours}}
+
+\[PROJECT-FOLDER]: \[BASE-ID]-\[PROJECT-ID]
+
+\[PRODUCTION-REPO-NAME]
 
 
 
@@ -78,9 +86,9 @@ GOV-01-0004.1 Initiate Project or Phase (Develop Project Charter), STK-01-0013.1
 
 The Koware Group's programming, software engineering, and multi-agent development techniques are fully structured around the 40 project management processes. Section identifiers and headings combine domain tags (GOV, STK, SCP, SCH, FIN, RES, RSK), PM process anchors, and intermediate sub-process suffixes.
 
-An example identifier structure is `\\\\\\\[BZJ\\\\\\\[PROJECT]]\\\\\\\[RES-03-0004.01]`:
+An example identifier structure is `\\\\\\\[BASE-ID\\\\\\\[PROJECT-ID]]\\\\\\\[RES-03-0004.01]`:
 
-* `\\\\\\\[BZJ\\\\\\\[PROJECT]]` represents the base project prefix (e.g., `BZJ-PGBD` for Buzzjuice Payment Gateway Bridge Development).
+* `\\\\\\\[BASE-ID\\\\\\\[PROJECT-ID]]` represents the base project prefix (e.g., `BZJ-PGBD` for Buzzjuice Payment Gateway Bridge Development).
 * `RES-03` represents the Resource Management domain tag and sub-type identifier.
 * `0004.01` represents the numeric process anchor preceding `0004.1` (Develop Project Charter).
 
@@ -139,13 +147,17 @@ Here is the finalized 'Project Base Integration Initialization':
 
 
 
-### **\[BZJ-\[PROJECT]]\[RES-03-0004.01]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[RES-03-0004.01]**
 
 ### **PBIM Document Creation**
 
 
 
-**<<START PROMPT \[BZJ-\[PROJECT]]\[RES-03-0004.01] PBIM Document Creation Prompt>>**
+This PBIM Document Creation section focuses on the construction and assembly of an abstract generic form of the PBIM document. Only run the PBIM Document Creation section and prompt periodically for maintenance purposes, to update the PBIM document so that it conforms with current industry policies, procedures, principles and standards.
+
+
+
+**<<START PBIM Document Creation Prompt>>**
 
 
 
@@ -202,99 +214,152 @@ Generate a PBIM document based on the shared PBIM reference documents, paying pa
 
 Note the following:
 
+
+
 1\. Review and analyze all sections that have an identifier then develop and update the identifier heading/labels appropriately and each section's content so that they are ready for step-by-step implementation. Pay close attention to the section identifiers and headings/labels in the Project\_Base\_Integration\_Manager-v1.12.00.md document and update them as necessary.
+
+
 
 2\. Review and analyze the prompts used in each section of the initial PBIM document, their format and structure, then develop and update the prompts in each section so that the implementer would obtain optimal responses when shared with the lead or collaborating agents. Take note of the PBIM document creation prompt and how the required resources are shared.
 
-3\. The PBIM document may have outdated architecture, project management, engineering principles and industry policies, practices and standards. The created PBIM document must be checked for inconsistencies then updated to conform with modern architecture, project management, engineering principles and industry policies, practices and standards. Identifiers, headings, subheadings, labels and section content must be updated accordingly.
+
+
+3\. The PBIM document may have outdated architecture, project management, engineering principles and industry policies, practices, regulations and standards. The created PBIM document must be checked for inconsistencies then updated to conform with local modern architecture, project management, engineering principles and industry policies, practices, regulations and standards, prioritizing the project's local location \[PROJECT-LOCATION] before global factors. Identifiers, headings, subheadings, labels and section content must be updated accordingly. Any outdated practices must be updated appropriately referencing a feasible transition between the old and the new practices identified. 
+
+
 
 4\. The PBIM identifiers end at the development of the project charter, where the PBIM officially integrates with project.
 
 
 
-**<<STOP PROMPT \[BZJ-\[PROJECT]]\[RES-03-0004.01] PBIM Document Creation Prompt>>**
+**<<STOP PBIM Document Creation Prompt>>**
 
 
 
-### **\[BZJ-\[PROJECT]]\[SCP-04-0004.02]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02]**
 
 ### **PBIM Document Development**
 
-**Architectural Engineering of Project Base Integration Manager**
-
-Review and develop sections 0004.01 to 0004.09 before Project Charter Development.
 
 
-
-#### **<<START ANALYSIS AND DEVELOPMENT OF THE 'Project Base Integration Manager Document'>>**
+The following section checks the integrity of the PBIM document byrunning it through Architectural Engineering Analysis, Verification and Challenge stages. This section ony need to be run after the creation of a PBIM document or as part of a maintenance process.
 
 
 
 Referencing the entire 'Project Base Integration Manager (PBIM)' document, including requirements, prompts, notes, and the 'Project Base Integration Initialization' workflow:
 
-1. **\[Designated Target: Lead Agent (ChatGPT Codex / Cove)]**
-Thoroughly review and analyze the entire 'Project Base Integration Manager (PBIM)' document, including requirements, prompts, notes, and the 'Project Base Integration Initialization', then develop it into a 'PBIM Architectural Engineering Analysis Query' document (`\\\\\\\[BZJ-\\\\\\\[PROJECT]-0004.01]PBIM\\\\\\\_Development-AEA\\\\\\\_Query`) and publish to the project docs folder.
+
+
+**Prompt 1. Generate PBIM Architectural Engineering Analysis (AEA) Query**
+
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the entire 'Project Base Integration Manager (PBIM)' document, including requirements, prompts, notes, and the 'Project Base Integration Initialization', then develop it into a 'PBIM Architectural Engineering Analysis Query' document (`\\\\\\\[BASE-ID-\\\\\\\[PROJECT-ID]-0004.02.01]PBIM\\\\\\\_Development-AEA\\\\\\\_Query`) and publish to the project docs folder.
 
 **<<START PBIM Document Reference>>**
-{{Link to Project Base Integration Manager document posted here}}
+{{Link to PBIM document posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.12.00.md
 **<<STOP PBIM Document Reference>>**
 
-2. **\[Designated Target: Collaborating Agents (GitHub Copilot, Google Jules, Kilo Code / Claude Code)]**
+
+
+**Prompt 2. Place PBIM AEA Query**
+
+**\[Designated Target: Collaborating Agents]**
 Thoroughly review and analyze the following 'PBIM Architectural Engineering Analysis Query' document, conduct domain analysis, and generate an AEA Report published to your designated branch (`main/<agent-name>`):
 
-**<<START PBIM Architectural Engineering Analysis Query>>**
+**<<START PBIM AEA Query>>**
 {{Link to PBIM AEA Query document posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query-Codex-202610031035.txt
-**<<STOP PBIM Architectural Engineering Analysis Query>>**
+**<<STOP PBIM AEA Query>>**
 
-3. **\[Designated Target: Lead Agent (ChatGPT Codex / Cove)]**
-Thoroughly review and analyze the 'PBIM Architectural Engineering Analysis Query' reports shared by collaborating agents, synthesize findings, resolve contradictions, and publish a controlled 'PBIM Architectural Engineering Verification' baseline candidate statement document (`\\\\\\\[BZJ-\\\\\\\[PROJECT]-0004.01]PBIM\\\\\\\_Development-AEV\\\\\\\_Statement`).
 
-**<<START PBIM Architectural Engineering Analysis Reports>>**
+
+**Prompt 3. Obtain PBIM AEA Query Reports \& Generate AEV Statement**
+
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the 'PBIM Architectural Engineering Analysis Query' reports shared by collaborating agents, synthesize findings, resolve contradictions, and publish a controlled 'PBIM Architectural Engineering Verification Statement' baseline candidate statement document (`\\\\\\\[BASE-ID-\\\\\\\[PROJECT-ID]-0004.02.03]PBIM\\\\\\\_Development-AEV\\\\\\\_Statement`).
+
+**<<START PBIM AEA Query Reports>>**
 {{Links to agent generated AEA reports posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEA\_Query\_Reports-202610031251.txt
-**<<STOP PBIM Architectural Engineering Analysis Reports>>**
+**<<STOP PBIM AEA Query Reports>>**
 
-4. **\[Designated Target: Collaborating Agents]**
-Thoroughly review and analyze the 'PBIM Architectural Engineering Verification Statement' document and share your verification decision (`AEV APPROVE`, `AEV APPROVE WITH CONDITIONS`, `AEV RETURN`, `AEV BLOCK`, or `ARCHITECTURAL RESET`):
 
-**<<START PBIM Architectural Engineering Verification Statement>>**
+
+**Prompt 4. Present PBIM AEV Statement**
+
+**\[Designated Target: Collaborating Agents]**
+Thoroughly review and analyze the 'PBIM Architectural Engineering Verification Statement' document and share your verification decision (`AEV APPROVE`, `AEV APPROVE WITH CONDITIONS`, `AEV RETURN`, `AEV BLOCK`, or `ARCHITECTURAL RESET`). Include detailed fix suggestion for any non 'AEV APPROVE' decisions:
+
+**<<START PBIM AEV Statement>>**
 {{Link to PBIM AEV Statement posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Statement-202610031819.txt
-**<<STOP PBIM Architectural Engineering Verification Statement>>**
+**<<STOP PBIM AEV Statement>>**
 
-5. **\[Designated Target: Lead Agent]**
-The following are 'PBIM Architectural Engineering Verification' responses from collaborating agents:
 
-**<<START PBIM Architectural Engineering Verification Responses>>**
-{{Links to agent AEV responses posted here}}
+
+**Prompt 5. Obtain PBIM AEV Statement Results \& Generate AEC Adversarial Challenge**
+
+**\[Designated Target: Lead Agent]**
+The following are 'PBIM Architectural Engineering Verification Statement Results' from collaborating agents:
+
+**<<START PBIM AEV Statement Results>>**
+{{Links to agent AEV Statement Results posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEV\_Responses-202610031921.txt
-**<<STOP PBIM Architectural Engineering Verification Responses>>**
+**<<STOP PBIM AEV Statement Results>>**
 
-Revision Bounding Rule: If the 'PBIM Architectural Engineering Verification' document does not achieve unanimous approval after revisions R1.0, R1.1, R1.2, R1.3, and R1.4, do not produce any further sub-revisions beyond R1.4. Instead, trigger an Architectural Reset, compile all documents, and restart the baseline synthesis cycle.
+Revision Bounding Rule: If the 'PBIM AEV Statement' document does not achieve unanimous approval after revisions x.0, x.1, x.2, x.3, and x.4, do not produce any further sub-revisions beyond x.4. Instead, trigger an Architectural Reset, compile all documents, and restart the baseline synthesis cycle to review and update the implemented PBIM document before returning to the PBIM Document Development stage.
 
-If any agent disapproves of the AEV document, resolve all blocking issues, update the AEV document, and reshare with collaborating agents for re-verification.
+If any agent disapproves of the AEV document, resolve all blocking issues then update the AEV Statement to be shared with collaborating agents for re-verification.
 
-6. **\[Designated Target: Security/Challenge Agent (Kilo Code / Claude Code)]**
-Once all collaborating agents review and approve the AEV document, prepare an 'Architectural Engineering Challenge - Adversarial Duel' to stress-test and attack the proposed PBIM architecture rather than merely refining it.
+Once all collaborating agents approve the 'PBIM AEV Statement', prepare an 'Architectural Engineering Challenge - Adversarial Duel' to stress-test and attack the proposed PBIM architecture and engineering rather than merely refining it. The adversarial duel challenge would be shared with each collaborating agent and the results would be shared with the lead agent.
 
-**<<START PBIM Architectural Engineering Challenge - Adversarial Duel>>**
+
+
+**Prompt 6. Present AEC Adversarial Duel**
+
+**\[Designated Target: Collaborating Agents]**
+Complete the following 'PBIM Architectural Engineering Challenge - Adversarial Duel' to test and identify any potential break points in the proposed architecture and engineering of the PBIM document. An agent must pass a minimum of 90% of all the presented challenges to approve a gate pass to 'Architectural Engineering Challenge Closure' stage.
+
+**<<START PBIM AEC Adversarial Duel>>**
 {{Link to PBIM AEC Adversarial Duel document posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-202610031756.txt
-**<<STOP PBIM Architectural Engineering Challenge - Adversarial Duel>>**
+**<<STOP PBIM AEC Adversarial Duel>>**
 
-7. **\[Designated Target: Lead Agent / Security Agent]**
-The following are the results of the 'PBIM Architectural Engineering Challenge Duel' from collaborating agents:
 
-**<<START PBIM Architectural Engineering Challenge Duel Results>>**
+
+**Prompt 7. Obtain AEC Adversarial Duel Results \& Generate PBIM Document**
+
+**\[Designated Target: Lead Agent / Security Agent]**
+The following are the collaborating agent's results of the 'PBIM AEC Adversarial Duel':
+
+**<<START PBIM AEC Adversarial Duel Results>>**
 {{Links to AEC Duel results posted here}}
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
-**<<STOP PBIM Architectural Engineering Challenge Duel Results>>**
+**<<STOP PBIM AEC Adversarial Duel Results>>**
 
-If any agent disapproves implementation based on material risks or blockers discovered in the AEC duel, update the AEV statement and resolve all vulnerabilities before proceeding.
+If any agent disapproves implementation based on material risks or blockers discovered in the 'PBIM AEC Adversarial Duel', resolve all vulnerabilities in the 'PBIM AEV Statement' then update the 'PBIM AEV Statement' before retying the 'AEC Adversarial Duel'.
 
-Once all collaborating agents approve closure, prepare a 'PBIM Architectural Engineering Challenge Closure (AECC)' document. The AECC document, served alongside the approved AEV baseline, establishes the ENFORCEABLE PBIM baseline.
+Once all collaborating agents approve closure, prepare a 'PBIM Architectural Engineering Challenge Closure (AECC)' document and an updated PBIM Document for implementation.
+
+
+
+**Prompt 8. Present Created PBIM Document**
+
+**\[Designated Target: Collaborating Agents]**
+
+Thoroughly review and analyze the following generated PBIM Document and share your verification decision (`PBIM APPROVE`, `PBIM APPROVE WITH CONDITIONS`, `PBIM RETURN`, `PBIM BLOCK`, or `ARCHITECTURAL RESET`). Include details for any non `PBIM APPROVE` decisions:
+
+**<<START Created PBIM Document>>**
+{{Links to AEC Duel results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DPBIM\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+**<<STOP Created PBIM Document>>**
+
+If any agent disapproves implementation based on material risks or blockers discovered in the 'PBIM AEC Adversarial Duel', resolve all vulnerabilities in the 'PBIM AEV Statement' then update the 'PBIM AEV Statement' before retying the 'AEC Adversarial Duel'.
+
+Once all collaborating agents approve closure, prepare a 'PBIM Architectural Engineering Challenge Closure (AECC)' document and an updated PBIM Document for implementation.
+
+
 
 
 
@@ -302,98 +367,419 @@ Once all collaborating agents approve closure, prepare a 'PBIM Architectural Eng
 
 
 
-### **\[BZJ-\[PROJECT]]\[SCP-03-0004.03]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[SCP-03-0004.03]**
 
-### **Project Proposal Definition**
+### **Project Proposal Establishment**
 
-Includes Initial Project Proposal, project definitions, requirements, explanations, and initial template generation prompt.
 
-<<START PROMPT \[BZJ-\[PROJECT]-0004.02] Initial Project Template Generation Prompt>>
 
-\[Designated Target: Lead Agent / Collaborating Agents]
+**Preparing the Project Proposal**
 
-Referencing the approved PBIM baseline document and project specifications, generate the initial Project Template tailored specifically for project \[PROJECT-NAME] (\[PROJECT-ABBREVIATION]):
+Take time to draft a basic proposal with as much detail as possible; such as explaining the problem, idea, environment, proposed solutions, requirements and desired deliverables. The more details the drafted proposal contains would improve the quality of the final proposal and overall deliverables at the end of the project. Once the draft proposal is ready, it can be run through the Project Proposal Generation Prompt to obtain a formally established project proposal. This generated project proposal must be reviewed, edited and regenerated as necessary to satisfaction before proceeding to the Project Proposal Development stage.
 
-1. Define project identity, prefix identifiers (`\\\\\\\[BZJ-\\\\\\\[PROJECT]]`), repository paths, and agent branch mappings (`main/<agent-name>`).
-2. Map all project deliverables to the 40 PMBOK process sequence.
-3. Establish risk-scaled governance profile (LIGHT, STANDARD, or HIGH-ASSURANCE).
-4. Define task packet structures, stop conditions, and human authority escalations.
 
-**<<START Initial Project Template Generation Prompt Reference>>**
+
+**<<START Project Proposal Generation Prompt>>**
+
+
+
+**Prompt 1. Generating the Project Proposal**
+
+**\[Designated Target: Lead Agent / All Collaborating Agents]**
+
+Project Proposal Establishment focuses on the construction and assembly of a project proposal from its raw informal or formal state into a well established project proposal. Paying particular attention to the concerns, issues and requirements presented in the 'Initial Project Proposal' document, thoroughly review and analyze the following project proposal documents to produce an appropriate and feasible project proposal. The established proposal must be prepared well and detailed enough, with easy reading for clarity and correct formatting considerations, to pass the Project Proposal AEV and AEC.
+
+**<<START Project Proposal documents>>**
+
+**1. Initial Project Proposal document links posted here:**
+
 https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/%5BBZJ-PGBD-0004.02%5D\_Initial-Project-Template-Generation-Prompt.txt
-**<<STOP Initial Project Template Generation Prompt Reference>>**
 
-<<STOP PROMPT \[BZJ-\[PROJECT]-0004.02] Initial Project Template Generation Prompt>>
+**2. Links to other reference documents posted below:**
+
+**<<STOP Project Proposal documents>>**
+
+Note the following:
 
 
 
-### **\[BZJ-\[PROJECT]]\[SCP-04-0004.04]**
+1\. The generated proposal must define the primary variables that the PBIM would require to generate the custom project template such as such as project name, project base, duration/timeline, problems, explanations, potential solutions and a custom template generation prompt. Other variables can be defined as necessary, depending on the project. Any missing requirement and details must be requested for before regenerating the Project Proposal.
+
+
+
+2\. Develop the project proposal with appropriate identifier headings/labels that relate to specific sections of the project depending on the content of the particular section in the project proposal. For instance, anything in the proposal that talks about the end of the project should be placed in the closing focus area. 
+
+
+
+3\. Any vague descriptions should be broken down into clear steps ready for step-by-step implementation then reconstructed into a suitable brief descriptive format for the project proposal. Pay close attention to any section identifiers and headings/labels already in the drafted Project Proposal document and update them as necessary.
+
+
+
+4\. Review and analyze any prompts used in the Initial Project Proposal document, their format and structure, then develop and update the prompts so that the implementer would obtain optimal responses when using the prompts with the lead or collaborating agents. Take note of the Project Proposal Establishment prompt and the referenced documents.
+
+
+
+5\. The drafted Project Proposal document may have outdated architecture, project management, engineering principles and industry policies, practices, regulations and standards. The drafted Project Proposal document must be checked for inconsistencies then updated to conform with local modern architecture, project management, engineering principles and industry policies, practices, regulations and standards; prioritizing the project's local location \[PROJECT-LOCATION] before considering global factors. Identifiers, headings, subheadings, labels and section content must be updated accordingly. Any outdated practices must be updated appropriately referencing a feasible transition between any old and new practices identified.
+
+
+
+6\. It would be good to extensively provide all the key details as the established Project Proposal would be shared with potential investors and sponsors. A summarized version can easily be generated that would be easier for potential investors and sponsors to read on the spot and request for more information where the detailed version could be shared.
+
+
+
+7\. The established project proposal should include a feasible method for the investor or sponsor to express interest in the proposed project and propose to invest, sponsor or support the project. The sponsors interest would lead to a scheduled project charter meeting where the project deliverables and procedures would be reviewed and updated as necessary before the project charter is finalized and approved.
+
+
+
+8\. The proposal must define the following: \[PROJECT-LOCATION]: \[TOWN]\[DISTRICT]\[CITY]\[REGION], \[PROJECT-DURATION]: {{hours referencing the project management standards for official valid daily and weekly maximum hours}}, \[PROJECT-FOLDER]: \[BASE-ID]-\[PROJECT-ID], \[PRODUCTION-REPO-NAME], \[BASE-ID], \[PROJECT-ID].
+
+
+
+**<<STOP Project Proposal Generation Prompt>>**
+
+
+
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.04]**
 
 ### **Project Proposal Development**
 
 **Architectural Engineering of Project Proposal**
 
-Referencing the '\[BZJ-\[PROJECT]-0004.02] Initial Project Template Generation Prompt' designed to generate a custom project template unique to this project:
-
-1. **\[Designated Target: Lead Agent]**
-Develop an AEA Query document for the Project Proposal (`\\\\\\\[BZJ-\\\\\\\[PROJECT]-0004.03]AE-of-PP-Query`) and distribute to collaborating agents.
-2. **\[Designated Target: Collaborating Agents]**
-Review the Project Proposal AEA Query and generate AEA Reports published to assigned git branches (`main/<agent-name>`).
-
-**<<START Architectural Engineering Analysis Reports>>**
-{{Links to agent AEA reports posted here}}
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/payment-gateway/docs/BZJ-PGBD-0004.01\_Architectural-Engineering-Analysis\_Google-Jules.md
-**<<STOP Architectural Engineering Analysis Reports>>**
-
-3. **\[Designated Target: Lead Agent]**
-Synthesize collaborating agent reports into a controlled AEV Statement (`\\\\\\\[BZJ-\\\\\\\[PROJECT]-0004.03]AE-of-PP-Verification\\\\\\\_Statement`).
-
-**<<START Architectural Engineering Verification Statement>>**
-{{Link to AEV Statement posted here}}
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Statement-Codex-202610030911.txt
-**<<STOP Architectural Engineering Verification Statement>>**
-
-4. **\[Designated Target: Collaborating Agents]**
-Review AEV Statement and post verification decisions.
-
-**<<START Architectural Engineering Verification Responses>>**
-{{Links to agent AEV responses posted here}}
-https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.03%5DAE-of-PP-Verification\_Responses-202603100916.txt
-**<<STOP Architectural Engineering Verification Responses>>**
-
-5. **\[Designated Target: Security Agent]**
-Conduct Architectural Challenge (AEC) of Project Proposal and issue closure (AECC) upon resolution of all findings.
+Referencing the established Project Proposal, the following section checks the integrity of the established Project Proposal by running it through Architectural Engineering Analysis (AEA), Verification (AEV) and Challenge stages (AEC and AECC). This section only needs to be run after the creation of a Project Proposal or as part of a maintenance process.
 
 
 
-### **\[BZJ-\[PROJECT]]\[RES-03-0004.05]**
+**Prompt 1. Generate Project Proposal AEA Query**
 
-### **Project Template Creation**
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the established Project Proposal then develop it into a 'Project Proposal Architectural Engineering Analysis Query' document (`\\\\\\\\\\\\\\\[\[BASE-ID]-\\\\\\\\\\\\\\\[PROJECT-ID]-0004.04.01]Project\_Proposal\\\\\\\\\\\\\\\_Development-AEA\\\\\\\\\\\\\\\_Query`) and publish to the project docs folder.
 
-Creation and assembly of the verified project template structure based on approved proposal specifications.
+**<<START Project Proposal Reference>>**
+{{Link to Project Proposal posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.12.00.md
+**<<STOP Project Proposal Reference>>**
 
 
 
-### **\[BZJ-\[PROJECT]]\[SCP-04-0004.06]**
+**Prompt 2. Place Project Proposal AEA Query**
+
+**\[Designated Target: Collaborating Agents]**
+Thoroughly review and analyze the following 'Project Proposal Architectural Engineering Analysis Query' document, conduct domain analysis, and generate an AEA Report published to your designated branch (`main/<agent-name>`):
+
+**<<START Project Proposal AEA Query>>**
+{{Link to Project Proposal AEA Query document posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEA\_Query-Codex-202610031035.txt
+**<<STOP Project Proposal AEA Query>>**
+
+
+
+**Prompt 3. Obtain Project Proposal AEA Query Reports \& Generate AEV Statement**
+
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the 'Project Proposal Architectural Engineering Analysis Query' reports shared by collaborating agents, synthesize findings, resolve contradictions, and publish a controlled 'Project Proposal Architectural Engineering Verification Statement' baseline candidate statement document (`\\\\\\\\\\\\\\\[\[BASE-ID]-\\\\\\\\\\\\\\\[PROJECT-ID]-0004.04.03]Project\_Proposal\\\\\\\\\\\\\\\_Development-AEV\\\\\\\\\\\\\\\_Statement`).
+
+**<<START Project Proposal AEA Query Reports>>**
+{{Links to agent generated AEA reports posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEA\_Query\_Reports-202610031251.txt
+**<<STOP Project Proposal AEA Query Reports>>**
+
+
+
+**Prompt 4. Present Project Proposal AEV Statement**
+
+**\[Designated Target: Collaborating Agents]**
+Thoroughly review and analyze the 'Project Proposal Architectural Engineering Verification Statement' document and share your verification decision (`AEV APPROVE`, `AEV APPROVE WITH CONDITIONS`, `AEV RETURN`, `AEV BLOCK`, or `ARCHITECTURAL RESET`). Include detailed fix suggestion for any non 'AEV APPROVE' decisions:
+
+**<<START Project Proposal AEV Statement>>**
+{{Link to Project Proposal AEV Statement posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEV\_Statement-202610031819.txt
+**<<STOP Project Proposal AEV Statement>>**
+
+
+
+**Prompt 5. Obtain Project Proposal AEV Statement Results \& Generate AEC Adversarial Challenge**
+
+**\[Designated Target: Lead Agent]**
+The following are 'Project Proposal Architectural Engineering Verification Statement Results' from collaborating agents:
+
+**<<START Project Proposal AEV Statement Results>>**
+{{Links to agent AEV Statement Results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEV\_Responses-202610031921.txt
+**<<STOP Project Proposal AEV Statement Results>>**
+
+Revision Bounding Rule: If the 'Project Proposal AEV Statement' document does not achieve unanimous approval after revisions x.0, x.1, x.2, x.3, and x.4, do not produce any further sub-revisions beyond x.4. Instead, trigger an Architectural Reset, compile all documents, and restart the baseline synthesis cycle to review and update the implemented Project Proposal before returning to the Project Proposal Development stage.
+
+If any agent disapproves of the AEV document, resolve all blocking issues then update the AEV Statement to be shared with collaborating agents for re-verification.
+
+Once all collaborating agents approve the 'Project Proposal AEV Statement', prepare an 'Architectural Engineering Challenge - Adversarial Duel' to stress-test and attack the proposed Project Proposal architecture and engineering rather than merely refining it. The adversarial duel challenge would be shared with each collaborating agent and the results would be shared with the lead agent.
+
+
+
+**Prompt 6. Present AEC Adversarial Duel**
+
+**\[Designated Target: Collaborating Agents]**
+Complete the following 'Project Proposal Architectural Engineering Challenge - Adversarial Duel' to test and identify any potential break points in the proposed architecture and engineering of the Project Proposal. An agent must pass a minimum of 90% of all the presented challenges to approve a gate pass to 'Architectural Engineering Challenge Closure' stage.
+
+**<<START Project Proposal AEC Adversarial Duel>>**
+{{Link to Project Proposal AEC Adversarial Duel document posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+**<<STOP Project Proposal AEC Adversarial Duel>>**
+
+
+
+**Prompt 7. Obtain AEC Adversarial Duel Results \& Generate Project Proposal**
+
+**\[Designated Target: Lead Agent / Security Agent]**
+The following are the collaborating agent's results of the 'Project Proposal AEC Adversarial Duel':
+
+**<<START Project Proposal AEC Adversarial Duel Results>>**
+{{Links to AEC Duel results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+**<<STOP Project Proposal AEC Adversarial Duel Results>>**
+
+If any agent disapproves implementation based on material risks or blockers discovered in the 'Project Proposal AEC Adversarial Duel', resolve all vulnerabilities in the 'Project Proposal AEV Statement' then update the 'Project Proposal AEV Statement' before retying the 'AEC Adversarial Duel'.
+
+Once all collaborating agents approve closure, prepare a 'Project Proposal Architectural Engineering Challenge Closure (AECC)' document and an updated Project Proposal for implementation.
+
+
+
+**Prompt 8. Present Created Project Proposal**
+
+**\[Designated Target: Collaborating Agents]**
+
+Thoroughly review and analyze the following generated Project Proposal and share your verification decision (`PROPOSAL APPROVE`, `PROPOSAL APPROVE WITH CONDITIONS`, `PROPOSAL RETURN`, `PROPOSAL BLOCK`, or `ARCHITECTURAL RESET`). Include details for any non `PROPOSAL APPROVE` decisions:
+
+**<<START Created Project Proposal>>**
+{{Links to AEC Duel results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+**<<STOP Created Project Proposal>>**
+
+If any agent disapproves implementation based on material risks or blockers discovered in the 'Project Proposal AEC Adversarial Duel', resolve all vulnerabilities in the 'Project Proposal AEV Statement' then update the 'Project Proposal AEV Statement' before retying the 'AEC Adversarial Duel'.
+
+Once all collaborating agents approve closure, prepare a 'Project Proposal Architectural Engineering Challenge Closure (AECC)' document and an updated Project Proposal for implementation.
+
+
+
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[RES-03-0004.05]**
+
+### **Project Template Generation**
+
+
+
+**Preparing the Project Template**
+
+The 'Project Template Generation' focuses on the construction and assembly of a drafted custom project template based on the approved established project proposal, according to modern project management tools and techniques, including processes, procedures, regulations and standards.
+
+Acquire previous successful project documents to attach as sources of reference to support the generation of the draft project template. Gather project definitions unique to the project. Most definitions would automatically be drawn from the established project proposal. The more details acquired would improve the quality of the final custom project template and overall deliverables at the end of the project. Once all data for the draft template is ready, it can be run through the Project Template Generation Prompt to obtain a formally established project template.
+
+
+
+**<<START Project Template Generation>>**
+
+
+
+**Prompt 1. Generating the Project Template**
+
+**\[Designated Target: Lead Agent / All Collaborating Agents]**
+
+Paying particular attention to the concerns, issues and requirements presented in the established Project Proposal and reference project documents, thoroughly review and analyze the following project documents to produce a feasible and appropriately detailed custom Project Template unique to the established project proposal. 
+
+**<<START Project Template documents>>**
+
+{{Links to project reference documents posted below}}
+
+**1. Established Project Proposal:**
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/%5BBZJ-PGBD-0004.02%5D\_Initial-Project-Template-Generation-Prompt.txt
+
+**2. Additional Project Template Reference Documents:**
+
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/%5BBZJ-PGBD-0004.02%5D\_Initial-Project-Template-Generation-Prompt.txt
+
+**<<STOP Project Template documents>>**
+
+Note the following:
+
+
+
+1\. The generated template must be prepared well and detailed enough, with easy reading for clarity and correct formatting considerations, to pass the Project Template AEV and AEC.
+
+
+
+2\. The generated project template must be reviewed, edited and regenerated as necessary to the satisfaction of a fully functional and implementation-ready project template before proceeding to the Project Template Development stage. The template must cover all relevant areas according to the modern project management best practices.
+
+
+
+3\. The generated template must have the primary definition variables, key configurations and settings detailed so that the PBIM would use them as reference to generate the custom project template; such as project name, project base and project duration/timeline. Other variables, definitions, configuration and settings can be defined during project configuration and initialization stage, depending on the project an its requirements. Any missing requirements and details must be requested for before regenerating the full Project Template.
+
+
+
+4\. Develop the project template with appropriate identifier headings/labels that relate to specific sections of the project depending on the content of the particular section in the project proposal. For instance, anything in the proposal that talks about the end of the project should be placed in the template's closing focus area.
+
+
+
+5\. Any complex steps in the project template should be broken down then reconstructed into a suitable format for that section of the project template. Pay close attention to any section identifiers and headings/labels already in the drafted established Project Proposal document and update them as necessary.
+
+
+
+6\. Review and analyze any prompts used in the draft Project Template document, their format and structure, then develop and update the prompts so that the implementer would obtain optimal responses when using the prompts with the lead or collaborating agents. Take note of the Project Template Generation prompt and the referenced documents.
+
+
+
+7\. The drafted Project Template document may have outdated architecture, project management, engineering principles and industry policies, practices, regulations and standards. The generated Project Template document must be checked for inconsistencies then updated to conform with local modern architecture, project management, engineering principles and industry policies, practices, regulations and standards; prioritizing the project's local location \[PROJECT-LOCATION] before and global factors are considered. Identifiers, headings, subheadings, labels and section content must be updated accordingly. Any outdated practices must be updated appropriately referencing a feasible transition between any old and new practices identified.
+
+
+
+8\. It would be good to extensively provide all the key details as the established Project Template would be shared and reviewed with potential investors and sponsors. A summarized version can easily be generated on request that would be easier for potential investors and sponsors to follow.
+
+
+
+9\. The established Project Template would be approved during the charter development meeting scheduled with the potential investors/sponsors. Project deliverables and procedures would be reviewed and updated as necessary before the project charter is finalized and approved.
+
+
+
+**<<STOP Project Template Generation>>**
+
+
+
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.06]**
 
 ### **Project Template Development**
 
-1. Analysis and verification approval of assembled template.
-2. Architecture Challenge (AEC Duel) and Challenge Closure (AECC) for the complete project template.
+
+
+**Architectural Engineering of Project Template**
+
+Referencing the generated Project Template, the following section checks the integrity of the established Project Template by running it through Architectural Engineering Analysis (AEA), Verification (AEV) and Challenge stages (AEC and AECC). This section only needs to be run after the generation of a Project Template or as part of a maintenance process.
 
 
 
-### **\[BZJ-\[PROJECT]]\[GOV-01-0004.07]**
+**Prompt 1. Generate Project Template AEA Query**
 
-### **Project Framework Initialization**
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the established Project Template then develop it into a 'Project Template Architectural Engineering Analysis Query' document (`\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\[\\\[BASE-ID]-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\[PROJECT-ID]-0004.04.01]Project\\\_Proposal\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_Development-AEA\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_Query`) and publish to the project docs folder.
+
+**<<START Project Template Reference>>**
+{{Link to Project Template posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/Project\_Base\_Integration\_Manager-v1.12.00.md
+**<<STOP Project Template Reference>>**
+
+
+
+**Prompt 2. Place Project Template AEA Query**
+
+**\[Designated Target: Collaborating Agents]**
+Thoroughly review and analyze the following 'Project Template Architectural Engineering Analysis Query' document, conduct domain analysis, and generate a Project Template AEA Report published to your designated branch (`main/<agent-name>`):
+
+**<<START Project Template AEA Query>>**
+{{Link to Project Template AEA Query document posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEA\_Query-Codex-202610031035.txt
+**<<STOP Project Template AEA Query>>**
+
+
+
+**Prompt 3. Obtain Project Template AEA Query Reports \& Generate AEV Statement**
+
+**\[Designated Target: Lead Agent]**
+Thoroughly review and analyze the 'Project Template Architectural Engineering Analysis Query' reports shared by collaborating agents, synthesize findings, resolve contradictions, and publish a controlled 'Project Template Architectural Engineering Verification Statement' baseline candidate statement document (`\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\[\\\[BASE-ID]-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\[PROJECT-ID]-0004.04.03]Project\\\_Proposal\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_Development-AEV\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_Statement`).
+
+**<<START Project Template AEA Query Reports>>**
+{{Links to agent generated AEA reports posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEA\_Query\_Reports-202610031251.txt
+**<<STOP Project Template AEA Query Reports>>**
+
+
+
+**Prompt 4. Present Project Template AEV Statement**
+
+**\[Designated Target: Collaborating Agents]**
+Thoroughly review and analyze the 'Project Template Architectural Engineering Verification Statement' document and share your verification decision (`AEV APPROVE`, `AEV APPROVE WITH CONDITIONS`, `AEV RETURN`, `AEV BLOCK`, or `ARCHITECTURAL RESET`). Include detailed fix suggestion for any non 'AEV APPROVE' decisions:
+
+**<<START Project Template AEV Statement>>**
+{{Link to Project Template AEV Statement posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEV\_Statement-202610031819.txt
+**<<STOP Project Template AEV Statement>>**
+
+
+
+**Prompt 5. Obtain Project Template AEV Statement Results \& Generate AEC Adversarial Challenge**
+
+**\[Designated Target: Lead Agent]**
+The following are 'Project Template Architectural Engineering Verification Statement Results' from collaborating agents:
+
+**<<START Project Template AEV Statement Results>>**
+{{Links to agent AEV Statement Results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEV\_Responses-202610031921.txt
+**<<STOP Project Template AEV Statement Results>>**
+
+Revision Bounding Rule: If the 'Project Template AEV Statement' document does not achieve unanimous approval after revisions x.0, x.1, x.2, x.3, and x.4, do not produce any further sub-revisions beyond x.4. Instead, trigger an Architectural Reset, compile all documents, and restart the baseline synthesis cycle to review and update the implemented Project Template before returning to the Project Template Development stage.
+
+If any agent disapproves of the AEV document, resolve all blocking issues then update the AEV Statement to be shared with collaborating agents for re-verification.
+
+Once all collaborating agents approve the 'Project Template AEV Statement', prepare an 'Architectural Engineering Challenge - Adversarial Duel' to stress-test and attack the proposed Project Template architecture and engineering rather than merely refining it. The adversarial duel challenge would be shared with each collaborating agent and the results would be shared with the lead agent.
+
+
+
+**Prompt 6. Present AEC Adversarial Duel**
+
+**\[Designated Target: Collaborating Agents]**
+Complete the following 'Project Template Architectural Engineering Challenge - Adversarial Duel' to test and identify any potential break points in the proposed architecture and engineering of the Project Template. An agent must pass a minimum of 90% of all the presented challenges to approve a gate pass to 'Architectural Engineering Challenge Closure' stage.
+
+**<<START Project Template AEC Adversarial Duel>>**
+{{Link to Project Template AEC Adversarial Duel document posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-202610031756.txt
+**<<STOP Project Template AEC Adversarial Duel>>**
+
+
+
+**Prompt 7. Obtain AEC Adversarial Duel Results \& Generate Project Template**
+
+**\[Designated Target: Lead Agent / Security Agent]**
+The following are the collaborating agent's results of the 'Project Template AEC Adversarial Duel':
+
+**<<START Project Template AEC Adversarial Duel Results>>**
+{{Links to AEC Duel results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+**<<STOP Project Template AEC Adversarial Duel Results>>**
+
+If any agent disapproves implementation based on material risks or blockers discovered in the 'Project Template AEC Adversarial Duel', resolve all vulnerabilities in the 'Project Template AEV Statement' then update the 'Project Template AEV Statement' before retying the 'AEC Adversarial Duel'.
+
+Once all collaborating agents approve closure, prepare a 'Project Template Architectural Engineering Challenge Closure (AECC)' document and an updated Project Template for implementation.
+
+
+
+**Prompt 8. Present Created Project Template**
+
+**\[Designated Target: Collaborating Agents]**
+
+Thoroughly review and analyze the following generated Project Template and share your verification decision (`PROPOSAL APPROVE`, `PROPOSAL APPROVE WITH CONDITIONS`, `PROPOSAL RETURN`, `PROPOSAL BLOCK`, or `ARCHITECTURAL RESET`). Include details for any non `PROPOSAL APPROVE` decisions:
+
+**<<START Created Project Template>>**
+{{Links to AEC Duel results posted here}}
+https://github.com/cupidblack/Koware\_Management/blob/main/BlueCrown/Laboratory/development/project-base-integration-manager/docs/%5BBZJ-PGBD-0004.01%5DProject\_Proposal\_Development-AEC\_Adversarial\_Duel-Results-202610031805.txt
+**<<STOP Created Project Template>>**
+
+If any agent disapproves implementation based on material risks or blockers discovered in the 'Project Template AEC Adversarial Duel', resolve all vulnerabilities in the 'Project Template AEV Statement' then update the 'Project Template AEV Statement' before retying the 'AEC Adversarial Duel'.
+
+Once all collaborating agents approve closure, prepare a 'Project Template Architectural Engineering Challenge Closure (AECC)' document and an updated Project Template for implementation.
+
+
+
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[GOV-01-0004.07]**
+
+### **Project Configuration \& Initialization**
 
 Update project attributes, settings, environment variables, collaborating agent branch assignments, platform configurations, base directories, and governance controls.
 
-##### **<<START INITIAL CONSIDERATION NOTES AND PROJECT SETTINGS>>**
+
+
+**<<START Project Configuration \& Initialization>>**
+
+
 
 1. **GitHub Project Setup**: Create GitHub Project `\\\\\\\[PROJECT-FULL-NAME]` (e.g., Buzzjuice Market Payment Gateway Bridge) and set project attributes, description, and board views.
 
-   * Project prefix identifier: `\\\\\\\[BZJ-\\\\\\\[PROJECT]]` (e.g., `BZJ-PGBD`).
+   * Project prefix identifier: `\\\\\\\[\[BASE-ID]-\\\\\\\[PROJECT-ID]]` (e.g., `BZJ-PGBD`).
    * Suffix identifier structure: Four-digit prefix + decimal process identifier. The numeric prefix indicates the lifecycle stage (e.g., `4000s` for execution, `7000s` for monitoring).
 2. **Repository \& Directory Structure**:
 
@@ -442,19 +828,21 @@ Distinguish between Governance Authority (who has sign-off right) and Technical 
     * `STANDARD`: Standard 4-artifact AE lifecycle for general features.
     * `HIGH-ASSURANCE`: Comprehensive AEA/AEV/AEC/AECC cycle with mandatory adversarial challenge and independent Jules reliability check for safety-critical (payment, auth, data) code.
 
-##### **<<STOP INITIAL CONSIDERATION NOTES AND PROJECT SETTINGS>>**
+
+
+**<<STOP Project Configuration \& Initialization>>**
 
 
 
-### **\[BZJ-\[PROJECT]]\[GOV-02-0004.08]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[GOV-02-0004.08]**
 
 ### **Project Simulation**
 
-Team-up, brief, dry-run through project processes, change management workflow, template implementation, preview capabilities, contractor requirements, procurement processes, timelines, project deliverables, and project after-life planning.
+Team-up, brief, dry-run through project processes, address the change management workflow, template operations implementation, preview capabilities, contractor requirements, tendering, procurement processes, timelines, project deliverables, and project after-life planning.
 
 
 
-### **\[BZJ-\[PROJECT]]\[GOV-02-0004.09]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[GOV-02-0004.09]**
 
 ### **PBIM Implementation**
 
@@ -462,7 +850,7 @@ Final activation and integration of PBIM framework into active project execution
 
 
 
-### **\[BZJ-\[PROJECT]]\[GOV-01-0004.1]**
+### **\[\[BASE-ID]-\[PROJECT-ID]]\[GOV-01-0004.1]**
 
 ### **Initiate Project or Phase (Develop Project Charter)**
 
@@ -485,17 +873,19 @@ Official Project Integration Boundary: PBIM identifiers officially end at the de
 1. **Multi-Agent Ecosystem Flexibility**: The default agent ecosystem collaborates with four agents: Kilo Code / Claude Code (Security/Adversarial), Google Jules (Reliability/CI), GitHub Copilot (Implementation), and ChatGPT Codex / Cove (Lead Architecture/Strategy). The ecosystem composition can be updated dynamically via section settings and prompt parameters.
 2. **Standardized Pre-Charter Initialization**: The 'Project Base Integration Initialization' section (`0004.01` to `0004.09`) is designed to fit modern project management standards, enabling rapid implementation before the start of each project.
 3. **Tooling \& Workflow Enhancement**: Incorporate automated tools (such as automated linting, Playwright frontend verification, CI test suites, and schema validators) to enhance production quality and streamline agent interactions.
-4. **Numeric Prefix Range \& Terminal Anchor**: The numeric prefix namespace extends from `0000.01` up to `9999.9`. Close Project or Phase is anchored at `\\\\\\\[BZJ-\\\\\\\[PROJECT]]\\\\\\\[GOV-09-9004.7]`.
+4. **Numeric Prefix Range \& Terminal Anchor**: The numeric prefix namespace extends from `0000.01` up to `9999.9`. Close Project or Phase is anchored at `\\\\\\\[\[BASE-ID]-\\\\\\\[PROJECT-ID]]\\\\\\\[GOV-09-9004.7]`.
 5. **Inline Notes, Prompts, and Placeholders**: Notes, prompts, and resource placeholders MUST be embedded directly within the template sections where they are encountered during workflow execution, rather than consolidated solely at the end. This ensures the project manager and agents encounter relevant guidance in context during project execution. Reference pattern example:
+
+
 
 <<START EXAMPLE>>
 
-\[BZJ-\[PROJECT]]\[SCP-04-0004.02]
+\[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02]
 PBIM Document Development
 
 \[section notes]
 
-<<START PROMPT \[BZJ-\[PROJECT]]\[SCP-04-0004.02] Agent Developed Initial Project Proposal Prompt>>
+<<START PROMPT \[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02] Agent Developed Initial Project Proposal Prompt>>
 
 \[Prompt to share with Agents]
 
@@ -503,13 +893,15 @@ PBIM Document Development
 {{Links to relevant resources placed here}}
 <<STOP include references from previous section to attach with prompt>>
 
-<<STOP PROMPT \[BZJ-\[PROJECT]]\[SCP-04-0004.02] Agent Developed Initial Project Proposal Prompt>>
+<<STOP PROMPT \[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02] Agent Developed Initial Project Proposal Prompt>>
 
-<<START Section \[BZJ-\[PROJECT]]\[SCP-04-0004.02] Agent Responses>>
+<<START Section \[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02] Agent Responses>>
 {{Links to agent responses to prompts placed here}}
-<<STOP Section \[BZJ-\[PROJECT]]\[SCP-04-0004.02] Agent Responses>>
+<<STOP Section \[\[BASE-ID]-\[PROJECT-ID]]\[SCP-04-0004.02] Agent Responses>>
 
 <<STOP EXAMPLE>>
+
+
 
 6. **Identifier Visibility \& Lifecycle Stage Transparency**: Project identifier numeric prefixes provide immediate lifecycle visibility to project managers and developers:
 
@@ -520,8 +912,8 @@ PBIM Document Development
    * `9000s`: Closing.
 For example, `6009.4` indicates execution phase past midpoint.
 7. **Subtitles for Technical Realization**: Where a section identifier utilizes a standard PM process name, an engineering subtitle MUST be provided to clarify the software development action required.
-8. **Generic Placeholder Formatting**: Format templates generically as `\\\\\\\[BZJ-\\\\\\\[PROJECT]]` (using `BZJ-PGBD` as the concrete example).
-9. **Intermediate Sequence Suffixes**: Custom intermediate section suffixes (e.g., `\\\\\\\[BZJ-\\\\\\\[PROJECT]]\\\\\\\[SCP-04-0004.02.01]`) may be inserted between PM process numbers to maintain strict numerical sequence.
+8. **Generic Placeholder Formatting**: Format templates generically as `\\\\\\\[\[BASE-ID]-\\\\\\\[PROJECT-ID]]` (using `BZJ-PGBD` as the concrete example).
+9. **Intermediate Sequence Suffixes**: Custom intermediate section suffixes (e.g., `\\\\\\\[\[BASE-ID]-\\\\\\\[PROJECT-ID]]\\\\\\\[SCP-04-0004.02.01]`) may be inserted between PM process numbers to maintain strict numerical sequence.
 10. **Agent Target Specification**: All prompts MUST explicitly specify the designated target agent(s) (Lead, Implementation, Reliability, or Security) to ensure optimal response routing.
 11. **Re-sequencing of Verification Steps**: All PR reviews, code checks, security audits, and testing steps MUST be sequenced into Executing (4000s/6000s) or Monitoring \& Controlling (7000s/8000s) ranges.
 12. **Correction of Early Review Anchors**: Review steps must not use early-phase identifiers (e.g., `0620` near project start); review anchors must reflect the actual post-implementation stage in 6000s/8000s.
