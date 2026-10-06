@@ -224,7 +224,7 @@ Note the following:
 
 
 
-3\. The PBIM document may have outdated architecture, project management, engineering principles and industry policies, practices, regulations and standards. The created PBIM document must be checked for inconsistencies then updated to conform with local modern architecture, project management, engineering principles and industry policies, practices, regulations and standards, prioritizing the project's local location \[PROJECT-LOCATION] before global factors. Identifiers, headings, subheadings, labels and section content must be updated accordingly. Any outdated practices must be updated appropriately referencing a feasible transition between the old and the new practices identified. 
+3\. The PBIM document may have outdated architecture, project management, engineering principles and industry policies, practices, regulations and standards. The created PBIM document must be checked for inconsistencies then updated to conform with local modern architecture, project management, engineering principles and industry policies, practices, regulations and standards, prioritizing the project's local location \[PROJECT-LOCATION] before considering global factors. Identifiers, headings, subheadings, labels and section content must be updated accordingly. Any outdated practices must be updated appropriately referencing a feasible transition between the old and the new practices identified. 
 
 
 
