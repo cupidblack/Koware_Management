@@ -1,0 +1,150 @@
+Buzzjuice Network is currently using the WordPress 'BP Better Messages' plugin on the WordPress part of the platform whilst Buzzjuice Streams (WoWonder) and Buzzjuice Socials (QuickDate) Both have their own chat systems.
+
+It would be good if there was one unified chat platform that would be used across the whole network. This way when a user receives a message on Socials, a user would get a live message notification and can instantly read and respond to the message on Streams or on WordPress, the main platform. All platforms already get message notifications.
+
+Thoroughly review and analyze the attached BP Better Messages plugin and files to develop the most appropriate and feasible approach to this proposal then take me step by step through the implementation procedure.
+
+One limitation might be that WordPress does not load in Wowonder or QuickDate. This integration is a future development in waiting, probably using wp-load.php in files like WoWonder's init.php and QuickDate's bootstrap.php. Therefore WordPress functions are currently not available in Buzzjuice Streams (WoWonder) or Buzzjuice Social (QuickDate).
+
+Note the following:
+<<START NOTES>>
+
+1. Avoid using the existing Buzzjuice Streams (WoWonder) or Buzzjuice Social (QuickDate) APIs located in 'buzzjuice.net/streams/api/v2/endpoints' and 'buzzjuice.net/social/endpoint/v1/models'. They should only be used for reference in development. Key endpoint files to take note of are:
+'streams/api/v2/endpoints/chat.php'
+'streams/api/v2/endpoints/notifications.php'
+'social/endpoint/v1/models/messages.php'
+'social/endpoint/v1/models/notifications.php'
+
+2. Streams already has a real-time transport system based on nodejs that BP Better Messages could adopt if possible feasible for its for real-time message processing. This can be built after the basic system is tested and working as it should. 
+
+2.i. A real-time mode can be adopted as a configuration setting that can be turned on or off. 
+
+2.ii  WoWonder's nodejs real-time chat has not yet been successfully setup and tested yet. The test can be done to get it working before attempting to modify any WoWonder code to work with the Buzzjuice Messaging system. 
+
+3. BP Better Messages and Streams both support group chats each with their special features.
+
+4. If possible, BP Better Messages Push Notifications could also appear when a user is on Streams or Socials. Streams might have its own built in push messaging system that has been seen with product orders. That system could also be made use of. Not sure how that would benefit Socials.
+
+5. BP Better Messages has some chat/message gating features that should be applicable and enforceable whether on Streams or Socials. These can be implemented after the basic integrated chat is working and can be developed further. For instance:
+
+5.i. User A has completed orientation and Health & Safety lessons up to HS1700.
+
+5.ii. User B has only completed orientation.
+
+5.iii. User A and user B are not connected.
+
+5.iv. User B can only send a connection request to user A after completing a higher level lesson than user A's HS1700. 
+
+Reference for higher level health & safety lessons: https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/mu-plugins/bzj-ld-interstitial-access-gate.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/mu-plugins/learndash-step-requirements.php
+
+5.v. User B can only chat with user A after also completing a higher level Health & Safety lesson (eg. user A has comleted HS1700, complete at least HS1700 to connect with user A. Or user A has completed HS3780, complete HS3780 to connect with user A) or having some points deducted for each message sent. User B can get an 'in-chat' message like 'Complete HS1800 or spend/burn ₱5 (5 Palmiers) per message to chat with this person now'. When the user taps on 'Chat Now P5/message' the user can start chatting.
+
+User A should not be charged per message since user B made the request to start a chat session with an unconnected user. The user who makes the request to start a chat with an unconnected user is charged per message, whilst the user who accepts the chat is not charged for sending any messages. Both users are not charges per message when they are connected. 
+
+With some customizations, this type of gating can be implemented in the BP Better Messages 'Points Systems' setting where specific user roles can be charged set credits/points per message.
+
+Ref: 'buzzjuice.net/wp-content/plugins/bp-better-messages/assets/admin/admin.min.js'
+
+5.vi. User A can freely connect with user B as user A has completed a higher Health & Safety lesson. Once connected the users are connected forever until one of them decides to cancel the connection. Connected users can chat for free without any charges per message.
+
+5.vii. All first time chats provide the option to accept or decline the chat connection unless the users are already connected.
+
+5.viii. Users with no connection can still chat in group chats without the restriction. Restrictions would apply immediately when they are on any type of private chat. Maybe the restrictions can apply when the unconnected users are the only two in a group chat.
+
+5.ix. Some minting strategies could be implemented where the user gets credited for chatting; such as regular chats, prolonged chats without using profanity and the likes.
+
+6. As BP Better Messages has a richer messaging system and might have features that Streams and Socials does not support, The unified messaging system can be basic to start with. Integration developments can be implemented in future development updates.
+
+7. Suggested short-lived messaging sessions is 5 to 20 minutes with silent renewal.
+
+8. The current development should be lean and designed to easily accept new addons and integration capabilities. Here is a possible structure that could be adopted to keep the initial development lean:
+
+8.i. Buzz Messaging must-use plugin hooks into BP Better Messages:
+'wp-content/mu-plugins/bzj-messaging.php'.
+
+8.ii. Any necessary java script files can be saved in the 'buzzjuice.net/shared/bzj-messaging/js' folder and called by the Buzz Messaging must use plugin or client. 
+
+8.iii bzj-messaging.php must-use plugin scans 'buzzjuice.net/shared/bzj-messaging' shared folder for addons and integration files (Such as additional feature sets; stickers; GIFs; reactions; voice; video; calls and others) that hook into the Buzz Messaging system:
+
+'buzzjuice.net/shared/bzj-messaging/addons' 
+'buzzjuice.net/shared/bzj-messaging/int'
+
+8.iv. Buzz Messaging clients provide hooks and functions to bridge Streams and Socials to BP Better Messages through the Buzz Messaging must use plugin's API:
+
+'buzzjuice.net/shared/bzj-messaging/bzj-msg-client-streams-.php' 
+'buzzjuice.net/shared/bzj-messaging/bzj-msg-client-socials.php'
+
+or if the code being used by Streams and socials is the same, just:
+
+'buzzjuice.net/shared/bzj-messaging/bzj-msg-client.php'
+
+8.v. Log files for this projects should be saved appropriately. For instance:
+
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-messaging.log' {{must use plugin's log}}
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-msg-js-{{xxxx}}.log'
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-msg-addon-{{xxxx}.log'
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-msg-int-{{xxxx}}.log'
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-msg-streams-client.log'
+'buzzjuice.net/shared/bzj-messaging/logs/bzj-msg-socials-client.log'
+
+8.v. Code in relevant and related Streams and Socials chat/messaging files can be modified as necessary with include/require_once of the appropriate Buzz Messaging client. This would all Streams and QuickDate to push/post or pull/get to BP Better Messages through the Buzz Messaging must-use plugin API.
+
+<<STOP NOTES>>
+
+<<START BUZZJUICE CONNECTIVITY INTEGRATION>>
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/wp-content/mu-plugins/bzj-connections-sync.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/shared/bzj-connection-client.php
+
+<<STOP BUZZJUICE CONNECTIVITY INTEGRATION>>
+
+The following are links to BP Better Messages Hooks and functions:
+
+<<START BP BETTER MESSAGES RESOURCES>>
+https://www.better-messages.com/hooks/php-functions/
+
+https://www.better-messages.com/hooks/php-filters/
+
+https://www.better-messages.com/hooks/php-actions/
+
+https://www.better-messages.com/hooks/js-functions/
+
+https://www.better-messages.com/hooks/js-filters/
+
+https://www.better-messages.com/hooks/js-actions/
+
+<<STOP BP BETTER MESSAGES RESOURCES>>
+
+<<BUZZJUICE NETWORK RESOURCES>>
+https://github.com/cupidblack/buzzjuice.net/tree/main/wp-content/plugins/bp-better-messages
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/shared/wwqd_bridge.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/streams/assets/init.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/chat
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/layout/chat/content.phtml
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/streams/themes/sunshine/javascript/script.js
+
+https://github.com/cupidblack/buzzjuice.net/tree/main/streams/nodejs
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/bootstrap.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/core.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/themes/love/assets/js/functions.js
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/requests/ajax/chat.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/themes/love/main/chat.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/themes/love/assets/js/chat.js
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/themes/love/profile.php
+
+https://github.com/cupidblack/buzzjuice.net/blob/main/social/endpoint/v1/models/messages.php
