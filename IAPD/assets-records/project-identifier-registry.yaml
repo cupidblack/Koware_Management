@@ -1,42 +1,96 @@
+# Project Identifier Registry — bootstrap candidate
+# This file is NOT authoritative until reviewed, committed to the canonical repository,
+# and independently verified by the recorded governance roles.
+# Do not treat a REQUESTED key as a registry-allocated identifier.
+
+schema_version: "1.0"
 registry:
-  name: Project Identifier Registry
-  status: PROPOSED
-  canonical_path: IAPD/asset-records/project-identifier-registry.yaml
+  name: "Koware / IAPD Project Identifier Registry"
+  canonical_path: "IAPD/assets-records/project-identifier-registry.yaml"
+  repository: "https://github.com/cupidblack/Koware_Management"
+  branch: "main"
+  status: "BOOTSTRAP_CANDIDATE"
+  purpose: >-
+    Authoritative record of project and artifact identifiers, reservations,
+    allocations, aliases, retirements, and allocation evidence after governance
+    adoption and verification.
+  authority:
+    constitutional_authority: "CA-ABSENT"
+    human_project_authority: "UNKNOWN"
+    registry_custodian: "UNKNOWN"
+    independent_validator: "UNKNOWN"
+    independent_verifier: "UNKNOWN"
+    confirming_authority: "UNKNOWN"
+  revision:
+    revision_number: 0
+    parent_commit: "NONE — bootstrap candidate"
+    parent_sha256: "NONE — bootstrap candidate"
+    committed_at_utc: "UNKNOWN — set from the actual commit record"
+    committed_by: "UNKNOWN — set from the actual commit record"
+    verified_commit: "NOT_YET_VERIFIED"
+    content_sha256: "NOT_YET_COMPUTED"
 
-  governance:
-    constitutional_authority: UNKNOWN
-    human_authority: UNKNOWN
-    custodian: UNKNOWN
-    validator: UNKNOWN
-    verifier: UNKNOWN
-    confirming_authority: UNKNOWN
-
-  allocation_protocol:
-    - REQUEST
-    - RESERVE
-    - VALIDATE
-    - COMMIT
-    - VERIFY
-    - CONFIRM
-
+allocation_protocol:
+  sequence:
+    - "REQUEST"
+    - "RESERVE"
+    - "VALIDATE"
+    - "COMMIT"
+    - "VERIFY"
+    - "CONFIRM"
   rules:
-    - "Agents must not invent identifiers."
-    - "Canonical identifiers must be unique."
-    - "Retired identifiers must never be reused."
-    - "Legacy aliases must resolve to exactly one canonical identifier."
-    - "Ambiguous aliases must not be used for new records."
-    - "Registry mutations must be serialized."
-    - "A registry change must record its parent revision and verification result."
-    - "Registry loss or an unresolved registry conflict blocks new allocations."
+    - "No agent or contributor may self-allocate an identifier."
+    - "A requested or reserved identifier is not allocated until the canonical registry change is committed, independently verified, and confirmed by the recorded authority."
+    - "All registry mutations must be serialized; stale or concurrent conflicting writes must be rejected."
+    - "The full canonical uniqueness key is (DOMAIN, DSEQ, normalized ANCHOR)."
+    - "Equal anchors in different domains are not collisions; identical full canonical keys are collisions."
+    - "Ambiguous legacy aliases must not be used for new records."
+    - "Retired identifiers are tombstoned and must never be reused."
+    - "If the registry is unavailable, allocation stops; no ungoverned fallback is permitted."
 
-revision:
-  revision_id: PENDING
-  parent_revision: NONE
-  sha256: PENDING
-  authorised_by: PENDING
-  verified_by: PENDING
-  verification_result: PENDING
-  timestamp_utc: PENDING
-  grammar_version: PENDING
+identifier_grammar:
+  project_key:
+    description: "A project key composed from registry-allocated BASE-ID and PROJECT-ID components, according to the adopted PBIM grammar."
+    status: "GRAMMAR_REQUIRES_GOVERNANCE_CONFIRMATION"
+  artifact_id:
+    description: "A fully qualified artifact identifier including the project key and canonical section/artifact identifier."
+    status: "GRAMMAR_REQUIRES_GOVERNANCE_CONFIRMATION"
+  canonical_uniqueness_key_fields:
+    - "DOMAIN"
+    - "DSEQ"
+    - "normalized ANCHOR"
+
+requests:
+  - request_type: "PROJECT_KEY"
+    requested_value: "default-proj20261009"
+    status: "REQUESTED_NOT_ALLOCATED"
+    project_name: "[PROJECT-FULL-NAME — required before confirmation]"
+    requesting_document:
+      path: "Project_Base_Integration_Manager-v1.12.07.md"
+      sha256: "100736c72ae330183fb408d518ef1887faa8a07edf7361542f23519e1f3d8661"
+      reference_status: "LOCAL_CANDIDATE_HASH_SUPPLIED; repository commit not supplied"
+    requested_at_utc: "UNKNOWN"
+    requested_by: "UNKNOWN"
+    review_evidence: []
+    decision_record: "NOT_YET_RECORDED"
+    note: >-
+      The requested value was supplied in the AEA prompt context. It is recorded
+      only as a request and is not represented as allocated, reserved, or approved.
 
 entries: []
+
+aliases: []
+retired_identifiers: []
+
+required_allocation_evidence:
+  - "Approved request and project identity"
+  - "Uniqueness and alias-collision validation result"
+  - "Registry commit SHA and committed content SHA-256"
+  - "Independent verification record identifying the exact commit and hash"
+  - "Confirmation by the recorded authority"
+
+change_log:
+  - revision: 0
+    change: "Bootstrap candidate prepared; no identifiers allocated."
+    date_utc: "2026-10-10"
+    status: "UNCOMMITTED_CANDIDATE"
