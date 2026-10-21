@@ -5,7 +5,7 @@
 |Document|Project Base Integration Manager — Generic Edition|
 |Version|**v1.12.08**|
 |Document class|Generic pre-charter project integration, governance, assurance and readiness framework|
-|Status|**APPROVED**|
+|Status|**HUMAN APPROVED** May need updates and version bump to officially move from being a controlled candidate.|
 |Maturity|`DESIGNED` only. Nothing in this document is evidence that any control operates|
 |Candidate parent|User-supplied `Project_Base_Integration_Manager-v1.12.07.md`; this local derivative does not assert a repository commit or parent hash. Record both in the immutable source manifest before adoption.|
 |Review basis|Remediation of Prompt 2 findings F-01–F-07 and OPEN-01–OPEN-09 from the v1.12.06 review set; independent re-assurance remains required|
