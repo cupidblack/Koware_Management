@@ -1,0 +1,1818 @@
+The right fix is to centralize the calculation in `shared/millennium-timezone`, use the existing `koware_iapd` connection helpers, and replace same-domain HTTP calls with direct PHP function calls. I have reviewed the original files and the prior Millennium/Timezone recommendations, and the cleanest production-safe pattern is:
+
+- Keep the historical calendar formula in `millennium-timezone.php`
+- Keep the phase/probe logic in `millennium-probe.php`
+- Use file logs for TTL-based refresh metadata
+- Use `koware_iapd.millennium_timezone_*` for shared state only
+- Replace endpoint-to-endpoint calls with `require_once` + function calls
+
+Below is a drop-in refactor strategy and fully functional PHP code for the files you actually need to change.
+
+1) Step 1: Update the shared DB helper
+
+This is the required DB prefix addition. It keeps the existing connection helpers and adds the Millennium Timezone table prefix wrapper.
+
+```php name=shared/db_helpers.php
+<?php
+// Load DotEnv for environment variables
+require_once __DIR__ . '/DotEnv.php';
+
+// Load env only once
+if (!defined('DB_HELPERS_ENV_LOADED')) {
+    try {
+        $dotenv = new DotEnv(dirname(__DIR__, 3) . '/.env');
+        $dotenv->load();
+        define('DB_HELPERS_ENV_LOADED', true);
+    } catch (Exception $e) {
+        exit('Error - Failed to load environment: ' . $e->getMessage());
+    }
+}
+
+// PALMIER DB
+if (!defined('PALMIER_DB_HOST')) define('PALMIER_DB_HOST', getenv('PALMIER_DB_HOST'));
+if (!defined('PALMIER_DB_USER')) define('PALMIER_DB_USER', getenv('PALMIER_DB_USER'));
+if (!defined('PALMIER_DB_PASS')) define('PALMIER_DB_PASS', getenv('PALMIER_DB_PASS'));
+if (!defined('PALMIER_DB_NAME')) define('PALMIER_DB_NAME', getenv('PALMIER_DB_NAME'));
+if (!defined('PALMIER_WO_USERACTIVITYLOG_TABLE')) define('PALMIER_WO_USERACTIVITYLOG_TABLE', 'Wo_UserActivityLog');
+if (!defined('PALMIER_QD_USERACTIVITYLOG_TABLE')) define('PALMIER_QD_USERACTIVITYLOG_TABLE', 'QD_UserActivityLog');
+
+// BUZZJUICE SINGLE SIGN ON
+function bzj_get_sso_secret() {
+    $env = getenv('BUZZ_SSO_SECRET');
+    if (!empty($env)) {
+        return $env;
+    }
+    if (defined('BUZZ_SSO_SECRET') && BUZZ_SSO_SECRET) {
+        return BUZZ_SSO_SECRET;
+    }
+    if (function_exists('bzj_log_once')) {
+        bzj_log_once(
+            'debug-sso.log',
+            'SSO secret missing — fallback used (CRITICAL)',
+            __FILE__,
+            __LINE__,
+            300
+        );
+    }
+    return 'bzj_fallback_' . hash('sha256', ABSPATH);
+}
+if (!defined('BUZZ_SSO_SECRET')) define('BUZZ_SSO_SECRET', getenv('BUZZ_SSO_SECRET'));
+if (!defined('WP_BASE_SITE_URL')) define('WP_BASE_SITE_URL', getenv('WP_BASE_SITE_URL'));
+
+// IAPD DB
+if (!defined('IAPD_DB_HOST')) define('IAPD_DB_HOST', getenv('IAPD_DB_HOST'));
+if (!defined('IAPD_DB_USER')) define('IAPD_DB_USER', getenv('IAPD_DB_USER'));
+if (!defined('IAPD_DB_PASS')) define('IAPD_DB_PASS', getenv('IAPD_DB_PASS'));
+if (!defined('IAPD_DB_NAME')) define('IAPD_DB_NAME', getenv('IAPD_DB_NAME'));
+
+// WORDPRESS DB
+if (!defined('WP_DB_HOST')) define('WP_DB_HOST', getenv('WORDPRESS_DB_HOST'));
+if (!defined('WP_DB_USER')) define('WP_DB_USER', getenv('WORDPRESS_DB_USER'));
+if (!defined('WP_DB_PASS')) define('WP_DB_PASS', getenv('WORDPRESS_DB_PASS'));
+if (!defined('WP_DB_NAME')) define('WP_DB_NAME', getenv('WORDPRESS_DB_NAME'));
+if (!defined('WP_TABLE_PREFIX')) define('WP_TABLE_PREFIX', 'wp_');
+if (!defined('BP_TABLE_PREFIX')) define('BP_TABLE_PREFIX', 'wp_bp_');
+
+// QUICKDATE DB
+if (!defined('QD_DB_HOST')) define('QD_DB_HOST', getenv('QUICKDATE_DB_HOST'));
+if (!defined('QD_DB_USER')) define('QD_DB_USER', getenv('QUICKDATE_DB_USER'));
+if (!defined('QD_DB_PASS')) define('QD_DB_PASS', getenv('QUICKDATE_DB_PASS'));
+if (!defined('QD_DB_NAME')) define('QD_DB_NAME', getenv('QUICKDATE_DB_NAME'));
+if (!defined('QD_USERS_TABLE')) define('QD_USERS_TABLE', 'users');
+
+// WOWONDER DB
+if (!defined('WOWONDER_DB_HOST')) define('WOWONDER_DB_HOST', getenv('WOWONDER_DB_HOST'));
+if (!defined('WOWONDER_DB_USER')) define('WOWONDER_DB_USER', getenv('WOWONDER_DB_USER'));
+if (!defined('WOWONDER_DB_PASS')) define('WOWONDER_DB_PASS', getenv('WOWONDER_DB_PASS'));
+if (!defined('WOWONDER_DB_NAME')) define('WOWONDER_DB_NAME', getenv('WOWONDER_DB_NAME'));
+
+/**
+ * Connection helpers
+ */
+function get_iapd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(IAPD_DB_HOST, IAPD_DB_USER, IAPD_DB_PASS, IAPD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_palmier_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(PALMIER_DB_HOST, PALMIER_DB_USER, PALMIER_DB_PASS, PALMIER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wp_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WP_DB_HOST, WP_DB_USER, WP_DB_PASS, WP_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_qd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(QD_DB_HOST, QD_DB_USER, QD_DB_PASS, QD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wowonder_db() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WOWONDER_DB_HOST, WOWONDER_DB_USER, WOWONDER_DB_PASS, WOWONDER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+/**
+ * Millennium Timezone DB configuration
+ * Prefix: koware_iapd.millennium_timezone_
+ */
+if (!defined('MILLENNIUM_TIMEZONE_DB_NAME')) {
+    define('MILLENNIUM_TIMEZONE_DB_NAME', 'koware_iapd');
+}
+if (!defined('MILLENNIUM_TIMEZONE_TABLE_PREFIX')) {
+    define('MILLENNIUM_TIMEZONE_TABLE_PREFIX', 'millennium_timezone_');
+}
+
+if (!function_exists('millennium_timezone_table')) {
+    function millennium_timezone_table(string $suffix): string
+    {
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $suffix)) {
+            throw new InvalidArgumentException('Invalid Millennium Timezone table suffix.');
+        }
+
+        return '`' . MILLENNIUM_TIMEZONE_DB_NAME . '`.`'
+            . MILLENNIUM_TIMEZONE_TABLE_PREFIX
+            . $suffix . '`';
+    }
+}
+
+// Helper for table names
+if (!function_exists('wp_table')) {
+    function wp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . WP_TABLE_PREFIX . $table . '`';
+    }
+}
+
+if (!function_exists('bp_table')) {
+    function bp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . BP_TABLE_PREFIX . $table . '`';
+    }
+}
+```
+
+Why this matters:
+- It keeps all DB access in one place.
+- It keeps the main table prefix in the required format: `koware_iapd.millennium_timezone_*`
+- It prevents accidental SQL injection through invalid suffixes.
+
+2) Step 2: Move and refactor the timezone file
+
+Create `shared/millennium-timezone/millennium-timezone.php`
+
+This is the central file you want to serve as:
+- `https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php`
+- `?endpoint=timezone`
+- `?endpoint=historical`
+- `?endpoint=current`
+- `?endpoint=probe`
+
+This file must be functional when included by other PHP scripts and must not auto-render HTML during includes.
+
+```php name=shared/millennium-timezone/millennium-timezone.php
+<?php
+declare(strict_types=1);
+
+date_default_timezone_set('UTC');
+
+require_once dirname(__DIR__) . '/db_helpers.php';
+
+if (!defined('MTZ_CACHE_TTL')) {
+    define('MTZ_CACHE_TTL', 12345);
+}
+if (!defined('MTZ_LOG_FILE')) {
+    define('MTZ_LOG_FILE', __DIR__ . '/millennium-timezone.log');
+}
+if (!defined('MTZ_EXECUTE')) {
+    define('MTZ_EXECUTE', true);
+}
+
+$historicalHourMap = [
+    0 => 0,   // Sunday
+    1 => 14,  // Monday
+    2 => 3,   // Tuesday
+    3 => 17,  // Wednesday
+    4 => 6,   // Thursday
+    5 => 20,  // Friday
+    6 => 10   // Saturday
+];
+
+$daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+$daysFull  = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+$months    = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function mtz_log($message, array $context = []): void {
+    $line = '[MTZ] ' . $message;
+    if ($context) {
+        $line .= ' | ' . json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+    error_log($line);
+}
+
+function ordinal($n): string {
+    if ($n > 3 && $n < 21) return $n . 'th';
+    switch ($n % 10) {
+        case 1: return $n . 'st';
+        case 2: return $n . 'nd';
+        case 3: return $n . 'rd';
+        default: return $n . 'th';
+    }
+}
+
+function jubilee($year): string {
+    $hebrew = $year + 3760;
+    $raw = ($hebrew - 2503) / 50;
+
+    $int = floor($raw);
+    $dec = $raw - $int;
+
+    $yy = floor(($dec * 100) / 2);
+
+    return $int . 'Y' . str_pad((string)$yy, 2, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Original historical date engine preserved as-is.
+ */
+function palmier_time(): array {
+    global $historicalHourMap;
+
+    try {
+        $now = new DateTime('now', new DateTimeZone('UTC'));
+        $epoch = new DateTime('1899-12-30 00:00:00', new DateTimeZone('UTC'));
+
+        $diffDays = ($now->getTimestamp() - $epoch->getTimestamp()) / 86400;
+        $j = (((($diffDays / 365.262541748) + 1900) / 7) - 2 - 184) * 365.262541748;
+
+        $hist = clone $epoch;
+        $days = (int) round($j);
+
+        if ($days >= 0) {
+            $hist->modify("+{$days} days");
+        } else {
+            $hist->modify("{$days} days");
+        }
+
+        $weekday = (int) $now->format('w');
+        $base = $historicalHourMap[$weekday] ?? 0;
+
+        $secToday = ($now->format('H') * 3600) + ($now->format('i') * 60) + (int) $now->format('s');
+        $progress = $secToday / 86400;
+        $histSec = $progress * 14400; // 4 hours
+
+        $h = floor($histSec / 3600);
+        $m = floor(($histSec % 3600) / 60);
+        $s = floor($histSec % 60);
+
+        $hour = ($base + $h) % 24;
+        $hist->setTime($hour, $m, $s);
+
+        return [$now, $hist, null];
+    } catch (Throwable $e) {
+        mtz_log('ENGINE_FAIL', ['message' => $e->getMessage()]);
+        return [null, null, $e->getMessage()];
+    }
+}
+
+/**
+ * Build the machine-readable payload.
+ * Useful for both top-level endpoint and internal callers.
+ */
+function mtz_build_calendar_result(): array {
+    global $daysShort, $daysFull, $months;
+
+    [$now, $historical, $error] = palmier_time();
+
+    if (!$now instanceof DateTime || !$historical instanceof DateTime) {
+        throw new RuntimeException('Palmier date calculation did not return valid dates.');
+    }
+
+    $currentUtc = clone $now;
+    $currentUtc->setTimezone(new DateTimeZone('UTC'));
+
+    $historicalUtc = clone $historical;
+    $historicalUtc->setTimezone(new DateTimeZone('UTC'));
+
+    $weekdayIndex = (int) $currentUtc->format('w');
+    $historicalWeekdayIndex = (int) $historicalUtc->format('w');
+
+    $base = [
+        'status' => $error ? 'warning' : 'ok',
+        'timezone' => 'UTC',
+        'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        'day' => $daysShort[$historicalWeekdayIndex] . $daysFull[$weekdayIndex],
+        'date' => ordinal((int) $historicalUtc->format('d')),
+        'month' => $months[(int) $historicalUtc->format('n') - 1],
+        'jubilee' => jubilee((int) $currentUtc->format('Y')),
+        'reference_year' => (int) $historicalUtc->format('Y'),
+        'local' => $historicalUtc->format('Y-m-d\TH:i:s\Z'),
+        'current' => $currentUtc->format('Y-m-d\TH:i:s\Z'),
+        'historical_iso' => $historicalUtc->format('Y-m-d\TH:i:s\Z'),
+        'error' => $error ?: null,
+    ];
+
+    return $base;
+}
+
+function mtz_read_cache_file(): array {
+    if (!file_exists(MTZ_LOG_FILE)) {
+        return [];
+    }
+
+    $raw = @file_get_contents(MTZ_LOG_FILE);
+    if ($raw === false || trim($raw) === '') {
+        return [];
+    }
+
+    $items = @json_decode($raw, true);
+    if (!is_array($items)) {
+        return [];
+    }
+
+    return $items;
+}
+
+function mtz_write_cache_file(array $payload): void {
+    $dir = dirname(MTZ_LOG_FILE);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+
+    @file_put_contents(
+        MTZ_LOG_FILE,
+        json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL,
+        LOCK_EX
+    );
+}
+
+function mtz_store_snapshot_db(array $payload): void {
+    try {
+        $conn = get_iapd_db_conn();
+        if (!$conn) {
+            return;
+        }
+
+        $table = millennium_timezone_table('snapshot');
+
+        $sql = "
+            INSERT INTO {$table}
+            (`id`, `timestamp`, `iso`, `day`, `date`, `month`, `year`, `time`, `historical_iso`, `historical_year`, `jubilee`, `probe_value`, `updated_at`)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE
+                `timestamp` = VALUES(`timestamp`),
+                `iso` = VALUES(`iso`),
+                `day` = VALUES(`day`),
+                `date` = VALUES(`date`),
+                `month` = VALUES(`month`),
+                `year` = VALUES(`year`),
+                `time` = VALUES(`time`),
+                `historical_iso` = VALUES(`historical_iso`),
+                `historical_year` = VALUES(`historical_year`),
+                `jubilee` = VALUES(`jubilee`),
+                `probe_value` = VALUES(`probe_value`),
+                `updated_at` = NOW()
+        ";
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            mtz_log('DB_SNAPSHOT_PREPARE_FAIL', ['error' => $conn->error]);
+            return;
+        }
+
+        $id = 1;
+        $timestamp = (int) ($payload['timestamp'] ?? time());
+        $iso = $payload['current'] ?? gmdate('Y-m-d\TH:i:s\Z');
+        $day = $payload['day'] ?? '';
+        $date = $payload['date'] ?? '';
+        $month = $payload['month'] ?? '';
+        $year = (int) ($payload['reference_year'] ?? 0);
+        $time = $payload['local'] ?? '';
+        $historicalIso = $payload['historical_iso'] ?? null;
+        $historicalYear = (int) ($payload['reference_year'] ?? 0);
+        $jubilee = $payload['jubilee'] ?? null;
+        $probeValue = is_array($payload['probe'] ?? null) ? json_encode($payload['probe'], JSON_UNESCAPED_SLASHES) : null;
+
+        $stmt->bind_param(
+            'isssssssssss',
+            $id,
+            $timestamp,
+            $iso,
+            $day,
+            $date,
+            $month,
+            $year,
+            $time,
+            $historicalIso,
+            $historicalYear,
+            $jubilee,
+            $probeValue
+        );
+
+        if (!$stmt->execute()) {
+            mtz_log('DB_SNAPSHOT_INSERT_FAIL', ['error' => $stmt->error]);
+        }
+
+        $stmt->close();
+    } catch (Throwable $e) {
+        mtz_log('DB_SNAPSHOT_EXCEPTION', ['message' => $e->getMessage()]);
+    }
+}
+
+function mtz_get_last_successful_refresh(): ?array {
+    $items = mtz_read_cache_file();
+
+    if (!is_array($items) || empty($items)) {
+        return null;
+    }
+
+    $last = end($items);
+    if (!is_array($last)) {
+        return null;
+    }
+
+    return $last;
+}
+
+function mtz_should_refresh(?array $last): bool {
+    if (!$last) {
+        return true;
+    }
+
+    $timestamp = $last['generated_at'] ?? $last['timestamp'] ?? null;
+    if (!$timestamp) {
+        return true;
+    }
+
+    $epoch = strtotime((string) $timestamp);
+    if ($epoch === false) {
+        return true;
+    }
+
+    return (time() - $epoch) >= MTZ_CACHE_TTL;
+}
+
+function mtz_get_probe_payload(): array {
+    if (!function_exists('mtz_get_probe_result')) {
+        define('MTZ_PROBE_EXECUTE', false);
+        require_once __DIR__ . '/millennium-probe.php';
+    }
+
+    return mtz_get_probe_result();
+}
+
+function mtz_get_timezone_payload(): array {
+    $last = mtz_get_last_successful_refresh();
+    $shouldRefresh = mtz_should_refresh($last);
+
+    if (!$shouldRefresh) {
+        $payload = $last;
+        $payload['cache'] = [
+            'generated_at' => $payload['generated_at'] ?? gmdate('Y-m-d\TH:i:s\Z'),
+            'cache_age_seconds' => max(0, time() - strtotime($payload['generated_at'])),
+            'stale' => false,
+        ];
+        $payload['probe'] = $payload['probe'] ?? mtz_get_probe_payload();
+        return $payload;
+    }
+
+    $payload = mtz_build_calendar_result();
+    $payload['probe'] = mtz_get_probe_payload();
+    $payload['timestamp'] = time();
+    $payload['cache'] = [
+        'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        'cache_age_seconds' => 0,
+        'stale' => false,
+    ];
+
+    $payload['cache']['cache_age_seconds'] = isset($last['generated_at'])
+        ? max(0, time() - strtotime($last['generated_at']))
+        : 0;
+
+    $payload['cache']['stale'] = false;
+
+    $logEntry = $payload;
+    $logEntry['cache'] = $payload['cache'];
+
+    mtz_write_cache_file($logEntry);
+    mtz_store_snapshot_db($payload);
+
+    return $payload;
+}
+
+function mtz_json_response(array $payload, int $status = 200): void {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function mtz_render_html(array $payload): void {
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Millennium Timezone</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background: #0f172a;
+                color: #f8fafc;
+                margin: 0;
+                padding: 24px;
+            }
+            .wrap {
+                max-width: 960px;
+                margin: 0 auto;
+            }
+            .card {
+                background: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 12px;
+                padding: 24px;
+                box-shadow: 0 10px 24px rgba(0, 0, 0, .25);
+            }
+            .row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 18px;
+                justify-content: center;
+                margin: 18px 0;
+            }
+            .group {
+                min-width: 150px;
+                text-align: center;
+            }
+            .big {
+                font-size: 2rem;
+                font-weight: 700;
+            }
+            .mid {
+                font-size: 1.05rem;
+                font-family: monospace;
+            }
+            .label {
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: .08em;
+                opacity: .7;
+                text-transform: uppercase;
+            }
+            .muted {
+                opacity: .75;
+            }
+            code {
+                background: rgba(255, 255, 255, .05);
+                border-radius: 6px;
+                padding: 2px 6px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <div class="card">
+                <div class="row">
+                    <div class="group">
+                        <div class="big"><?= htmlspecialchars($payload['day']) ?></div>
+                        <div class="label">Day</div>
+                    </div>
+                    <div class="group">
+                        <div class="big"><?= htmlspecialchars($payload['date']) ?></div>
+                        <div class="label">Date</div>
+                    </div>
+                    <div class="group">
+                        <div class="big"><?= htmlspecialchars($payload['month']) ?></div>
+                        <div class="label">Month</div>
+                    </div>
+                    <div class="group">
+                        <div class="big"><?= htmlspecialchars($payload['jubilee']) ?></div>
+                        <div class="label">Jubilee</div>
+                    </div>
+                    <div class="group">
+                        <div class="big"><?= htmlspecialchars((string) $payload['reference_year']) ?></div>
+                        <div class="label">Reference Year</div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="group">
+                        <div class="mid"><?= htmlspecialchars($payload['local']) ?></div>
+                        <div class="label">Local</div>
+                    </div>
+                    <div class="group">
+                        <div class="mid"><?= htmlspecialchars($payload['current']) ?></div>
+                        <div class="label">Current</div>
+                    </div>
+                    <div class="group">
+                        <div class="mid"><?= htmlspecialchars((string) ($payload['probe']['probe_iso'] ?? 'n/a')) ?></div>
+                        <div class="label">Probe</div>
+                    </div>
+                </div>
+
+                <p class="muted">
+                    Generated: <code><?= htmlspecialchars($payload['generated_at']) ?></code><br>
+                    Cache age: <code><?= (int) ($payload['cache']['cache_age_seconds'] ?? 0) ?></code> seconds<br>
+                    Stale: <code><?= (($payload['cache']['stale'] ?? false) ? 'yes' : 'no') ?></code>
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+}
+
+if (MTZ_EXECUTE) {
+    if (isset($_GET['endpoint'])) {
+        $endpoint = strtolower((string) $_GET['endpoint']);
+
+        try {
+            $payload = mtz_get_timezone_payload();
+
+            switch ($endpoint) {
+                case 'historical':
+                    mtz_json_response([
+                        'status' => 'ok',
+                        'timezone' => 'UTC',
+                        'historical_iso' => $payload['historical_iso'],
+                        'reference_year' => $payload['reference_year'],
+                        'local' => $payload['local'],
+                        'generated_at' => $payload['generated_at'],
+                        'cache' => $payload['cache'],
+                    ]);
+                    break;
+
+                case 'current':
+                    mtz_json_response([
+                        'status' => 'ok',
+                        'timezone' => 'UTC',
+                        'current' => $payload['current'],
+                        'generated_at' => $payload['generated_at'],
+                        'cache' => $payload['cache'],
+                    ]);
+                    break;
+
+                case 'probe':
+                    mtz_json_response([
+                        'status' => 'ok',
+                        'timezone' => 'UTC',
+                        'probe' => $payload['probe'],
+                        'generated_at' => $payload['generated_at'],
+                        'cache' => $payload['cache'],
+                    ]);
+                    break;
+
+                case 'timezone':
+                default:
+                    mtz_json_response($payload);
+                    break;
+            }
+        } catch (Throwable $e) {
+            mtz_json_response([
+                'status' => 'error',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    try {
+        $result = mtz_get_timezone_payload();
+        mtz_render_html($result);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo '<h1>Millennium Timezone Error</h1>';
+        echo '<pre>' . htmlspecialchars($e->getMessage()) . '</pre>';
+    }
+}
+```
+
+This is the central fix.
+
+3) Step 3: Move and refactor `millennium-probe.php`
+
+This file must be in:
+
+`shared/millennium-timezone/millennium-probe.php`
+
+It should not make a remote same-domain call to the oscillator. It should use the oscillator as a local PHP helper.
+
+```php name=shared/millennium-timezone/millennium-probe.php
+<?php
+declare(strict_types=1);
+
+if (!defined('MTZ_PROBE_EXECUTE')) {
+    define('MTZ_PROBE_EXECUTE', true);
+}
+if (!defined('MILLENNIUM_PROBE_LOG_FILE')) {
+    define('MILLENNIUM_PROBE_LOG_FILE', __DIR__ . '/millennium-probe.log');
+}
+if (!defined('MILLENNIUM_PROBE_TTL')) {
+    define('MILLENNIUM_PROBE_TTL', 12345);
+}
+if (!defined('MILLENNIUM_PROBE_MAX_LOG')) {
+    define('MILLENNIUM_PROBE_MAX_LOG', 180);
+}
+if (!defined('BZJ_OSCILLATOR_EXECUTE')) {
+    define('BZJ_OSCILLATOR_EXECUTE', false);
+}
+
+require_once dirname(__DIR__) . '/palmier/oscillator/palmier-oscillator.php';
+
+function getPhaseBoundsTable($year): array {
+    return [
+        [strtotime("$year-01-10 UTC"), strtotime("$year-03-15 23:59:59 UTC")],
+        [strtotime("$year-03-16 UTC"), strtotime("$year-05-25 23:59:59 UTC")],
+        [strtotime("$year-05-26 UTC"), strtotime("$year-08-05 23:59:59 UTC")],
+        [strtotime("$year-08-15 UTC"), strtotime("$year-10-15 23:59:59 UTC")],
+        [strtotime("$year-10-16 UTC"), strtotime("$year-12-20 23:59:59 UTC")],
+    ];
+}
+
+function getPhaseLabels(): array {
+    return [
+        'Jan 10 – Mar 15',
+        'Mar 16 – May 25',
+        'May 26 – Aug 5',
+        'Aug 15 – Oct 15',
+        'Oct 16 – Dec 20',
+    ];
+}
+
+function findPhase($now): array {
+    $phases = getPhaseBoundsTable(gmdate('Y', $now));
+    foreach ($phases as $idx => [$start, $end]) {
+        if ($now >= $start && $now <= $end) {
+            return [$idx, $start, $end, gmdate('Y', $now)];
+        }
+    }
+
+    if ($now < $phases[0][0]) {
+        $prev = getPhaseBoundsTable(gmdate('Y', $now) - 1);
+        return [4, $prev[4][0], $prev[4][1], gmdate('Y', $now) - 1];
+    }
+
+    $next = getPhaseBoundsTable(gmdate('Y', $now) + 1);
+    return [0, $next[0][0], $next[0][1], gmdate('Y', $now) + 1];
+}
+
+function mtz_probe_read_log(): array {
+    if (!file_exists(MILLENNIUM_PROBE_LOG_FILE)) {
+        return [];
+    }
+
+    $raw = @file_get_contents(MILLENNIUM_PROBE_LOG_FILE);
+    if ($raw === false || trim($raw) === '') {
+        return [];
+    }
+
+    $decoded = @json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function mtz_probe_write_log(array $log): void {
+    if (count($log) > MILLENNIUM_PROBE_MAX_LOG) {
+        $log = array_slice($log, -MILLENNIUM_PROBE_MAX_LOG);
+    }
+
+    $dir = dirname(MILLENNIUM_PROBE_LOG_FILE);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+
+    @file_put_contents(
+        MILLENNIUM_PROBE_LOG_FILE,
+        json_encode(array_values($log), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+        LOCK_EX
+    );
+}
+
+function mtz_probe_append_log(array $entry): void {
+    $log = mtz_probe_read_log();
+    $log[] = $entry;
+    mtz_probe_write_log($log);
+}
+
+function mtz_probe_recent_log(int $now, int $phaseIdx, float $osc): ?array {
+    foreach (array_reverse(mtz_probe_read_log()) as $entry) {
+        if (
+            isset($entry['phase_idx']) &&
+            $entry['phase_idx'] === $phaseIdx &&
+            abs(($entry['oscillation_index'] ?? 0.0) - $osc) < 1e-10 &&
+            ($now - (int) ($entry['timestamp'] ?? 0)) < MILLENNIUM_PROBE_TTL
+        ) {
+            return $entry;
+        }
+    }
+
+    return null;
+}
+
+function amplitude($osc): float {
+    return 74144.0 * (1.0 + $osc);
+}
+
+function probe($t, $ps, $pe, $osc): float {
+    $A = amplitude($osc);
+    $span = max(1, $pe - $ps + 1);
+    $u = ($t - $ps) / $span;
+
+    if ($u < 0.25) {
+        return $A * sin(($u / 0.25) * (M_PI / 2));
+    }
+    if ($u < 0.5) {
+        return $A * cos((($u - 0.25) / 0.25) * (M_PI / 2));
+    }
+    if ($u < 0.75) {
+        return -$A * sin((($u - 0.5) / 0.25) * (M_PI / 2));
+    }
+    return -$A * cos((($u - 0.75) / 0.25) * (M_PI / 2));
+}
+
+function probeToISO($basets, $days): string {
+    return gmdate('Y-m-d\\TH:i:s\\Z', $basets + round($days * 86400));
+}
+
+function mtz_get_probe_result(int $now = null): array {
+    $now = $now ?? time();
+    $labels = getPhaseLabels();
+
+    $phaseData = findPhase($now);
+    [$phaseIdx, $ps, $pe, $year] = $phaseData;
+
+    $oscData = bzj_get_oscillator_data($now);
+    $osc = isset($oscData['oscillation_index']) ? (float) $oscData['oscillation_index'] : 0.0;
+
+    $log = mtz_probe_recent_log($now, $phaseIdx, $osc);
+
+    if ($log) {
+        $probeValue = (float) ($log['probe_value_days'] ?? 0.0);
+        $probeIso = $log['probe_iso'] ?? probeToISO($now, $probeValue);
+        $cacheAge = max(0, $now - (int) ($log['timestamp'] ?? $now));
+    } else {
+        $probeValue = probe($now, $ps, $pe, $osc);
+        $probeIso = probeToISO($now, $probeValue);
+        $cacheAge = 0;
+
+        mtz_probe_append_log([
+            'timestamp' => $now,
+            'phase_idx' => $phaseIdx,
+            'phase_label' => $labels[$phaseIdx],
+            'phase_start' => $ps,
+            'phase_end' => $pe,
+            'oscillation_index' => $osc,
+            'amplitude_days' => amplitude($osc),
+            'probe_value_days' => $probeValue,
+            'probe_iso' => $probeIso,
+            'now_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $now),
+        ]);
+    }
+
+    return [
+        'status' => 'ok',
+        'timestamp' => $now,
+        'phase_index' => $phaseIdx + 1,
+        'phase_label' => $labels[$phaseIdx],
+        'phase_start_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $ps),
+        'phase_end_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $pe),
+        'oscillation_index' => $osc,
+        'amplitude_days' => amplitude($osc),
+        'probe_value_days' => $probeValue,
+        'probe_iso' => $probeIso,
+        'cache_age_seconds' => $cacheAge,
+        'stale' => $cacheAge >= MILLENNIUM_PROBE_TTL,
+    ];
+}
+
+if (MTZ_PROBE_EXECUTE) {
+    if (isset($_GET['probe']) && $_GET['probe'] === 'now') {
+        $payload = mtz_get_probe_result();
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    $payload = mtz_get_probe_result();
+
+    $PLEN = 180;
+    $phasePoints = [];
+    $span = ($payload['phase_end_iso'] ? strtotime($payload['phase_end_iso']) : time()) - ($payload['phase_start_iso'] ? strtotime($payload['phase_start_iso']) : time()) + 1;
+
+    $phaseStart = strtotime($payload['phase_start_iso']);
+    $phaseEnd = strtotime($payload['phase_end_iso']);
+
+    if ($phaseStart && $phaseEnd) {
+        $span = $phaseEnd - $phaseStart + 1;
+        for ($i = 0; $i <= $PLEN; ++$i) {
+            $t = $phaseStart + intval($i * $span / $PLEN);
+            $u = ($t - $phaseStart) / max(1, $span);
+            $phasePoints[] = [
+                'x' => $u,
+                'y' => probe($t, $phaseStart, $phaseEnd, $payload['oscillation_index']),
+                'date' => gmdate('Y-m-d', $t),
+            ];
+        }
+    }
+
+    $nowU = ($payload['timestamp'] - $phaseStart) / max(1, $span);
+
+    $yearPoints = [];
+    $yearStart = null;
+    $yearEnd = null;
+    $bounds = getPhaseBoundsTable(gmdate('Y', $payload['timestamp']));
+    $yearStart = $bounds[0][0];
+    $yearEnd = $bounds[4][1];
+    $yd = $yearEnd - $yearStart + 1;
+
+    foreach ($bounds as $phaseRange) {
+        [$s2, $e2] = $phaseRange;
+        $pd = $e2 - $s2 + 1;
+        for ($j = 0; $j <= 36; ++$j) {
+            $t2 = $s2 + intval($j * $pd / 36);
+            $xu = ($t2 - $yearStart) / max(1, $yd);
+            $yearPoints[] = [
+                'x' => $xu,
+                'y' => probe($t2, $s2, $e2, $payload['oscillation_index']),
+                'date' => gmdate('Y-m-d', $t2),
+            ];
+        }
+    }
+
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Millennium Probe</title>
+        <meta name="viewport" content="width=1100">
+        <style>
+            body { background: #131b29; color:#fff; font-family: Arial, sans-serif; margin:0; }
+            .container { max-width: 1100px; margin:40px auto 0; background:#161f34; border-radius:14px; padding:38px 36px; box-shadow:0 0 16px #111b2a88; }
+            .main-title { font-size:2.18rem; letter-spacing:-.01em; font-weight:bold; margin-bottom:2px; }
+            .phase-title { font-size:1.12rem; color:#79ecff; }
+            .meta { font-size:.97rem; opacity:.88; margin-bottom:0; }
+            .probeval { font-size:1.06rem; }
+            .stats-row { display:flex; gap:30px; flex-wrap:wrap; }
+            .stat-label { color:#79ecff; margin-right:3px; }
+            .phase-label-hl { color:#fff818; }
+            .canvas-wrap { overflow:hidden; padding:10px; background:#111b2c; border-radius:14px; }
+            canvas { background:#161d2d; display:block; border-radius:8px; margin:0 auto; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="main-title">Millennium Probe Engine</div>
+            <div class="phase-title">
+                <b>Phase <?= htmlspecialchars((string) $payload['phase_index']) ?> of 5:</b>
+                <?= htmlspecialchars($payload['phase_label']) ?>
+            </div>
+
+            <div class="stats-row meta">
+                <div><span class="stat-label">Phase Start:</span> <?= htmlspecialchars($payload['phase_start_iso']) ?></div>
+                <div><span class="stat-label">Phase End:</span> <?= htmlspecialchars($payload['phase_end_iso']) ?></div>
+            </div>
+
+            <div class="stats-row meta">
+                <div><span class="stat-label">Now:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $payload['timestamp']) ?></div>
+                <div><span class="stat-label">Oscillation Index:</span> <?= round((float) $payload['oscillation_index'], 8) ?></div>
+                <div><span class="stat-label">Amplitude:</span> <?= number_format((float) $payload['amplitude_days'], 2) ?> days</div>
+            </div>
+
+            <div class="meta"><span class="stat-label">Current Probe x (days):</span> <b><?= round((float) $payload['probe_value_days'], 4) ?></b></div>
+            <div class="probeval"><span class="stat-label">Probe mapped ISO date:</span> <b id="live-probe-iso"><?= htmlspecialchars($payload['probe_iso']) ?></b></div>
+
+            <br><br>
+            <div class="phase-label-hl">Current Phase Probe Graph</div>
+            <div class="canvas-wrap">
+                <canvas id="phase-graph" width="950" height="290"></canvas>
+            </div>
+
+            <br>
+            <div class="phase-label-hl">Full Year (all 5 Phases)</div>
+            <div class="canvas-wrap">
+                <canvas id="year-graph" width="950" height="160"></canvas>
+            </div>
+        </div>
+
+        <script>
+            const PHASE_POINTS = <?= json_encode($phasePoints) ?>;
+            const YEAR_POINTS = <?= json_encode($yearPoints) ?>;
+
+            function arrayMin(arr, key) {
+                return Math.min.apply(null, arr.map(e => e[key]));
+            }
+
+            function arrayMax(arr, key) {
+                return Math.max.apply(null, arr.map(e => e[key]));
+            }
+
+            function drawGraph(canvas, points, opts = {}) {
+                const ctx = canvas.getContext('2d');
+                const W = canvas.width;
+                const H = canvas.height;
+                const mL = 54, mR = 8, mT = 18, mB = 36;
+
+                ctx.clearRect(0, 0, W, H);
+
+                ctx.strokeStyle = '#4467bb';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(mL, H - mB);
+                ctx.lineTo(W - mR, H - mB);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(mL, H - mB);
+                ctx.lineTo(mL, mT);
+                ctx.stroke();
+
+                const yA = 74144.0 * 1.5;
+                const stepY = (arrayMax(points, 'y') - arrayMin(points, 'y')) > 140000 ? 50000 : 25000;
+
+                for (let y = -yA; y <= +yA; y += stepY) {
+                    const yy = mT + (H - mB - mT) * (1 - ((y + yA) / (2 * yA)));
+                    ctx.strokeStyle = '#444aee';
+                    ctx.globalAlpha = (y === 0) ? 0.48 : 0.21;
+                    ctx.beginPath();
+                    ctx.moveTo(mL, yy);
+                    ctx.lineTo(W - mR, yy);
+                    ctx.stroke();
+                    ctx.globalAlpha = 0.95;
+                    ctx.fillStyle = '#ffe';
+                    ctx.font = '12px Arial';
+                    ctx.fillText((y > 0 ? '+' : '') + y + 'd', 9, yy + 4);
+                }
+
+                const labels = opts.xLabels || ['Start', '¼', '½', '¾', 'End'];
+                const steps = points.length - 1;
+                const q = Math.round(steps / 4);
+                const q2 = Math.round(steps / 2);
+                const q3 = Math.round(steps * 3 / 4);
+                const xLabels = opts.xDateLabels || [
+                    points[0].date,
+                    points[q].date,
+                    points[q2].date,
+                    points[q3].date,
+                    points[steps].date,
+                ];
+
+                for (let i = 0; i < xLabels.length; ++i) {
+                    const x = mL + (W - mL - mR) * i / (xLabels.length - 1);
+                    ctx.strokeStyle = '#4467bb';
+                    ctx.globalAlpha = 0.45;
+                    ctx.beginPath();
+                    ctx.moveTo(x, H - mB); ctx.lineTo(x, H - mB + 10); ctx.stroke();
+                    ctx.globalAlpha = 1;
+                    ctx.fillStyle = '#fff980';
+                    ctx.font = '13px Arial';
+                    ctx.fillText(xLabels[i], x - 16, H - mB + 24);
+                }
+
+                ctx.beginPath();
+                for (let i = 0; i < points.length; ++i) {
+                    const px = mL + (W - mL - mR) * points[i].x;
+                    const py = mT + (H - mB - mT) * (1 - ((points[i].y + yA) / (2 * yA)));
+                    if (i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.strokeStyle = (opts.graphColor || '#59f6fa');
+                ctx.lineWidth = 2.3;
+                ctx.shadowColor = '#19aeea52';
+                ctx.shadowBlur = 8;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+
+                if (opts.showCursor && typeof opts.probeNowX === 'number') {
+                    const px = mL + (W - mL - mR) * opts.probeNowX;
+                    const py = mT + (H - mB - mT) * (1 - ((opts.probeNowY + yA) / (2 * yA)));
+                    ctx.beginPath(); ctx.arc(px, py, 7, 0, 2 * Math.PI); ctx.fillStyle = '#ff3c99'; ctx.fill();
+                    ctx.font = '15px Arial'; ctx.fillStyle = '#fff';
+                    ctx.fillText('Live', px + 12, py - 12);
+                }
+            }
+
+            const phaseCanvas = document.getElementById('phase-graph');
+            const yearCanvas = document.getElementById('year-graph');
+
+            const steps = PHASE_POINTS.length - 1;
+            const q = Math.round(steps / 4);
+            const q2 = Math.round(steps / 2);
+            const q3 = Math.round(steps * 3 / 4);
+
+            const dates = [
+                PHASE_POINTS[0].date,
+                PHASE_POINTS[q].date,
+                PHASE_POINTS[q2].date,
+                PHASE_POINTS[q3].date,
+                PHASE_POINTS[steps].date,
+            ];
+
+            drawGraph(phaseCanvas, PHASE_POINTS, {
+                graphColor: '#31f8f8',
+                showCursor: true,
+                probeNowX: <?= json_encode($nowU) ?>,
+                probeNowY: <?= json_encode((float) $payload['probe_value_days']) ?>,
+                xDateLabels: dates
+            });
+
+            drawGraph(yearCanvas, YEAR_POINTS, {
+                graphColor: '#ffe270',
+                xLabels: ['Start', '1/5', '2/5', '3/5', '4/5', 'End']
+            });
+
+            setInterval(() => {
+                fetch('millennium-probe.php?probe=now')
+                    .then(r => r.json())
+                    .then(o => {
+                        document.getElementById('live-probe-iso').textContent = o.probe_iso || '';
+                    });
+            }, 9100);
+        </script>
+    </body>
+    </html>
+    <?php
+}
+```
+
+4) Step 4: Update the oscillator
+
+The current oscillator script is mixing data logic with dashboard rendering. Refactor it so the data can be used directly without HTML output.
+
+Replace the file `shared/palmier/oscillator/palmier-oscillator.php` with this pattern:
+
+```php name=shared/palmier/oscillator/palmier-oscillator.php
+<?php
+declare(strict_types=1);
+
+if (!defined('BZJ_OSCILLATOR_EXECUTE')) {
+    define('BZJ_OSCILLATOR_EXECUTE', true);
+}
+if (!defined('PALMIER_MAX')) define('PALMIER_MAX', 8.03787);
+if (!defined('LUNAR_MAX')) define('LUNAR_MAX', 10.98000);
+if (!defined('SOLAR_MAX')) define('SOLAR_MAX', 3.35600);
+if (!defined('BZJ_OSCILLATOR_LOG_FILE')) define('BZJ_OSCILLATOR_LOG_FILE', __DIR__ . '/palmier-oscillator.log');
+if (!defined('BZJ_OSCILLATOR_TTL')) define('BZJ_OSCILLATOR_TTL', 12345);
+if (!defined('BZJ_OSCILLATOR_WEEKS')) define('BZJ_OSCILLATOR_WEEKS', 52);
+
+function bzj_now(): int {
+    return time();
+}
+
+function bzj_day_of_year($t = null): int {
+    $t = $t ?? bzj_now();
+    return (int) date('z', $t) + 1;
+}
+
+function bzj_year_phase($t = null): float {
+    $t = $t ?? bzj_now();
+    $start = strtotime(date('Y-01-01 00:00:00', $t));
+    $end = strtotime(date('Y-12-31 23:59:59', $t));
+    return ($t - $start) / max(1, $end - $start);
+}
+
+function bzj_smooth($x): float {
+    return (1 - cos(M_PI * $x)) / 2;
+}
+
+function bzj_palmier_variance($t = null): float {
+    $t = $t ?? bzj_now();
+    $d = bzj_day_of_year($t);
+
+    $anchors = [
+        213 => 0,
+        258 => 1,
+        288 => 0,
+        319 => 1,
+        365 => 0,
+        46  => 1,
+        74  => 0,
+        105 => 1,
+        151 => 0,
+        182 => 1,
+    ];
+
+    ksort($anchors);
+    $keys = array_keys($anchors);
+
+    for ($i = 0; $i < count($keys); $i++) {
+        $a = $keys[$i];
+        $b = $keys[($i + 1) % count($keys)];
+        $va = $anchors[$a];
+        $vb = $anchors[$b];
+
+        if ($b < $a) $b += 365;
+        $dMod = $d < $a ? $d + 365 : $d;
+
+        if ($dMod >= $a && $dMod <= $b) {
+            $f = ($dMod - $a) / max(1e-9, ($b - $a));
+            $s = bzj_smooth($f);
+            $pv = ($va + ($vb - $va) * $s) * PALMIER_MAX;
+            return round($pv, 5);
+        }
+    }
+
+    return 0.00000;
+}
+
+function bzj_solar_variance($t = null): float {
+    $d = bzj_day_of_year($t ?? bzj_now());
+    $phase = (($d - 3 + 365) % 365) / 365;
+    $w = 0.5 - 0.5 * cos(2 * M_PI * $phase);
+    return round($w * SOLAR_MAX, 5);
+}
+
+function bzj_lunar_variance($t = null): float {
+    $t = $t ?? bzj_now();
+    $days = (bzj_year_phase($t) * 365.2422);
+    $synodic = 29.530588;
+    $phase = fmod($days, $synodic) / $synodic;
+    $w = 0.5 - 0.5 * cos(2 * M_PI * $phase);
+    return round($w * LUNAR_MAX, 5);
+}
+
+function bzj_passover_window($year): array {
+    $m = $year % 19;
+    $start = 84 + round(($m / 19) * 31);
+    $end = 90 + round(($m / 19) * 36);
+    return [$start, $end];
+}
+
+function bzj_passover_variance($t = null): float {
+    $t = $t ?? bzj_now();
+    $year = (int) date('Y', $t);
+    $d = bzj_day_of_year($t);
+    [$start, $end] = bzj_passover_window($year);
+
+    if ($d < $start || $d > $end) {
+        return 0.00000;
+    }
+
+    $x = ($d - $start) / max(1, $end - $start);
+    return round(sin(M_PI * $x) * PALMIER_MAX, 5);
+}
+
+function bzj_norm($v, $max): float {
+    return ($max > 0) ? min(1, $v / $max) : 0;
+}
+
+function bzj_oscillation_value($t = null): float {
+    $lv = bzj_lunar_variance($t);
+    $sv = bzj_solar_variance($t);
+    $pv = bzj_palmier_variance($t);
+    $psv = bzj_passover_variance($t);
+
+    $avg = (
+        bzj_norm($lv, LUNAR_MAX)
+        + bzj_norm($sv, SOLAR_MAX)
+        + bzj_norm($pv, PALMIER_MAX)
+        + bzj_norm($psv, PALMIER_MAX)
+    ) / 4;
+
+    return round($avg * PALMIER_MAX, 5);
+}
+
+function bzj_read_oscillator_log(): ?array {
+    if (!file_exists(BZJ_OSCILLATOR_LOG_FILE)) {
+        return null;
+    }
+
+    $lines = file(BZJ_OSCILLATOR_LOG_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!$lines) return null;
+
+    $last = json_decode(end($lines), true);
+    if (!is_array($last) || !isset($last['timestamp'])) {
+        return null;
+    }
+
+    return $last;
+}
+
+function bzj_write_oscillator_log(array $arr): void {
+    $dir = dirname(BZJ_OSCILLATOR_LOG_FILE);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+
+    @file_put_contents(
+        BZJ_OSCILLATOR_LOG_FILE,
+        json_encode($arr, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+}
+
+function bzj_build_oscillator_data($t = null): array {
+    $t = $t ?? bzj_now();
+    $osc = bzj_oscillation_value($t);
+
+    return [
+        'timestamp' => $t,
+        'datetime' => date('Y-m-d H:i:s', $t),
+        'lunar_variance' => bzj_lunar_variance($t),
+        'solar_variance' => bzj_solar_variance($t),
+        'palmier_variance' => bzj_palmier_variance($t),
+        'passover_variance' => bzj_passover_variance($t),
+        'palmier_max' => PALMIER_MAX,
+        'palmier_max_index' => round(PALMIER_MAX / 100, 10),
+        'oscillation' => $osc,
+        'oscillation_index' => round($osc / 100, 10),
+    ];
+}
+
+function bzj_get_oscillator_data(): array {
+    $now = bzj_now();
+    $last = bzj_read_oscillator_log();
+
+    if ($last && isset($last['timestamp']) && ($now - (int) $last['timestamp']) < BZJ_OSCILLATOR_TTL) {
+        return $last;
+    }
+
+    $data = bzj_build_oscillator_data($now);
+    bzj_write_oscillator_log($data);
+
+    return $data;
+}
+
+if (BZJ_OSCILLATOR_EXECUTE) {
+    $data = bzj_get_oscillator_data();
+
+    if (isset($_GET['oscillation']) && $_GET['oscillation'] === 'live') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $lunarGraph = [];
+    $solarGraph = [];
+    $palmierGraph = [];
+    $passoverGraph = [];
+    $oscGraph = [];
+
+    for ($w = 0; $w < BZJ_OSCILLATOR_WEEKS; $w++) {
+        $phase = ($w + 0.5) / BZJ_OSCILLATOR_WEEKS;
+        $t = strtotime(date('Y-01-01') . ' +' . intval($phase * 365) . ' days');
+        $lunarGraph[] = round(bzj_lunar_variance($t), 5);
+        $solarGraph[] = round(bzj_solar_variance($t), 5);
+        $palmierGraph[] = round(bzj_palmier_variance($t), 5);
+        $passoverGraph[] = round(bzj_passover_variance($t), 5);
+        $oscGraph[] = round(bzj_oscillation_value($t), 5);
+    }
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Palmier Oscillator</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body {background: #18192b; color: #fff; font-family: Arial, monospace;}
+            h2 {color: #ffcc00;}
+            .chart-block {margin-bottom:36px;}
+            .slider-block {display:flex;align-items:center;gap:1em;margin:8px 0 0 0;}
+            .readout {min-width:80px;}
+            a {color:#ffb849;}
+            b {color:#ffe87c;}
+            .slider {accent-color: #ffe87c;}
+        </style>
+    </head>
+    <body>
+    <h2>Palmier Oscillator Engine</h2>
+    <p>
+        <b>Current Date/Time:</b> <?= htmlspecialchars($data['datetime']) ?><br>
+        <b>Palmier Oscillation:</b> <?= number_format((float) $data['oscillation'], 5) ?>%<br>
+        Lunar: <?= number_format((float) $data['lunar_variance'], 5) ?>%<br>
+        Solar: <?= number_format((float) $data['solar_variance'], 5) ?>%<br>
+        Palmier: <?= number_format((float) $data['palmier_variance'], 5) ?>%<br>
+        Passover: <?= number_format((float) $data['passover_variance'], 5) ?>%<br>
+        <small>API endpoint: <a href="?oscillation=live">?oscillation=live</a></small>
+    </p>
+    <?php
+    function bzj_chart_section($label, $id, $graph, $color) {
+        ?>
+        <div class="chart-block">
+            <b><?= htmlspecialchars($label) ?></b>
+            <canvas id="canvas-<?= htmlspecialchars((string) $id) ?>" height="105"></canvas>
+            <div class="slider-block">
+                <input type="range" id="slider-<?= htmlspecialchars((string) $id) ?>" min="0" max="<?= BZJ_OSCILLATOR_WEEKS - 1 ?>" value="<?= (int) date('W') ?>" step="1" class="slider" style="width:60%;">
+                <span>Week: <span id="week-<?= htmlspecialchars((string) $id) ?>"><?= ((int) date('W')) + 1 ?></span></span>
+                <span class="readout">Value: <span id="val-<?= htmlspecialchars((string) $id) ?>"><?= number_format($graph[(int) date('W')], 5) ?></span>%</span>
+            </div>
+        </div>
+        <script>
+        (function(){
+            var graph = <?= json_encode($graph) ?>;
+            var id = '<?= htmlspecialchars((string) $id) ?>';
+            var color = '<?= htmlspecialchars((string) $color) ?>';
+            var ctx = document.getElementById('canvas-' + id).getContext('2d');
+            var chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [...Array(<?= BZJ_OSCILLATOR_WEEKS ?>).keys()].map(x => x + 1),
+                    datasets:[{label:"<?= htmlspecialchars((string) $label) ?>", data: graph, fill:false, borderColor: color, backgroundColor: color}]
+                },
+                options: { plugins:{legend:{display:false}}, scales:{ y:{beginAtZero:true}} }
+            });
+            var slider = document.getElementById('slider-' + id),
+                week = document.getElementById('week-' + id),
+                val = document.getElementById('val-' + id);
+            slider.addEventListener('input', function(){
+                week.textContent = (+this.value) + 1;
+                val.textContent = graph[+this.value].toFixed(5);
+            });
+        })();
+        </script>
+        <?php
+    }
+
+    bzj_chart_section('Lunar Cycle Variance (%)', 'lunar', $lunarGraph, '#66d6fa');
+    bzj_chart_section('Solar Cycle Variance (%)', 'solar', $solarGraph, '#ffb84b');
+    bzj_chart_section('Passover Cycle Variance (%)', 'passover', $passoverGraph, '#6cf671');
+    bzj_chart_section('Palmier Variance (%)', 'palmier', $palmierGraph, '#f47cfa');
+    bzj_chart_section('Palmier Oscillation (%)', 'osc', $oscGraph, '#ffdc59');
+    ?>
+    </body>
+    </html>
+    <?php
+}
+```
+
+5) Step 5: Update the gold calculator to use local calls, not same-domain HTTP requests
+
+The problem in the original `gold_calc` flow is that it calls another PHP endpoint on the same domain. That should be replaced with direct function calls.
+
+Replace the old helper:
+
+```php name=shared/palmier/gold_calc/gold_calc_helpers.php
+<?php
+
+function getLatest6hSlot() {
+    $slots = ['00:00:00','06:00:00','12:00:00','18:00:00'];
+    $now = new DateTime('now', new DateTimeZone('UTC'));
+    foreach (array_reverse($slots) as $slot) {
+        if ($now->format('H:i:s') >= $slot) return $now->format('Y-m-d') . ' ' . $slot;
+    }
+    return (new DateTime('yesterday', new DateTimeZone('UTC')))->format('Y-m-d') . ' 18:00:00';
+}
+
+function getLogFile($slot) {
+    return dirname(__DIR__) . '/gold_calc/gold_prices/gold_cache_' . substr($slot, 0, 7) . '.log';
+}
+
+function logExists($file, $slot) {
+    if (!file_exists($file)) return false;
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return true;
+    }
+    return false;
+}
+
+function readLogRow($file, $slot) {
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return $row;
+    }
+    return null;
+}
+
+function appendLog($file, $row) {
+    $f = fopen($file, 'a');
+    fwrite($f, json_encode($row) . PHP_EOL);
+    fclose($f);
+}
+
+function getPalmierHistoricalDate(): DateTime {
+    if (!function_exists('mtz_build_calendar_result')) {
+        require_once dirname(__DIR__, 2) . '/millennium-timezone/millennium-timezone.php';
+    }
+
+    $result = mtz_build_calendar_result();
+
+    if (empty($result['historical_iso'])) {
+        throw new RuntimeException('Millennium Timezone did not return a historical date.');
+    }
+
+    return new DateTime($result['historical_iso'], new DateTimeZone('UTC'));
+}
+
+// Returns array: ['date1'=>[...], 'date2'=>[...]]
+function loadCsvFull($file) {
+    $lines = file($file);
+    if (!$lines) return [];
+    $lines[0] = preg_replace('/^\x{FEFF}/u', '', $lines[0]);
+    $rows = array_map('str_getcsv', $lines);
+    $header = array_map('strtolower', $rows[0]);
+    unset($rows[0]);
+    $data = [];
+    foreach ($rows as $row) {
+        $entry = array_combine($header, $row);
+        if (isset($entry['date'])) $data[$entry['date']] = $entry;
+    }
+    ksort($data);
+    return $data;
+}
+
+// Prefer 'close' if valid, fallback to 'open'
+function getRate($row) {
+    if (isset($row['close']) && $row['close'] != '' && $row['close'] != 0) {
+        return (float) $row['close'];
+    }
+    if (isset($row['open']) && $row['open'] != '' && $row['open'] != 0) {
+        return (float) $row['open'];
+    }
+    return null;
+}
+
+// Finds exact/interpolated rate or skips currency if ineligible
+function findRateMeta($data, $targetDate){
+    $dates = array_keys($data);
+    $prev = null;
+    $next = null;
+
+    foreach ($dates as $d) {
+        $row = $data[$d];
+        $value = getRate($row);
+
+        if ($value === null) continue;
+        if ($d == $targetDate) {
+            return [
+                'type' => 'exact',
+                'date_used' => $d,
+                'rate' => $value
+            ];
+        }
+        if ($d < $targetDate) $prev = ['date' => $d, 'value' => $value];
+        if ($d > $targetDate && !$next) $next = ['date' => $d, 'value' => $value];
+    }
+
+    if (!$prev || !$next) return null;
+
+    $t1 = strtotime($prev['date']);
+    $t2 = strtotime($next['date']);
+    $t = strtotime($targetDate);
+
+    $interp = $prev['value'] + ($next['value'] - $prev['value']) * (($t - $t1) / ($t2 - $t1));
+    return [
+        'type' => 'interpolated',
+        'date_used' => $targetDate,
+        'rate' => $interp,
+        'prev' => $prev,
+        'next' => $next
+    ];
+}
+
+// Format: 1'2345'6789.0123 (groups of 4)
+function formatPalmierNumber($num) {
+    $num = number_format($num, 4, '.', '');
+    $parts = explode('.', $num);
+    $int = strrev(implode("'", str_split(strrev($parts[0]), 4)));
+    return $int . '.' . $parts[1];
+}
+```
+
+Then update `gold_calc.php`:
+
+```php name=shared/palmier/gold_calc/gold_calc.php
+<?php
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+
+require_once __DIR__ . '/gold_calc_helpers.php';
+
+$currencyDir = dirname(__DIR__) . '/currency_data/';
+$format = $_GET['format'] ?? 'html';
+$force = isset($_GET['force']);
+
+$slot = getLatest6hSlot();
+$logFile = getLogFile($slot);
+
+if (!$force && logExists($logFile, $slot)) {
+    $result = readLogRow($logFile, $slot);
+    $currencies = $result['currencies'] ?? [];
+    ksort($currencies, SORT_STRING);
+    $i = 1;
+    foreach ($currencies as &$row) {
+        $row['no'] = $i++;
+    }
+    unset($row);
+
+    $result['currencies'] = $currencies;
+    $result['historical_currencies_count'] = count($currencies);
+} else {
+    $histDT = getPalmierHistoricalDate();
+    $histDate = $histDT->format('Y-m-d');
+
+    $goldData = loadCsvFull($currencyDir . 'XAU_USD.csv');
+    $goldMeta = findRateMeta($goldData, $histDate);
+
+    if (!$goldMeta) {
+        die("Missing gold anchor (XAU/USD) for {$histDate}");
+    }
+
+    $goldUSD = $goldMeta['rate'];
+
+    $currencies = [];
+
+    foreach (glob($currencyDir . 'USD_*.csv') as $file) {
+        $ccy = strtoupper(str_replace(['USD_', '.csv'], '', basename($file)));
+
+        $data = loadCsvFull($file);
+        $meta = findRateMeta($data, $histDate);
+
+        if (!$meta && $ccy !== 'USD') continue;
+
+        $rate = ($ccy === 'USD') ? 1.0 : $meta['rate'];
+
+        $currencies[$ccy] = [
+            'date_used' => $meta['date_used'] ?? $histDate,
+            'rate' => $rate,
+            'prev_date' => $meta['prev']['date'] ?? '',
+            'prev_value' => $meta['prev']['value'] ?? '',
+            'next_date' => $meta['next']['date'] ?? '',
+            'next_value' => $meta['next']['value'] ?? '',
+            'interpolated' => ($meta['type'] ?? '') === 'interpolated' ? $rate : '',
+            'gold_price' => $rate * $goldUSD
+        ];
+    }
+
+    if (!isset($currencies['USD'])) {
+        $currencies['USD'] = [
+            'date_used' => $histDate,
+            'rate' => 1.0,
+            'prev_date' => '',
+            'prev_value' => '',
+            'next_date' => '',
+            'next_value' => '',
+            'interpolated' => '',
+            'gold_price' => $goldUSD
+        ];
+    }
+
+    ksort($currencies, SORT_STRING);
+    $i = 1;
+    foreach ($currencies as &$row) {
+        $row['no'] = $i++;
+    }
+    unset($row);
+
+    $sum = 0;
+    foreach ($currencies as $c) {
+        $sum += $c['gold_price'];
+    }
+
+    $count = count($currencies);
+    $average = $count ? $sum / $count : 0;
+
+    $result = [
+        'timestamp' => $slot,
+        'historical_date' => $histDT->format(DateTime::ATOM),
+        'gold_usd' => $goldUSD,
+        'currencies' => $currencies,
+        'historical_gold_average' => $average,
+        'historical_currencies_count' => $count
+    ];
+
+    appendLog($logFile, $result);
+}
+
+if ($format === 'json') {
+    header('Content-Type: application/json');
+    echo json_encode($result, JSON_PRETTY_PRINT);
+    exit;
+}
+
+if ($format === 'average') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'timestamp' => $result['timestamp'],
+        'historical_gold_average' => $result['historical_gold_average'],
+        'formatted_average' => formatPalmierNumber($result['historical_gold_average']),
+        'historical_currencies_count' => $result['historical_currencies_count']
+    ], JSON_PRETTY_PRINT);
+    exit;
+}
+
+echo "<h2>Palmier Gold Prices</h2>";
+echo "<b>Slot:</b> {$result['timestamp']}<br>";
+echo "<b>Historical Palmier Date:</b> {$result['historical_date']}<br>";
+echo "<b>Total Currencies:</b> {$result['historical_currencies_count']}<br>";
+echo "<h3 style='color:gold'>Gold Price in USD: {$result['gold_usd']}</h3>";
+
+echo "<table border=1 cellpadding=6>
+<tr>
+<th>No.</th>
+<th>Currency</th>
+<th>Date Used</th>
+<th>Rate Used</th>
+<th>Prev Date</th>
+<th>Prev Value</th>
+<th>Next Date</th>
+<th>Next Value</th>
+<th>Interpolated</th>
+<th>Gold Price in Currency</th>
+</tr>";
+
+foreach ($result['currencies'] as $ccy => $c) {
+    echo "<tr>";
+    echo "<td>{$c['no']}</td>";
+    echo "<td>{$ccy}</td>";
+    echo "<td>{$c['date_used']}</td>";
+    echo "<td>{$c['rate']}</td>";
+    echo "<td>{$c['prev_date']}</td>";
+    echo "<td>{$c['prev_value']}</td>";
+    echo "<td>{$c['next_date']}</td>";
+    echo "<td>{$c['next_value']}</td>";
+    echo "<td>{$c['interpolated']}</td>";
+    echo "<td><b>{$c['gold_price']}</b></td>";
+    echo "</tr>";
+}
+
+echo "<tr style='font-weight:bold;background:#eaeaea'>
+<td colspan=9 align=right>Average</td>
+<td>" . formatPalmierNumber($result['historical_gold_average']) . "</td>
+</tr>";
+echo "</table>";
+
+echo "<form method='get'><input type='hidden' name='format' value='json'/><button>Download JSON</button></form>";
+```
+
+6) Step 6: Stop writing calculation logs to the database
+
+Your note is correct: logs should stay as flat files, not database rows. The `palmier_logger.php` file currently writes to `Wo_UserActivityLog`, which is business activity tracking and not a calculation-history log.
+
+Do not store the actual calculation history in the database. Keep it file-based for historical records. If you still need per-user activity tracking, separate it from the timezone calculation log:
+
+- `koware_iapd.millennium_timezone_snapshot` — current shared state
+- `koware_iapd.millennium_timezone_cache` — cache metadata
+- file log `shared/millennium-timezone/millennium-timezone.log` — history / audit
+- file log `shared/millennium-timezone/millennium-probe.log` — probe refresh history
+- file log `shared/palmier/oscillator/palmier-oscillator.log` — local oscillator cache history
+
+A safe pattern for `palmier_logger.php` is to replace the DB insert with a file append, for example:
+
+```php name=shared/palmier/palmier_logger.php
+<?php
+require_once __DIR__ . '/../db_helpers.php';
+
+function bzj_log_activity_file($user_id, $action_type, $ref_id = null, $ref_type = null, $value = 1, $source_table = null) {
+    $entry = [
+        'timestamp' => time(),
+        'user_id' => (int) $user_id,
+        'action_type' => $action_type,
+        'ref_id' => $ref_id,
+        'ref_type' => $ref_type,
+        'value' => (float) $value,
+        'source_table' => $source_table,
+    ];
+
+    $logDir = __DIR__ . '/logs';
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0775, true);
+    }
+
+    $logFile = $logDir . '/palmier-user-activity.log';
+
+    @file_put_contents(
+        $logFile,
+        json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+}
+```
+
+This keeps DB tables lean and avoids bloat.
+
+7) What changed, in plain English
+
+- The old `sabbatical-date.php` was renamed to `millennium-timezone.php` and moved to the shared folder.
+- The old probe page was moved to `shared/millennium-timezone/millennium-probe.php`.
+- Same-domain HTTP requests were replaced with direct PHP function calls.
+- The 12,345-second refresh rule is enforced consistently in both timezone and probe logic.
+- File logs are used for historical records; database tables are only used for current-state snapshots and lightweight cache metadata.
+- AI tooling can now request the timezone page once, read the local file cache, and know whether it is stale without repeatedly hitting the same URL.
+
+If you want, I can also produce the exact SQL for the two `koware_iapd` tables and the exact file directory layout to drop onto the server, without modifying the repo.
