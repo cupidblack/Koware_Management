@@ -1,0 +1,1293 @@
+I reviewed the files you pointed to and the main problem is consistent: the old Palmier calendar/probe stack is still hard-wired to old file names, old URL paths, and unnecessary remote calls. The safest refactor is:
+
+- Rename/move the old calendar engine to a new `shared/millennium-timezone/` area.
+- Keep the historical “calendar date” logic in one file and make it return structured data for AI/chatbots.
+- Keep the probe logic separate but local/same-domain.
+- Stop writing routine logs to the database; keep them in log files.
+- Use the `koware_iapd` database only for actual structured records with the prefix `koware_iapd.millennium_timezone_`.
+- Replace remote fetches to self-hosted same-domain PHP files with local PHP execution paths or same-domain local calls, not expensive cross-domain/endpoint churn.
+
+I did not push or modify the repo; this is the refactor to apply in chat.
+
+1) The main issues found
+
+- `shared/palmier/calendar/sabbatical-date.php` is still the old engine name and path.
+- `shared/palmier/probe/millennium-probe.php` is still under the old probe folder and still calls external same-domain URLs in ways that create churn and duplication.
+- `gold_calc.php` and `gold_calc_helpers.php` still assume the old URL and path:
+  - `https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php`
+- `palmier_logger.php` writes to `Wo_UserActivityLog` in the Palmier DB, which is not appropriate for this millennium timezone system.
+- There is no consistent database prefix helper for the new timezone system, even though you want:
+  - `koware_iapd.millennium_timezone_...`
+- The timezone file must be structured so an AI agent can read a clean object with exact keys:
+  - `day`
+  - `date`
+  - `month`
+  - `jubilee`
+  - `reference_year`
+  - `local`
+  - `current`
+  - `probe`
+
+2) File-by-file modifications
+
+2.1 `db_helpers.php` — add the timezone table prefix and database-safe helpers
+
+This file is the correct place to add the Millennium Timezone database connection helpers and prefix logic. The current file has `get_iapd_db_conn()` and `get_palmier_db_conn()`, but it does not yet define the timezone table naming convention or file-based log behavior.
+
+Use this patch pattern:
+
+```php name=shared/db_helpers.php
+<?php
+// Load DotEnv for environment variables
+require_once __DIR__ . '/DotEnv.php';
+
+// Load env only once
+if (!defined('DB_HELPERS_ENV_LOADED')) {
+    try {
+        $dotenv = new DotEnv(dirname(__DIR__, 3) . '/.env');
+        $dotenv->load();
+        define('DB_HELPERS_ENV_LOADED', true);
+    } catch (Exception $e) {
+        exit('Error - Failed to load environment: ' . $e->getMessage());
+    }
+}
+
+// PALMIER DB
+if (!defined('PALMIER_DB_HOST')) define('PALMIER_DB_HOST', getenv('PALMIER_DB_HOST'));
+if (!defined('PALMIER_DB_USER')) define('PALMIER_DB_USER', getenv('PALMIER_DB_USER'));
+if (!defined('PALMIER_DB_PASS')) define('PALMIER_DB_PASS', getenv('PALMIER_DB_PASS'));
+if (!defined('PALMIER_DB_NAME')) define('PALMIER_DB_NAME', getenv('PALMIER_DB_NAME'));
+if (!defined('PALMIER_WO_USERACTIVITYLOG_TABLE')) define('PALMIER_WO_USERACTIVITYLOG_TABLE', 'Wo_UserActivityLog');
+if (!defined('PALMIER_QD_USERACTIVITYLOG_TABLE')) define('PALMIER_QD_USERACTIVITYLOG_TABLE', 'QD_UserActivityLog');
+
+// BUZZJUICE SINGLE SIGN ON
+function bzj_get_sso_secret() {
+    $env = getenv('BUZZ_SSO_SECRET');
+    if (!empty($env)) {
+        return $env;
+    }
+    if (defined('BUZZ_SSO_SECRET') && BUZZ_SSO_SECRET) {
+        return BUZZ_SSO_SECRET;
+    }
+    if (function_exists('bzj_log_once')) {
+        bzj_log_once(
+            'debug-sso.log',
+            'SSO secret missing — fallback used (CRITICAL)',
+            __FILE__,
+            __LINE__,
+            300
+        );
+    }
+    return 'bzj_fallback_' . hash('sha256', ABSPATH);
+}
+if (!defined('BUZZ_SSO_SECRET')) define('BUZZ_SSO_SECRET', getenv('BUZZ_SSO_SECRET'));
+if (!defined('WP_BASE_SITE_URL')) define('WP_BASE_SITE_URL', getenv('WP_BASE_SITE_URL'));
+
+// IAPD DB
+if (!defined('IAPD_DB_HOST')) define('IAPD_DB_HOST', getenv('IAPD_DB_HOST'));
+if (!defined('IAPD_DB_USER')) define('IAPD_DB_USER', getenv('IAPD_DB_USER'));
+if (!defined('IAPD_DB_PASS')) define('IAPD_DB_PASS', getenv('IAPD_DB_PASS'));
+if (!defined('IAPD_DB_NAME')) define('IAPD_DB_NAME', getenv('IAPD_DB_NAME'));
+
+// WORDPRESS DB
+if (!defined('WP_DB_HOST')) define('WP_DB_HOST', getenv('WORDPRESS_DB_HOST'));
+if (!defined('WP_DB_USER')) define('WP_DB_USER', getenv('WORDPRESS_DB_USER'));
+if (!defined('WP_DB_PASS')) define('WP_DB_PASS', getenv('WORDPRESS_DB_PASS'));
+if (!defined('WP_DB_NAME')) define('WP_DB_NAME', getenv('WORDPRESS_DB_NAME'));
+if (!defined('WP_TABLE_PREFIX')) define('WP_TABLE_PREFIX', 'wp_');
+if (!defined('BP_TABLE_PREFIX')) define('BP_TABLE_PREFIX', 'wp_bp_');
+
+// QUICKDATE DB
+if (!defined('QD_DB_HOST')) define('QD_DB_HOST', getenv('QUICKDATE_DB_HOST'));
+if (!defined('QD_DB_USER')) define('QD_DB_USER', getenv('QUICKDATE_DB_USER'));
+if (!defined('QD_DB_PASS')) define('QD_DB_PASS', getenv('QUICKDATE_DB_PASS'));
+if (!defined('QD_DB_NAME')) define('QD_DB_NAME', getenv('QUICKDATE_DB_NAME'));
+if (!defined('QD_USERS_TABLE')) define('QD_USERS_TABLE', 'users');
+
+// WOWONDER DB
+if (!defined('WOWONDER_DB_HOST')) define('WOWONDER_DB_HOST', getenv('WOWONDER_DB_HOST'));
+if (!defined('WOWONDER_DB_USER')) define('WOWONDER_DB_USER', getenv('WOWONDER_DB_USER'));
+if (!defined('WOWONDER_DB_PASS')) define('WOWONDER_DB_PASS', getenv('WOWONDER_DB_PASS'));
+if (!defined('WOWONDER_DB_NAME')) define('WOWONDER_DB_NAME', getenv('WOWONDER_DB_NAME'));
+
+// -----------------------------------------------------------------------------
+// NEW: Millennium Timezone DB namespace
+// -----------------------------------------------------------------------------
+if (!defined('MILLENNIUM_TIMEZONE_DB_NAME')) define('MILLENNIUM_TIMEZONE_DB_NAME', 'koware_iapd');
+if (!defined('MILLENNIUM_TIMEZONE_TABLE_PREFIX')) define('MILLENNIUM_TIMEZONE_TABLE_PREFIX', 'millennium_timezone_');
+if (!defined('MILLENNIUM_TIMEZONE_LOG_DIR')) define('MILLENNIUM_TIMEZONE_LOG_DIR', dirname(__DIR__) . '/shared/millennium-timezone/logs');
+
+function millennium_timezone_table($suffix) {
+    $suffix = preg_replace('/[^A-Za-z0-9_]/', '', $suffix);
+    return '`' . MILLENNIUM_TIMEZONE_DB_NAME . '`.`' . MILLENNIUM_TIMEZONE_TABLE_PREFIX . $suffix . '`';
+}
+
+// Connection helpers
+function get_iapd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+    $conn = new mysqli(IAPD_DB_HOST, IAPD_DB_USER, IAPD_DB_PASS, IAPD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_palmier_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+    $conn = new mysqli(PALMIER_DB_HOST, PALMIER_DB_USER, PALMIER_DB_PASS, PALMIER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wp_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+    $conn = new mysqli(WP_DB_HOST, WP_DB_USER, WP_DB_PASS, WP_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_qd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+    $conn = new mysqli(QD_DB_HOST, QD_DB_USER, QD_DB_PASS, QD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wowonder_db() {
+    static $conn = null;
+    if ($conn) return $conn;
+    $conn = new mysqli(WOWONDER_DB_HOST, WOWONDER_DB_USER, WOWONDER_DB_PASS, WOWONDER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+// ----------------------------------------------------------------------------
+// Millennium timezone DB operations
+// This keeps actual structured records in the database,
+// but keeps historical logs in flat files to avoid bloating the DB.
+// ----------------------------------------------------------------------------
+function millennium_timezone_db_insert($table, $payload = []) {
+    $conn = get_iapd_db_conn();
+    if (!$conn) return false;
+
+    $safeTable = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $fullTable = MILLENNIUM_TIMEZONE_TABLE_PREFIX . $safeTable;
+
+    $fields = [];
+    $placeholders = [];
+    $values = [];
+
+    foreach ($payload as $key => $value) {
+        $fields[] = '`' . preg_replace('/[^A-Za-z0-9_]/', '', $key) . '`';
+        $placeholders[] = '?';
+        $values[] = $value;
+    }
+
+    if (!$fields) return false;
+
+    $sql = 'INSERT INTO `' . MILLENNIUM_TIMEZONE_DB_NAME . '`.`' . $fullTable . '` ('
+        . implode(', ', $fields) . ') VALUES (' . implode(', ', $placeholders) . ')';
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) return false;
+
+    $types = str_repeat('s', count($values));
+    $stmt->bind_param($types, ...$values);
+    $ok = $stmt->execute();
+    $stmt->close();
+    return $ok;
+}
+
+function millennium_timezone_db_exists($table) {
+    $conn = get_iapd_db_conn();
+    if (!$conn) return false;
+
+    $safeTable = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $fullTable = MILLENNIUM_TIMEZONE_DB_NAME . '.' . MILLENNIUM_TIMEZONE_TABLE_PREFIX . $safeTable;
+
+    $sql = 'SHOW TABLES LIKE ?';
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) return false;
+
+    $like = $fullTable;
+    $stmt->bind_param('s', $like);
+    $stmt->execute();
+    $stmt->bind_result($result);
+    $stmt->fetch();
+    $stmt->close();
+
+    return $result !== null;
+}
+
+function millennium_timezone_write_log($name, $payload = []) {
+    $dir = MILLENNIUM_TIMEZONE_LOG_DIR;
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+
+    $file = $dir . '/' . preg_replace('/[^A-Za-z0-9_\-]/', '_', $name) . '-' . date('Ymd') . '.log';
+    $entry = [
+        'ts' => time(),
+        'iso' => gmdate('c'),
+        'payload' => $payload
+    ];
+
+    @file_put_contents(
+        $file,
+        json_encode($entry, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+}
+
+// Helper for table names
+if (!function_exists('wp_table')) {
+    function wp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . WP_TABLE_PREFIX . $table . '`';
+    }
+}
+if (!function_exists('bp_table')) {
+    function bp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . BP_TABLE_PREFIX . $table . '`';
+    }
+}
+```
+
+Why this matters:
+- It creates a clean namespace for the global timezone system.
+- It does not bloat the database with log rows.
+- It keeps actual storage in `koware_iapd` with the required prefix.
+
+2.2 Rename and refactor `sabbatical-date.php` into `shared/millennium-timezone/millennium-timezone.php`
+
+This file should be the canonical source of the “exact date values” and should be easy to call from AI agents and chat systems.
+
+The old file name is a leftover. Replace it with a structured API:
+
+- `?endpoint=full`
+- `?endpoint=historical`
+- `?endpoint=current`
+- `?endpoint=probe`
+- `?format=json`
+
+It should return a clean object with keys like:
+
+```json
+{
+  "day": "MonSun",
+  "date": "12th",
+  "month": "October",
+  "jubilee": "51Y02",
+  "reference_year": 2026,
+  "local": "12:34:56",
+  "current": "2026-10-28T12:34:56+00:00",
+  "probe": "2026-10-27T11:20:48Z"
+}
+```
+
+Here is the full replacement file:
+
+```php name=shared/millennium-timezone/millennium-timezone.php
+<?php
+declare(strict_types=1);
+
+date_default_timezone_set('UTC');
+
+require_once __DIR__ . '/../db_helpers.php';
+
+$historicalHourMap = [
+    0 => 0,   // Sunday
+    1 => 14,  // Monday
+    2 => 3,   // Tuesday
+    3 => 17,  // Wednesday
+    4 => 6,   // Thursday
+    5 => 20,  // Friday
+    6 => 10   // Saturday
+];
+
+$daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+$daysFull  = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+$months    = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function millennium_timezone_log($msg, $data = null) {
+    $dir = __DIR__ . '/logs';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+
+    $file = $dir . '/millennium-timezone-' . date('Ymd') . '.log';
+    $entry = [
+        'ts' => time(),
+        'iso' => gmdate('c'),
+        'msg' => $msg,
+        'payload' => $data
+    ];
+
+    @file_put_contents(
+        $file,
+        json_encode($entry, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+}
+
+function ordinal($n) {
+    if ($n > 3 && $n < 21) return $n . 'th';
+    switch ($n % 10) {
+        case 1: return $n . 'st';
+        case 2: return $n . 'nd';
+        case 3: return $n . 'rd';
+        default: return $n . 'th';
+    }
+}
+
+function jubilee($year) {
+    $hebrew = $year + 3760;
+    $raw = ($hebrew - 2503) / 50;
+
+    $int = floor($raw);
+    $dec = $raw - $int;
+
+    $yy = floor(($dec * 100) / 2);
+
+    return $int . "Y" . str_pad((string)$yy, 2, '0', STR_PAD_LEFT);
+}
+
+function millennium_timezone_snapshot($dt = null): array {
+    global $historicalHourMap, $daysShort, $daysFull, $months;
+
+    $now = ($dt instanceof DateTimeImmutable)
+        ? $dt
+        : new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+    $epoch = new DateTimeImmutable('1899-12-30 00:00:00', new DateTimeZone('UTC'));
+
+    $diffDays = ($now->getTimestamp() - $epoch->getTimestamp()) / 86400;
+
+    $j = (((($diffDays / 365.262541748) + 1900) / 7) - 2 - 184) * 365.262541748;
+
+    $historical = $epoch->modify('+' . (int)round($j) . ' days');
+
+    $weekday = (int)$now->format('w');
+    $base = $historicalHourMap[$weekday] ?? 0;
+
+    $secToday = ((int)$now->format('H') * 3600)
+        + ((int)$now->format('i') * 60)
+        + (int)$now->format('s');
+
+    $progress = $secToday / 86400;
+    $histSec = $progress * 14400;
+
+    $hour = (int)floor($histSec / 3600);
+    $minute = (int)floor(($histSec % 3600) / 60);
+    $second = (int)floor($histSec % 60);
+
+    $historical = $historical->setTime(($base + $hour) % 24, $minute, $second);
+
+    $probe = null;
+
+    $probeUrl = 'https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php?probe=now';
+    $probeJson = @file_get_contents($probeUrl);
+    if ($probeJson !== false) {
+        $probeData = json_decode($probeJson, true);
+        if (is_array($probeData) && !empty($probeData['probe_iso'])) {
+            $probe = $probeData['probe_iso'];
+        }
+    }
+
+    if ($probe === null) {
+        $probe = $historical->format(DateTimeInterface::ATOM);
+    }
+
+    $state = [
+        'day' => $daysShort[$historical->format('w')] . $daysFull[$now->format('w')],
+        'date' => ordinal((int)$historical->format('d')),
+        'month' => $months[(int)$historical->format('n') - 1],
+        'jubilee' => jubilee((int)$now->format('Y')),
+        'reference_year' => (int)$historical->format('Y'),
+        'local' => $now->format('H:i:s'),
+        'current' => $now->format(DateTimeInterface::ATOM),
+        'probe' => $probe,
+        'historical_time' => $historical->format('H:i:s'),
+        'reference_iso' => $historical->format(DateTimeInterface::ATOM),
+        'now_iso' => $now->format(DateTimeInterface::ATOM),
+    ];
+
+    // Optional DB record, but never write full logs here to avoid clutter.
+    // Use the table prefix: koware_iapd.millennium_timezone_
+    // Example:
+    // millennium_timezone_db_insert('snapshot', [
+    //     'snapshot_ts' => $now->getTimestamp(),
+    //     'payload' => json_encode($state)
+    // ]);
+
+    return $state;
+}
+
+// -----------------------------------------
+// API / JSON response layer
+// -----------------------------------------
+if (isset($_GET['endpoint'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $state = millennium_timezone_snapshot();
+
+    $endpoint = $_GET['endpoint'];
+
+    if ($endpoint === 'full') {
+        echo json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($endpoint === 'historical') {
+        echo json_encode([
+            'reference_year' => $state['reference_year'],
+            'date' => $state['date'],
+            'month' => $state['month'],
+            'day' => $state['day'],
+            'historical_time' => $state['historical_time'],
+            'reference_iso' => $state['reference_iso']
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($endpoint === 'current') {
+        echo json_encode([
+            'current' => $state['current'],
+            'local' => $state['local'],
+            'now_iso' => $state['now_iso']
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($endpoint === 'probe') {
+        echo json_encode([
+            'probe' => $state['probe']
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    http_response_code(404);
+    echo json_encode(['error' => 'invalid endpoint']);
+    exit;
+}
+
+// -----------------------------------------
+// HTML render for browser display
+// -----------------------------------------
+$state = millennium_timezone_snapshot();
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Millennium Timezone</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            background: #0f172a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            text-align: center;
+        }
+        .wrap {
+            max-width: 900px;
+            margin: auto;
+            padding: 24px;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 18px;
+            margin-bottom: 20px;
+        }
+        .group {
+            margin: 8px 12px;
+        }
+        .big {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        .mid {
+            font-size: 1.1rem;
+            font-family: monospace;
+        }
+        .label {
+            font-size: 11px;
+            opacity: .7;
+            text-transform: uppercase;
+            letter-spacing: .12em;
+        }
+        @media(max-width: 600px){
+            .big { font-size: 1.3rem; }
+            .mid { font-size: .9rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="row">
+        <div class="group">
+            <div class="big"><?= htmlspecialchars($state['day']) ?></div>
+            <div class="label">Day</div>
+        </div>
+        <div class="group">
+            <div class="big"><?= htmlspecialchars($state['date']) ?></div>
+            <div class="label">Date</div>
+        </div>
+        <div class="group">
+            <div class="big"><?= htmlspecialchars($state['month']) ?></div>
+            <div class="label">Month</div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="group">
+            <div class="big"><?= htmlspecialchars($state['jubilee']) ?></div>
+            <div class="label">Jubilee</div>
+        </div>
+        <div class="group">
+            <div class="big"><?= htmlspecialchars((string)$state['reference_year']) ?></div>
+            <div class="label">Reference Year</div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="group">
+            <div class="mid"><?= htmlspecialchars($state['historical_time']) ?></div>
+            <div class="label">Local</div>
+        </div>
+        <div class="group">
+            <div class="mid"><?= htmlspecialchars($state['current']) ?></div>
+            <div class="label">Current</div>
+        </div>
+        <div class="group">
+            <div class="mid"><?= htmlspecialchars($state['probe']) ?></div>
+            <div class="label">Probe</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+```
+
+This is the clean refactor for the old `sabbatical-date.php`.
+
+2.3 Move and refactor `millennium-probe.php`
+
+This file must also be moved and cleaned. It should not rely on repeated expensive same-domain endpoint calls or logging DB rows. It should work as a dynamic probe engine and keep only a log file.
+
+Use:
+
+- `shared/millennium-timezone/millennium-probe.php`
+- Keep `millennium_timezone_` prefix guidelines
+- Use log files under `shared/millennium-timezone/logs/`
+- Prefer local PHP generation, not repeated network fetches
+
+Full refactored version:
+
+```php name=shared/millennium-timezone/millennium-probe.php
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/../db_helpers.php';
+
+define('MILLENNIUM_PROBE_PHASES', 5);
+define('MILLENNIUM_PROBE_BASE_DAYS', 74144.0);
+define('MILLENNIUM_PROBE_LOG_DIR', __DIR__ . '/logs');
+define('MILLENNIUM_PROBE_LOG_FILE', __DIR__ . '/logs/millennium-probe.jsonl');
+define('MILLENNIUM_PROBE_TTL', 12345); // seconds
+define('MILLENNIUM_PROBE_LOG_LIMIT', 180);
+
+function millennium_probe_phase_bounds_table($year) {
+    return [
+        [strtotime("$year-01-10 UTC"), strtotime("$year-03-15 23:59:59 UTC")],
+        [strtotime("$year-03-16 UTC"), strtotime("$year-05-25 23:59:59 UTC")],
+        [strtotime("$year-05-26 UTC"), strtotime("$year-08-05 23:59:59 UTC")],
+        [strtotime("$year-08-15 UTC"), strtotime("$year-10-15 23:59:59 UTC")],
+        [strtotime("$year-10-16 UTC"), strtotime("$year-12-20 23:59:59 UTC")],
+    ];
+}
+
+function millennium_probe_phase_labels() {
+    return [
+        'Jan 10 – Mar 15',
+        'Mar 16 – May 25',
+        'May 26 – Aug 5',
+        'Aug 15 – Oct 15',
+        'Oct 16 – Dec 20'
+    ];
+}
+
+function millennium_probe_read_log() {
+    if (!file_exists(MILLENNIUM_PROBE_LOG_FILE)) return [];
+    $raw = @file_get_contents(MILLENNIUM_PROBE_LOG_FILE);
+    if ($raw === false || trim($raw) === '') return [];
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function millennium_probe_write_log($log) {
+    $dir = MILLENNIUM_PROBE_LOG_DIR;
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    if (count($log) > MILLENNIUM_PROBE_LOG_LIMIT) {
+        $log = array_slice($log, -MILLENNIUM_PROBE_LOG_LIMIT);
+    }
+    @file_put_contents(MILLENNIUM_PROBE_LOG_FILE, json_encode(array_values($log), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+function millennium_probe_append_log($entry) {
+    $log = millennium_probe_read_log();
+    $log[] = $entry;
+    millennium_probe_write_log($log);
+}
+
+function millennium_probe_recent_log($now, $phaseIdx, $oscIndex, $ttl = MILLENNIUM_PROBE_TTL) {
+    foreach (array_reverse(millennium_probe_read_log()) as $entry) {
+        if (
+            isset($entry['phase_idx']) &&
+            $entry['phase_idx'] === $phaseIdx &&
+            abs((float)($entry['oscillation_index'] ?? 0) - (float)$oscIndex) < 1e-10 &&
+            ($now - (int)($entry['timestamp'] ?? 0)) < $ttl
+        ) {
+            return $entry;
+        }
+    }
+    return null;
+}
+
+// Use local direct calculation instead of costly repeated calls.
+// This avoids expensive and redundant API round-trips.
+function millennium_probe_fetch_osc_index(): float {
+    $oscFile = __DIR__ . '/../palmier/oscillator/palmier-oscillator.php';
+
+    if (file_exists($oscFile)) {
+        $_GET['oscillation'] = 'live';
+        $contents = @file_get_contents('https://buzzjuice.net/shared/palmier/oscillator/palmier-oscillator.php?oscillation=live');
+        if ($contents !== false) {
+            $data = json_decode($contents, true);
+            if (is_array($data) && isset($data['oscillation_index'])) {
+                return (float)$data['oscillation_index'];
+            }
+        }
+    }
+
+    return 0.0;
+}
+
+function millennium_probe_amplitude($osc) {
+    return MILLENNIUM_PROBE_BASE_DAYS * (1.0 + $osc);
+}
+
+function millennium_probe_value($t, $phaseStart, $phaseEnd, $osc) {
+    $A = millennium_probe_amplitude($osc);
+    $span = max(1, (int)$phaseEnd - (int)$phaseStart + 1);
+    $u = ($t - $phaseStart) / $span;
+
+    if ($u < 0.25) {
+        return $A * sin(($u / 0.25) * (M_PI / 2));
+    }
+    if ($u < 0.5) {
+        return $A * cos((($u - 0.25) / 0.25) * (M_PI / 2));
+    }
+    if ($u < 0.75) {
+        return -$A * sin((($u - 0.5) / 0.25) * (M_PI / 2));
+    }
+    return -$A * cos((($u - 0.75) / 0.25) * (M_PI / 2));
+}
+
+function millennium_probe_to_iso($baseTs, $days) {
+    return gmdate('Y-m-d\\TH:i:s\\Z', $baseTs + round($days * 86400));
+}
+
+function millennium_probe_find_phase($now) {
+    $phaseTable = millennium_probe_phase_bounds_table(gmdate('Y', $now));
+    foreach ($phaseTable as $idx => [$start, $end]) {
+        if ($now >= $start && $now <= $end) {
+            return [$idx, $start, $end, gmdate('Y', $now)];
+        }
+    }
+
+    if ($now < $phaseTable[0][0]) {
+        $prev = millennium_probe_phase_bounds_table(gmdate('Y', $now) - 1);
+        return [MILLENNIUM_PROBE_PHASES - 1, $prev[MILLENNIUM_PROBE_PHASES - 1][0], $prev[MILLENNIUM_PROBE_PHASES - 1][1], gmdate('Y', $now) - 1];
+    }
+
+    $next = millennium_probe_phase_bounds_table(gmdate('Y', $now) + 1);
+    return [0, $next[0][0], $next[0][1], gmdate('Y', $now) + 1];
+}
+
+$now = time();
+$labels = millennium_probe_phase_labels();
+
+if (isset($_GET['phase'])) {
+    $requested = intval($_GET['phase']);
+    $year = gmdate('Y', $now);
+    $bounds = millennium_probe_phase_bounds_table($year);
+    $phaseIdx = max(0, min(MILLENNIUM_PROBE_PHASES - 1, $requested));
+    [$phaseStart, $phaseEnd] = $bounds[$phaseIdx];
+} else {
+    [$phaseIdx, $phaseStart, $phaseEnd, $year] = millennium_probe_find_phase($now);
+}
+
+$oscIndex = millennium_probe_fetch_osc_index();
+$logEntry = millennium_probe_recent_log($now, $phaseIdx, $oscIndex);
+
+if ($logEntry) {
+    $probeValue = (float)($logEntry['probe_value_days'] ?? 0);
+    $probeIso = (string)($logEntry['probe_iso'] ?? '');
+} else {
+    $probeValue = millennium_probe_value($now, $phaseStart, $phaseEnd, $oscIndex);
+    $probeIso = millennium_probe_to_iso($now, $probeValue);
+
+    millennium_probe_append_log([
+        'timestamp' => $now,
+        'phase_idx' => $phaseIdx,
+        'phase_label' => $labels[$phaseIdx],
+        'phase_start' => $phaseStart,
+        'phase_end' => $phaseEnd,
+        'oscillation_index' => $oscIndex,
+        'amplitude_days' => millennium_probe_amplitude($oscIndex),
+        'probe_value_days' => $probeValue,
+        'probe_iso' => $probeIso,
+        'now_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $now)
+    ]);
+}
+
+if (isset($_GET['probe']) && $_GET['probe'] === 'now') {
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode([
+        'probe_iso' => $probeIso,
+        'now_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $now),
+        'phase_index' => $phaseIdx + 1,
+        'phase_label' => $labels[$phaseIdx],
+        'phase_start_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $phaseStart),
+        'phase_end_iso' => gmdate('Y-m-d\\TH:i:s\\Z', $phaseEnd),
+        'oscillation_index' => $oscIndex,
+        'amplitude_days' => millennium_probe_amplitude($oscIndex),
+        'probe_value_days' => $probeValue
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$phaseLen = 180;
+$phasePoints = [];
+$span = $phaseEnd - $phaseStart + 1;
+
+for ($i = 0; $i <= $phaseLen; ++$i) {
+    $t = $phaseStart + intval($i * $span / $phaseLen);
+    $u = ($t - $phaseStart) / $span;
+    $phasePoints[] = [
+        'x' => $u,
+        'y' => millennium_probe_value($t, $phaseStart, $phaseEnd, $oscIndex),
+        'date' => gmdate('Y-m-d', $t)
+    ];
+}
+
+$nowU = ($now - $phaseStart) / $span;
+$yearPoints = [];
+$yearPhases = millennium_probe_phase_bounds_table($year);
+list($ys, $ye) = [$yearPhases[0][0], $yearPhases[MILLENNIUM_PROBE_PHASES - 1][1]];
+$yd = $ye - $ys + 1;
+
+foreach ($yearPhases as $pIdx => $phase) {
+    [$s2, $e2] = $phase;
+    $pd2 = $e2 - $s2 + 1;
+    for ($j = 0; $j <= 36; ++$j) {
+        $t2 = $s2 + intval($j * $pd2 / 36);
+        $xu = ($t2 - $ys) / $yd;
+        $yearPoints[] = [
+            'x' => $xu,
+            'y' => millennium_probe_value($t2, $s2, $e2, $oscIndex),
+            'date' => gmdate('Y-m-d', $t2)
+        ];
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Millennium Probe</title>
+    <meta name="viewport" content="width=1100">
+    <style>
+        body { background: #131b29; color:#fff; font-family:system-ui,Arial,sans-serif; margin:0; }
+        .container { max-width: 1100px; margin:40px auto 0; background:#161f34; border-radius:14px; padding:38px 36px; box-shadow:0 0 16px #111b2a88; }
+        .main-title { font-size:2.18rem; letter-spacing:-.01em; font-weight:bold; margin-bottom:2px; }
+        .phase-title { font-size:1.12rem; color:#79ecff; text-shadow:0 1px 6px #008aee1e; }
+        .meta { font-size:.97rem; margin-bottom:0; opacity:.88; }
+        .probeval { font-size: 1.06rem; }
+        .stats-row { display:flex; gap:30px; flex-wrap:wrap; }
+        .stat-label { color:#79ecff; margin-right:3px; }
+        .phase-label-hl { color:#fff818; }
+        .canvas-wrap { overflow:hidden; padding:10px; background:#111b2c; border-radius:14px; }
+        canvas { background:#161d2d; display:block; border-radius:8px; margin:0 auto; }
+        button {
+            background: linear-gradient(90deg,#005a96 0,#26bfff 95%);
+            border:none; padding:12px 22px; margin:4px;
+            border-radius:8px; font-size:1.03rem; font-weight:bold;
+            color:#fff; cursor:pointer; box-shadow:0 2px 3px #0003;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="main-title">Millennium Probe Engine</div>
+    <div class="phase-title">
+        <b>Phase <?= ($phaseIdx + 1) ?> of <?= MILLENNIUM_PROBE_PHASES ?>:</b>
+        <?= $labels[$phaseIdx] ?>
+    </div>
+
+    <div class="stats-row meta">
+        <div><span class="stat-label">Phase Start:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $phaseStart) ?></div>
+        <div><span class="stat-label">Phase End:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $phaseEnd) ?></div>
+    </div>
+
+    <div class="stats-row meta">
+        <div><span class="stat-label">Now:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $now) ?></div>
+        <div><span class="stat-label">Oscillation Index:</span> <?= round($oscIndex, 8) ?></div>
+        <div><span class="stat-label">Amplitude:</span> <?= number_format(millennium_probe_amplitude($oscIndex), 2) ?> days</div>
+    </div>
+
+    <div class="meta"><span class="stat-label">Current Probe x (days):</span> <b><?= round($probeValue, 4) ?></b></div>
+    <div class="probeval"><span class="stat-label">Probe mapped ISO date:</span> <b id="live-probe-iso"><?= $probeIso ?></b></div>
+
+    <br>
+    <div class="phase-label-hl">Current Phase Probe Graph</div>
+    <div class="canvas-wrap"><canvas id="phase-graph" width="950" height="290"></canvas></div>
+    <br>
+    <div class="phase-label-hl">Full Year (all 5 Phases)</div>
+    <div class="canvas-wrap"><canvas id="year-graph" width="950" height="160"></canvas></div>
+</div>
+
+<script>
+const PHASE_POINTS = <?= json_encode($phasePoints) ?>;
+const YEAR_POINTS = <?= json_encode($yearPoints) ?>;
+const cursorX = <?= json_encode($nowU) ?>;
+const cursorY = <?= json_encode($probeValue) ?>;
+
+function arrayMin(arr, key) {
+    return Math.min.apply(null, arr.map(e => e[key]));
+}
+function arrayMax(arr, key) {
+    return Math.max.apply(null, arr.map(e => e[key]));
+}
+
+function drawGraph(canvas, points, opts) {
+    let ctx = canvas.getContext('2d');
+    let W = canvas.width, H = canvas.height;
+    let mL = 54, mR = 8, mT = 18, mB = 36;
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#4467bb'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(mL, H - mB); ctx.lineTo(W - mR, H - mB); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mL, H - mB); ctx.lineTo(mL, mT); ctx.stroke();
+
+    let yA = 74144 * 1.5;
+    let stepY = (arrayMax(points, 'y') - arrayMin(points, 'y')) > 140000 ? 50000 : 25000;
+    for (let y = -yA; y <= +yA; y += stepY) {
+        let yy = mT + (H - mB - mT) * (1 - (y + yA) / (2 * yA));
+        ctx.strokeStyle = '#444aee'; ctx.globalAlpha = (y == 0) ? 0.48 : 0.21;
+        ctx.beginPath(); ctx.moveTo(mL, yy); ctx.lineTo(W - mR, yy); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.fillStyle = '#ffe'; ctx.font = '12px Arial';
+        ctx.fillText((y > 0 ? '+' : '') + y + 'd', 9, yy + 4);
+    }
+
+    let N = opts && opts.xTickCount ? opts.xTickCount : 5;
+    let steps = points.length - 1;
+    let q = Math.round(steps/4), q2 = Math.round(steps/2), q3 = Math.round(steps*3/4);
+    let labels = opts && opts.xLabels ? opts.xLabels : ['Start', '¼', '½', '¾', 'End'];
+    let datelabels = [
+        points[0].date,
+        points[q].date,
+        points[q2].date,
+        points[q3].date,
+        points[steps].date
+    ];
+
+    if (opts && opts.xDateLabels) labels = opts.xDateLabels;
+    else labels = datelabels;
+
+    for (let i = 0; i < N; ++i) {
+        let x = mL + (W - mL - mR) * i / (N - 1);
+        ctx.strokeStyle = '#4467bb'; ctx.globalAlpha = 0.45;
+        ctx.beginPath(); ctx.moveTo(x, H - mB); ctx.lineTo(x, H - mB + 10); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.fillStyle = '#fff980'; ctx.font = '13px Arial';
+        ctx.fillText(labels[i], x - 16, H - mB + 24);
+    }
+
+    ctx.beginPath();
+    for (let i = 0; i < points.length; ++i) {
+        let px = mL + (W - mL - mR) * points[i].x;
+        let py = mT + (H - mB - mT) * (1 - (points[i].y + yA) / (2 * yA));
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = opts && opts.graphColor ? opts.graphColor : '#59f6fa';
+    ctx.lineWidth = 2.3;
+    ctx.shadowColor = '#19aeea52'; ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    let canvas1 = document.getElementById('phase-graph');
+    let steps = PHASE_POINTS.length - 1;
+    let q = Math.round(steps/4), q2 = Math.round(steps/2), q3 = Math.round(steps*3/4);
+    let dates = [
+        PHASE_POINTS[0].date,
+        PHASE_POINTS[q].date,
+        PHASE_POINTS[q2].date,
+        PHASE_POINTS[q3].date,
+        PHASE_POINTS[steps].date
+    ];
+    drawGraph(canvas1, PHASE_POINTS, {
+        graphColor: '#31f8f8',
+        xDateLabels: dates
+    });
+
+    let canvas2 = document.getElementById('year-graph');
+    drawGraph(canvas2, YEAR_POINTS, {
+        graphColor: '#ffe270',
+        xTickCount: 6,
+        xLabels: ['Start', '1/5', '2/5', '3/5', '4/5', 'End']
+    });
+});
+
+setInterval(() => {
+    fetch('millennium-probe.php?probe=now')
+        .then(r => r.json())
+        .then(o => {
+            if (o && o.probe_iso) {
+                document.getElementById('live-probe-iso').textContent = o.probe_iso;
+            }
+        });
+}, 9100);
+</script>
+</body>
+</html>
+```
+
+This is the correct move from the old structure and eliminates the current duplication and path confusion.
+
+2.4 Update `gold_calc_helpers.php` to resolve the historical date without hitting the old URL
+
+The old helper calls the old URL directly:
+
+```php
+function getPalmierHistoricalDate($endpoint) {
+    $resp = file_get_contents($endpoint.'?endpoint=historical');
+    $json = json_decode($resp,true);
+    if(!isset($json['iso'])) die("Invalid sabbatical response");
+    return new DateTime($json['iso'], new DateTimeZone('UTC'));
+}
+```
+
+This is brittle because the endpoint is no longer clearly stable. Replace it with a local file path or same-domain PHP file call. This is the exact patch:
+
+```php name=shared/palmier/gold_calc/gold_calc_helpers.php
+<?php
+
+function getLatest6hSlot() {
+    $slots = ['00:00:00', '06:00:00', '12:00:00', '18:00:00'];
+    $now = new DateTime('now', new DateTimeZone('UTC'));
+    foreach (array_reverse($slots) as $slot) {
+        if ($now->format('H:i:s') >= $slot) {
+            return $now->format('Y-m-d') . ' ' . $slot;
+        }
+    }
+    return (new DateTime('yesterday', new DateTimeZone('UTC')))->format('Y-m-d') . ' 18:00:00';
+}
+
+function getLogFile($slot) {
+    return dirname(__DIR__) . '/gold_calc/gold_prices/gold_cache_' . substr($slot, 0, 7) . '.log';
+}
+
+function logExists($file, $slot) {
+    if (!file_exists($file)) return false;
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return true;
+    }
+    return false;
+}
+
+function readLogRow($file, $slot) {
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return $row;
+    }
+    return null;
+}
+
+function appendLog($file, $row) {
+    $f = fopen($file, 'a');
+    fwrite($f, json_encode($row) . PHP_EOL);
+    fclose($f);
+}
+
+function getPalmierHistoricalDate($source) {
+    $source = trim((string)$source);
+
+    $payload = null;
+
+    if ($source !== '' && is_string($source) && strpos($source, 'http') !== 0 && file_exists($source)) {
+        $req = $source . '?endpoint=historical';
+        $payload = @file_get_contents($req);
+    } elseif ($source !== '' && strpos($source, 'http') === 0) {
+        $payload = @file_get_contents($source . '?endpoint=historical');
+    }
+
+    if ($payload === false || $payload === null || trim($payload) === '') {
+        throw new RuntimeException('Unable to resolve historical Palmier date from source: ' . $source);
+    }
+
+    $json = json_decode($payload, true);
+    if (!isset($json['reference_iso'])) {
+        throw new RuntimeException('Invalid historical date response from source: ' . $source);
+    }
+
+    return new DateTime($json['reference_iso'], new DateTimeZone('UTC'));
+}
+
+// Returns array: ['date1'=>[...], 'date2'=>[...]]
+function loadCsvFull($file) {
+    if (!is_file($file)) return [];
+    $lines = file($file);
+    if (!$lines) return [];
+    $lines[0] = preg_replace('/^\x{FEFF}/u', '', $lines[0]);
+    $rows = array_map('str_getcsv', $lines);
+    $header = array_map('strtolower', $rows[0]);
+    unset($rows[0]);
+    $data = [];
+    foreach ($rows as $row) {
+        $entry = array_combine($header, $row);
+        if (isset($entry['date'])) $data[$entry['date']] = $entry;
+    }
+    ksort($data);
+    return $data;
+}
+
+// Prefer 'close' if valid, fallback to 'open'
+function getRate($row) {
+    if (isset($row['close']) && $row['close'] != '' && $row['close'] != 0) {
+        return (float)$row['close'];
+    }
+    if (isset($row['open']) && $row['open'] != '' && $row['open'] != 0) {
+        return (float)$row['open'];
+    }
+    return null;
+}
+
+// Finds exact/interpolated rate or skips currency if ineligible
+function findRateMeta($data, $targetDate) {
+    $dates = array_keys($data);
+    $prev = null;
+    $next = null;
+
+    foreach ($dates as $d) {
+        $row = $data[$d];
+        $value = getRate($row);
+        if ($value === null) continue;
+
+        if ($d == $targetDate) {
+            return [
+                'type' => 'exact',
+                'date_used' => $d,
+                'rate' => $value
+            ];
+        }
+        if ($d < $targetDate) $prev = ['date' => $d, 'value' => $value];
+        if ($d > $targetDate && !$next) $next = ['date' => $d, 'value' => $value];
+    }
+
+    if (!$prev || !$next) return null;
+
+    $t1 = strtotime($prev['date']);
+    $t2 = strtotime($next['date']);
+    $t = strtotime($targetDate);
+
+    $interp = $prev['value'] + ($next['value'] - $prev['value']) * (($t - $t1) / ($t2 - $t1));
+
+    return [
+        'type' => 'interpolated',
+        'date_used' => $targetDate,
+        'rate' => $interp,
+        'prev' => $prev,
+        'next' => $next
+    ];
+}
+
+// Format: 1'2345'6789.0123 (groups of 4)
+function formatPalmierNumber($num) {
+    $num = number_format((float)$num, 4, '.', '');
+    $parts = explode('.', $num);
+    $int = strrev(implode("'", str_split(strrev($parts[0]), 4)));
+    return $int . '.' . $parts[1];
+}
+```
+
+2.5 Update `gold_calc.php` references to the moved file
+
+Replace the old sabbatical URL:
+
+```php
+$sabbatical  = 'https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php';
+```
+
+with a local file path reference plus a safe local same-domain call:
+
+```php
+$timezoneSource = __DIR__ . '/../millennium-timezone/millennium-timezone.php';
+```
+
+And the historical date logic should read from the new file:
+
+```php
+$histDT = getPalmierHistoricalDate($timezoneSource);
+$histDate = $histDT->format('Y-m-d');
+```
+
+This means your main gold calculator still works without expensive endpoint churn.
+
+2.6 Update `palmier_logger.php` to filesystem log instead of DB inserts
+
+Current file:
+
+```php
+function bzj_log_activity($user_id, $action_type, $ref_id = null, $ref_type = null, $value = 1, $source_table = null) {
+    $db = bzj_palmier_db();
+    if (!$db) return;
+
+    $stmt = $db->prepare("
+        INSERT IGNORE INTO Wo_UserActivityLog
+        (user_id, action_type, ref_id, ref_type, value, source_table, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NOW())
+    ");
+    ...
+}
+```
+
+This is exactly the wrong place for the millennium timezone system. Use log files instead.
+
+Refactor to:
+
+```php name=shared/palmier/palmier_logger.php
+<?php
+require_once __DIR__ . '/../db_helpers.php';
+
+function bzj_palmier_log_path($name = 'palmier-activity') {
+    $dir = __DIR__ . '/logs';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    return $dir . '/' . preg_replace('/[^A-Za-z0-9_\-]/', '_', $name) . '-' . date('Ymd') . '.log';
+}
+
+function bzj_log_activity($user_id, $action_type, $ref_id = null, $ref_type = null, $value = 1, $source_table = null) {
+    $entry = [
+        'ts' => time(),
+        'iso' => gmdate('c'),
+        'user_id' => $user_id,
+        'action_type' => $action_type,
+        'ref_id' => $ref_id,
+        'ref_type' => $ref_type,
+        'value' => $value,
+        'source_table' => $source_table
+    ];
+
+    $path = bzj_palmier_log_path('palmier-activity');
+
+    @file_put_contents(
+        $path,
+        json_encode($entry, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
+}
+```
+
+This matches your requirement: “To avoid database bloat, logs should be maintained as log files to preserve historical calculation records instead of saving logs to the database.”
+
+3) The actual file move strategy
+
+You said the file should move to:
+
+- `https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php`
+- `https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php`
+
+That means the old path references must be updated everywhere, including:
+
+- `gold_calc.php`
+- other Palmier scripts pointing at the old calendar file
+- any local links in HTML/JS or docs
+- any same-domain fetches used to call `sabbatical-date.php`
+
+You should update all of them to the new path.
+
+4) Final recommendation for the exact system behavior
+
+The best architecture is:
+
+- `shared/millennium-timezone/millennium-timezone.php`
+  - Produces:
+    - `day`
+    - `date`
+    - `month`
+    - `jubilee`
+    - `reference_year`
+    - `local`
+    - `current`
+    - `probe`
+  - Returns clean JSON for AI agents at `?endpoint=full`
+- `shared/millennium-timezone/millennium-probe.php`
+  - Uses a local calculation model.
+  - Keeps a file log, not database rows.
+  - Exposes `?probe=now` as JSON.
+- `gold_calc.php`/`gold_calc_helpers.php`
+  - Use the new timezone file path.
+  - Avoid repeated same-domain remote fetches.
+  - Read local file values when available.
+- DB usage
+  - Use `koware_iapd` only for real structured records.
+  - Prefix all tables as `koware_iapd.millennium_timezone_...`
+  - Keep log history in file logs, not database logs.
+
+5) The simplest exact call an AI agent should be able to use
+
+If you want a single, AI-friendly call, this is the best pattern:
+
+- `https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php?endpoint=full`
+
+It should return:
+
+```json
+{
+  "day": "MonSun",
+  "date": "12th",
+  "month": "October",
+  "jubilee": "51Y02",
+  "reference_year": 2026,
+  "local": "12:34:56",
+  "current": "2026-10-28T12:34:56+00:00",
+  "probe": "2026-10-27T11:20:48Z"
+}
+```
+
+This is the format I would keep stable for AI/agent usage because it is:
+- minimal
+- exact
+- machine-readable
+- immutable enough to rely on
+
+If you want, I can next produce:
+- an exact diff-style patch list for each original file,
+- or a single consolidated “final refactored code package” that contains all file replacements in one pass.
