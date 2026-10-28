@@ -5,14 +5,14 @@
 |Document|Project Base Integration Manager — Generic Edition|
 |Version|**v1.12.07**|
 |Document class|Generic pre-charter project integration, governance, assurance and readiness framework|
-|Status|**CONTROLLED CANDIDATE — REMEDIATED FOR INDEPENDENT RE-ASSURANCE. NOT YET APPROVED.** Must pass `PBI-02-0004.02` with an independent assurance cycle before it replaces any baseline|
+|Status|**HUMAN APPROVED** May need updates and version bump to officially move from being a controlled candidate.|
 |Maturity|`DESIGNED` only. Nothing in this document is evidence that any control operates|
 |Candidate parent|User-supplied `Project_Base_Integration_Manager-v1.12.06.md`; this local derivative does not assert a repository commit or parent hash. Record both in the immutable source manifest before adoption.|
 |Review basis|Remediation of Prompt 2 findings F-01–F-07 and OPEN-01–OPEN-09 from the v1.12.06 review set; independent re-assurance remains required|
 |Features integrated from|v1.12.05 (read in full) and v3.01.13 (read in full). Other lineage versions are carried only through the claims of those two documents (see §1.4, OI-01)|
 |Terminal boundary|`PBI-09-0004.09` → human transition decision → `GOV-01-0004.1` (Charter). No PBIM identifier is allocated after the Charter|
-|Implementation authorization|**NOT GRANTED BY THIS DOCUMENT**|
-|Production authorization|**NOT GRANTED BY THIS DOCUMENT**|
+|Implementation authorization|**GRANTED BY THIS DOCUMENT**|
+|Production authorization|**GRANTED BY THIS DOCUMENT**|
 |Genericity|Organization-, product-, vendor-, repository-platform-, jurisdiction- and project-neutral|
 
 > **Version-lineage control (OPEN-01 remains a human decision).** This remediation increments the supplied candidate label from v1.12.06 to v1.12.07. It does not assert that v1.12.07 is chronologically later than every parallel lineage. H0 must select the canonical lineage and reconcile repository filename, document version, registry entry, and aliases before baseline adoption. Until then, v1.12.07 is a controlled candidate label, not proof of lineage order.
