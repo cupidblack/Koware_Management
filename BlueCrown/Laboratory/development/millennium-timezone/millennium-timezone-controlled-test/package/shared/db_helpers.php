@@ -1,0 +1,53 @@
+<?php
+// Load DotEnv for environment variables
+require_once __DIR__ . '/DotEnv.php';
+if (!defined('DB_HELPERS_ENV_LOADED')) {
+    try { $dotenv = new DotEnv(dirname(__DIR__, 3) . '/.env'); $dotenv->load(); define('DB_HELPERS_ENV_LOADED', true); }
+    catch (Exception $e) { exit('Error - Failed to load environment: ' . $e->getMessage()); }
+}
+// PALMIER DB
+if (!defined('PALMIER_DB_HOST')) define('PALMIER_DB_HOST', getenv('PALMIER_DB_HOST'));
+if (!defined('PALMIER_DB_USER')) define('PALMIER_DB_USER', getenv('PALMIER_DB_USER'));
+if (!defined('PALMIER_DB_PASS')) define('PALMIER_DB_PASS', getenv('PALMIER_DB_PASS'));
+if (!defined('PALMIER_DB_NAME')) define('PALMIER_DB_NAME', getenv('PALMIER_DB_NAME'));
+if (!defined('PALMIER_WO_USERACTIVITYLOG_TABLE')) define('PALMIER_WO_USERACTIVITYLOG_TABLE', 'Wo_UserActivityLog');
+if (!defined('PALMIER_QD_USERACTIVITYLOG_TABLE')) define('PALMIER_QD_USERACTIVITYLOG_TABLE', 'QD_UserActivityLog');
+// BUZZJUICE SINGLE SIGN ON
+function bzj_get_sso_secret() { $env=getenv('BUZZ_SSO_SECRET');if(!empty($env))return $env;if(defined('BUZZ_SSO_SECRET')&&BUZZ_SSO_SECRET)return BUZZ_SSO_SECRET;if(function_exists('bzj_log_once'))bzj_log_once('debug-sso.log','SSO secret missing — fallback used (CRITICAL)',__FILE__,__LINE__,300);return 'bzj_fallback_' . hash('sha256', ABSPATH); }
+if (!defined('BUZZ_SSO_SECRET')) define('BUZZ_SSO_SECRET', getenv('BUZZ_SSO_SECRET'));
+if (!defined('WP_BASE_SITE_URL')) define('WP_BASE_SITE_URL', getenv('WP_BASE_SITE_URL'));
+// IAPD DB
+if (!defined('IAPD_DB_HOST')) define('IAPD_DB_HOST', getenv('IAPD_DB_HOST'));
+if (!defined('IAPD_DB_USER')) define('IAPD_DB_USER', getenv('IAPD_DB_USER'));
+if (!defined('IAPD_DB_PASS')) define('IAPD_DB_PASS', getenv('IAPD_DB_PASS'));
+if (!defined('IAPD_DB_NAME')) define('IAPD_DB_NAME', getenv('IAPD_DB_NAME'));
+// WORDPRESS DB
+if (!defined('WP_DB_HOST')) define('WP_DB_HOST', getenv('WORDPRESS_DB_HOST'));
+if (!defined('WP_DB_USER')) define('WP_DB_USER', getenv('WORDPRESS_DB_USER'));
+if (!defined('WP_DB_PASS')) define('WP_DB_PASS', getenv('WORDPRESS_DB_PASS'));
+if (!defined('WP_DB_NAME')) define('WP_DB_NAME', getenv('WORDPRESS_DB_NAME'));
+if (!defined('WP_TABLE_PREFIX')) define('WP_TABLE_PREFIX', 'wp_');
+if (!defined('BP_TABLE_PREFIX')) define('BP_TABLE_PREFIX', 'wp_bp_');
+// QUICKDATE DB
+if (!defined('QD_DB_HOST')) define('QD_DB_HOST', getenv('QUICKDATE_DB_HOST'));
+if (!defined('QD_DB_USER')) define('QD_DB_USER', getenv('QUICKDATE_DB_USER'));
+if (!defined('QD_DB_PASS')) define('QD_DB_PASS', getenv('QUICKDATE_DB_PASS'));
+if (!defined('QD_DB_NAME')) define('QD_DB_NAME', getenv('QUICKDATE_DB_NAME'));
+if (!defined('QD_USERS_TABLE')) define('QD_USERS_TABLE', 'users');
+// WOWONDER DB
+if (!defined('WOWONDER_DB_HOST')) define('WOWONDER_DB_HOST', getenv('WOWONDER_DB_HOST'));
+if (!defined('WOWONDER_DB_USER')) define('WOWONDER_DB_USER', getenv('WOWONDER_DB_USER'));
+if (!defined('WOWONDER_DB_PASS')) define('WOWONDER_DB_PASS', getenv('WOWONDER_DB_PASS'));
+if (!defined('WOWONDER_DB_NAME')) define('WOWONDER_DB_NAME', getenv('WOWONDER_DB_NAME'));
+// Connection helpers
+function get_iapd_db_conn() { static $conn=null;if($conn)return $conn;$conn=new mysqli(IAPD_DB_HOST,IAPD_DB_USER,IAPD_DB_PASS,IAPD_DB_NAME);if($conn->connect_errno)return false;$conn->set_charset('utf8mb4');return $conn; }
+function get_palmier_db_conn() { static $conn=null;if($conn)return $conn;$conn=new mysqli(PALMIER_DB_HOST,PALMIER_DB_USER,PALMIER_DB_PASS,PALMIER_DB_NAME);if($conn->connect_errno)return false;$conn->set_charset('utf8mb4');return $conn; }
+function get_wp_db_conn() { static $conn=null;if($conn)return $conn;$conn=new mysqli(WP_DB_HOST,WP_DB_USER,WP_DB_PASS,WP_DB_NAME);if($conn->connect_errno)return false;$conn->set_charset('utf8mb4');return $conn; }
+function get_qd_db_conn() { static $conn=null;if($conn)return $conn;$conn=new mysqli(QD_DB_HOST,QD_DB_USER,QD_DB_PASS,QD_DB_NAME);if($conn->connect_errno)return false;$conn->set_charset('utf8mb4');return $conn; }
+function get_wowonder_db() { static $conn=null;if($conn)return $conn;$conn=new mysqli(WOWONDER_DB_HOST,WOWONDER_DB_USER,WOWONDER_DB_PASS,WOWONDER_DB_NAME);if($conn->connect_errno)return false;$conn->set_charset('utf8mb4');return $conn; }
+// Millennium Timezone table naming. Prefix is database-qualified at query time.
+if (!defined('MILLENNIUM_TIMEZONE_DB_NAME')) define('MILLENNIUM_TIMEZONE_DB_NAME', 'koware_iapd');
+if (!defined('MILLENNIUM_TIMEZONE_TABLE_PREFIX')) define('MILLENNIUM_TIMEZONE_TABLE_PREFIX', 'millennium_timezone_');
+if (!function_exists('millennium_timezone_table')) { function millennium_timezone_table(string $suffix): string { if(!preg_match('/^[a-z][a-z0-9_]*$/',$suffix))throw new InvalidArgumentException('Invalid Millennium Timezone table suffix.');return '`'.MILLENNIUM_TIMEZONE_DB_NAME.'`.`'.MILLENNIUM_TIMEZONE_TABLE_PREFIX.$suffix.'`'; } }
+if (!function_exists('wp_table')) { function wp_table($table) { return '`'.WP_DB_NAME.'`.`'.WP_TABLE_PREFIX.$table.'`'; } }
+if (!function_exists('bp_table')) { function bp_table($table) { return '`'.WP_DB_NAME.'`.`'.BP_TABLE_PREFIX.$table.'`'; } }
