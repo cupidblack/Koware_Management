@@ -1,0 +1,1615 @@
+I did not modify the repository. Below is the exact refactor plan and the replacement code you can use to generate the updated functional version in chat.
+
+Direct answer: the files should be moved and renamed as follows:
+
+- shared/palmier/calendar/sabbatical-date.php
+  → shared/millennium-timezone/millennium-timezone.php
+- shared/palmier/probe/millennium-probe.php
+  → shared/millennium-timezone/millennium-probe.php
+
+And the code references that still point to the old locations need to be updated to the new path. The biggest functional issue is that the old “sabbatical-date” implementation is doing remote API polling too often and is not using the database as a cached source. The correct pattern is:
+
+- Keep historical/log records as files.
+- Use the `koware_iapd` database only for structured data/cache/state that is needed across files.
+- Use the `millennium_timezone_` table prefix (`koware_iapd.millennium_timezone_`).
+- Use a 12345-second refresh policy before re-fetching live API data.
+
+Step-by-step fixes by file:
+
+1) db_helpers.php
+- Keep the existing `get_iapd_db_conn()` and `get_palmier_db_conn()`.
+- Add the Millennium Timezone table prefix constant and a helper to build full table names.
+- This prevents ad-hoc SQL and keeps the naming consistent.
+
+2) millennium-timezone.php
+- Rename the file and add a cache check using the log file.
+- Reuse the same historical Palmier date logic.
+- Add JSON endpoints:
+  - `?endpoint=historical`
+  - `?endpoint=current`
+  - `?endpoint=probe`
+  - `?endpoint=timezone`
+- If the latest log entry is older than 12345 seconds, fetch the external API once, save it to the DB, and update the log.
+- Render the page with:
+  - Day
+  - Date
+  - Month
+  - Jubilee
+  - Reference Year
+  - Local
+  - Current
+  - Probe
+
+3) millennium-probe.php
+- Move the file to the new folder.
+- Update all absolute local references to the new path.
+- Keep the internal file-based log, but make it use the same 12345-second TTL pattern.
+- Do not let it re-poll the oscillator on every page load.
+- Keep it returning JSON for `?probe=now`.
+
+4) gold_calc.php and gold_calc_helpers.php
+- Update all references to:
+  - old sabbatical endpoint:
+    https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php
+  - new endpoint:
+    https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php
+- The historical date resolution should use the new file.
+- Do not do redundant remote fetches if the log is still valid.
+
+5) palmier_logger.php
+- Do not use the database for log records.
+- Write activity logs to a file instead.
+- Keep database tables for actual business data, not for historical calculation logs.
+
+6) palmier-oscillator.php
+- This one is already following the log-first pattern and does not need a major rewrite.
+- It should continue using a log file and TTL-based refresh.
+- Only change paths if you move the file to a different URL.
+
+The exact replacement code follows.
+
+File: shared/db_helpers.php
+```php name=shared/db_helpers.php
+<?php
+// Load DotEnv for environment variables
+require_once __DIR__ . '/DotEnv.php';
+
+// Load env only once
+if (!defined('DB_HELPERS_ENV_LOADED')) {
+    try {
+        $dotenv = new DotEnv(dirname(__DIR__, 3) . '/.env');
+        $dotenv->load();
+        define('DB_HELPERS_ENV_LOADED', true);
+    } catch (Exception $e) {
+        exit('Error - Failed to load environment: ' . $e->getMessage());
+    }
+}
+
+// PALMIER DB
+if (!defined('PALMIER_DB_HOST')) define('PALMIER_DB_HOST', getenv('PALMIER_DB_HOST'));
+if (!defined('PALMIER_DB_USER')) define('PALMIER_DB_USER', getenv('PALMIER_DB_USER'));
+if (!defined('PALMIER_DB_PASS')) define('PALMIER_DB_PASS', getenv('PALMIER_DB_PASS'));
+if (!defined('PALMIER_DB_NAME')) define('PALMIER_DB_NAME', getenv('PALMIER_DB_NAME'));
+if (!defined('PALMIER_WO_USERACTIVITYLOG_TABLE')) define('PALMIER_WO_USERACTIVITYLOG_TABLE', 'Wo_UserActivityLog');
+if (!defined('PALMIER_QD_USERACTIVITYLOG_TABLE')) define('PALMIER_QD_USERACTIVITYLOG_TABLE', 'QD_UserActivityLog');
+
+// BUZZJUICE SINGLE SIGN ON
+function bzj_get_sso_secret() {
+    $env = getenv('BUZZ_SSO_SECRET');
+    if (!empty($env)) return $env;
+
+    if (defined('BUZZ_SSO_SECRET') && BUZZ_SSO_SECRET) return BUZZ_SSO_SECRET;
+
+    if (function_exists('bzj_log_once')) {
+        bzj_log_once(
+            'debug-sso.log',
+            'SSO secret missing — fallback used (CRITICAL)',
+            __FILE__,
+            __LINE__,
+            300
+        );
+    }
+
+    return 'bzj_fallback_' . hash('sha256', ABSPATH);
+}
+if (!defined('BUZZ_SSO_SECRET')) define('BUZZ_SSO_SECRET', getenv('BUZZ_SSO_SECRET'));
+
+if (!defined('WP_BASE_SITE_URL')) define('WP_BASE_SITE_URL', getenv('WP_BASE_SITE_URL'));
+
+// IAPD DB
+if (!defined('IAPD_DB_HOST')) define('IAPD_DB_HOST', getenv('IAPD_DB_HOST'));
+if (!defined('IAPD_DB_USER')) define('IAPD_DB_USER', getenv('IAPD_DB_USER'));
+if (!defined('IAPD_DB_PASS')) define('IAPD_DB_PASS', getenv('IAPD_DB_PASS'));
+if (!defined('IAPD_DB_NAME')) define('IAPD_DB_NAME', getenv('IAPD_DB_NAME'));
+
+if (!defined('MILLENNIUM_TIMEZONE_TABLE_PREFIX')) {
+    define('MILLENNIUM_TIMEZONE_TABLE_PREFIX', 'koware_iapd.millennium_timezone_');
+}
+
+// WORDPRESS DB
+if (!defined('WP_DB_HOST')) define('WP_DB_HOST', getenv('WORDPRESS_DB_HOST'));
+if (!defined('WP_DB_USER')) define('WP_DB_USER', getenv('WORDPRESS_DB_USER'));
+if (!defined('WP_DB_PASS')) define('WP_DB_PASS', getenv('WORDPRESS_DB_PASS'));
+if (!defined('WP_DB_NAME')) define('WP_DB_NAME', getenv('WORDPRESS_DB_NAME'));
+if (!defined('WP_TABLE_PREFIX')) define('WP_TABLE_PREFIX', 'wp_');
+if (!defined('BP_TABLE_PREFIX')) define('BP_TABLE_PREFIX', 'wp_bp_');
+
+// QUICKDATE DB
+if (!defined('QD_DB_HOST')) define('QD_DB_HOST', getenv('QUICKDATE_DB_HOST'));
+if (!defined('QD_DB_USER')) define('QD_DB_USER', getenv('QUICKDATE_DB_USER'));
+if (!defined('QD_DB_PASS')) define('QD_DB_PASS', getenv('QUICKDATE_DB_PASS'));
+if (!defined('QD_DB_NAME')) define('QD_DB_NAME', getenv('QUICKDATE_DB_NAME'));
+if (!defined('QD_USERS_TABLE')) define('QD_USERS_TABLE', 'users');
+
+// WOWONDER DB
+if (!defined('WOWONDER_DB_HOST')) define('WOWONDER_DB_HOST', getenv('WOWONDER_DB_HOST'));
+if (!defined('WOWONDER_DB_USER')) define('WOWONDER_DB_USER', getenv('WOWONDER_DB_USER'));
+if (!defined('WOWONDER_DB_PASS')) define('WOWONDER_DB_PASS', getenv('WOWONDER_DB_PASS'));
+if (!defined('WOWONDER_DB_NAME')) define('WOWONDER_DB_NAME', getenv('WOWONDER_DB_NAME'));
+
+// Connection helpers
+function get_iapd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(IAPD_DB_HOST, IAPD_DB_USER, IAPD_DB_PASS, IAPD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_palmier_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(PALMIER_DB_HOST, PALMIER_DB_USER, PALMIER_DB_PASS, PALMIER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wp_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WP_DB_HOST, WP_DB_USER, WP_DB_PASS, WP_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_qd_db_conn() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(QD_DB_HOST, QD_DB_USER, QD_DB_PASS, QD_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function get_wowonder_db() {
+    static $conn = null;
+    if ($conn) return $conn;
+
+    $conn = new mysqli(WOWONDER_DB_HOST, WOWONDER_DB_USER, WOWONDER_DB_PASS, WOWONDER_DB_NAME);
+    if ($conn->connect_errno) return false;
+    $conn->set_charset('utf8mb4');
+    return $conn;
+}
+
+function millennium_timezone_table($suffix) {
+    $safe = preg_replace('/[^a-z0-9_]/i', '_', strtolower((string)$suffix));
+    return MILLENNIUM_TIMEZONE_TABLE_PREFIX . $safe;
+}
+
+// Helper for table names
+if (!function_exists('wp_table')) {
+    function wp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . WP_TABLE_PREFIX . $table . '`';
+    }
+}
+
+if (!function_exists('bp_table')) {
+    function bp_table($table) {
+        return '`' . WP_DB_NAME . '`.`' . BP_TABLE_PREFIX . $table . '`';
+    }
+}
+```
+
+File: shared/millennium-timezone/millennium-timezone.php
+```php name=shared/millennium-timezone/millennium-timezone.php
+<?php
+/**
+ * Millennium Timezone / Palmier Calendar Engine
+ * Refactored to reduce repeated same-domain API calls.
+ * Stores cached data in a log file and uses koware_iapd.millennium_timezone_* tables only when needed.
+ */
+
+require_once dirname(__DIR__, 2) . '/shared/db_helpers.php';
+
+date_default_timezone_set('UTC');
+
+define('MTZ_LOG_FILE', __DIR__ . '/millennium-timezone.log');
+define('MTZ_CACHE_TTL', 12345); // seconds
+define('MTZ_REMOTE_URL', 'https://worldtimeapi.org/api/timezone/Etc/UTC');
+
+$historicalHourMap = [
+    0 => 0,    // Sunday
+    1 => 14,   // Monday
+    2 => 3,    // Tuesday
+    3 => 17,   // Wednesday
+    4 => 6,    // Thursday
+    5 => 20,   // Friday
+    6 => 10    // Saturday
+];
+
+$daysShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+$daysFull  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+$months    = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function mtz_log($msg, $data = null) {
+    $line = '[MTZ] ' . $msg;
+    if ($data !== null) {
+        $line .= ' | ' . json_encode($data, JSON_UNESCAPED_SLASHES);
+    }
+    error_log($line);
+}
+
+function ordinal($n) {
+    if ($n > 3 && $n < 21) return $n . 'th';
+    switch ($n % 10) {
+        case 1: return $n . 'st';
+        case 2: return $n . 'nd';
+        case 3: return $n . 'rd';
+        default: return $n . 'th';
+    }
+}
+
+function jubilee($year) {
+    $hebrew = $year + 3760;
+    $raw = ($hebrew - 2503) / 50;
+    $int = floor($raw);
+    $dec = $raw - $int;
+    $yy = floor(($dec * 100) / 2);
+    return $int . "Y" . str_pad($yy, 2, '0', STR_PAD_LEFT);
+}
+
+function mtz_read_log_file() {
+    if (!file_exists(MTZ_LOG_FILE)) return null;
+
+    $lines = file(MTZ_LOG_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!$lines) return null;
+
+    $entries = [];
+    foreach ($lines as $line) {
+        $decoded = json_decode($line, true);
+        if (is_array($decoded)) $entries[] = $decoded;
+    }
+
+    if (!$entries) return null;
+
+    $last = end($entries);
+    if (!isset($last['timestamp'])) return null;
+
+    return $last;
+}
+
+function mtz_write_log_file($payload) {
+    $dir = dirname(MTZ_LOG_FILE);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0775, true);
+    }
+
+    $entry = $payload;
+    $entry['written_at'] = time();
+
+    $fp = fopen(MTZ_LOG_FILE, 'a');
+    if ($fp) {
+        fwrite($fp, json_encode($entry, JSON_UNESCAPED_SLASHES) . PHP_EOL);
+        fclose($fp);
+    }
+}
+
+function mtz_should_refresh_cache() {
+    $last = mtz_read_log_file();
+    if (!$last) return true;
+
+    if (!isset($last['timestamp'])) return true;
+    $age = time() - (int)$last['timestamp'];
+
+    return $age >= MTZ_CACHE_TTL;
+}
+
+function mtz_load_remote_snapshot() {
+    $ctx = stream_context_create([
+        'http' => [
+            'timeout' => 15,
+            'ignore_errors' => true,
+            'header' => "Accept: application/json\r\nCache-Control: no-cache\r\n"
+        ]
+    ]);
+
+    $raw = @file_get_contents(MTZ_REMOTE_URL, false, $ctx);
+    if (!$raw) {
+        return null;
+    }
+
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        return null;
+    }
+
+    // Accept several possible worldtimeapi response layouts
+    $utcIso = null;
+    if (!empty($data['utc_datetime'])) $utcIso = $data['utc_datetime'];
+    elseif (!empty($data['datetime'])) $utcIso = $data['datetime'];
+    elseif (!empty($data['currentDateTime'])) $utcIso = $data['currentDateTime'];
+
+    if (!$utcIso) {
+        return null;
+    }
+
+    $dt = new DateTime($utcIso, new DateTimeZone('UTC'));
+    $dt->setTimezone(new DateTimeZone('UTC'));
+
+    return [
+        'timestamp' => $dt->getTimestamp(),
+        'iso' => $dt->format(DateTime::ATOM),
+        'formatted' => $dt->format('Y-m-d H:i:s'),
+        'day' => $dt->format('D'),
+        'date' => $dt->format('j'),
+        'month' => $dt->format('F'),
+        'year' => $dt->format('Y'),
+        'time' => $dt->format('H:i:s'),
+    ];
+}
+
+function mtz_db_upsert_snapshot($payload) {
+    $conn = get_iapd_db_conn();
+    if (!$conn) {
+        return false;
+    }
+
+    $table = millennium_timezone_table('snapshot');
+    $sql = "
+        INSERT INTO {$table}
+        (`timestamp`, `iso`, `day`, `date`, `month`, `year`, `time`, `created_at`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+            iso = VALUES(iso),
+            day = VALUES(day),
+            date = VALUES(date),
+            month = VALUES(month),
+            year = VALUES(year),
+            time = VALUES(time),
+            created_at = NOW()
+    ";
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        mtz_log('DB_PREPARE_FAIL', ['error' => $conn->error, 'table' => $table]);
+        return false;
+    }
+
+    $ts = (int)($payload['timestamp'] ?? time());
+    $iso = (string)($payload['iso'] ?? '');
+    $day = (string)($payload['day'] ?? '');
+    $date = (string)($payload['date'] ?? '');
+    $month = (string)($payload['month'] ?? '');
+    $year = (string)($payload['year'] ?? '');
+    $time = (string)($payload['time'] ?? '');
+
+    $stmt->bind_param('issssss', $ts, $iso, $day, $date, $month, $year, $time);
+    $ok = $stmt->execute();
+    $stmt->close();
+
+    return $ok;
+}
+
+function mtz_resolve_snapshot() {
+    $last = mtz_read_log_file();
+
+    if ($last && !mtz_should_refresh_cache()) {
+        return $last;
+    }
+
+    $remote = mtz_load_remote_snapshot();
+    if ($remote) {
+        mtz_write_log_file($remote);
+        mtz_db_upsert_snapshot($remote);
+        return $remote;
+    }
+
+    if ($last) {
+        return $last;
+    }
+
+    $nowUtc = new DateTime('now', new DateTimeZone('UTC'));
+    return [
+        'timestamp' => $nowUtc->getTimestamp(),
+        'iso' => $nowUtc->format(DateTime::ATOM),
+        'formatted' => $nowUtc->format('Y-m-d H:i:s'),
+        'day' => $nowUtc->format('D'),
+        'date' => $nowUtc->format('j'),
+        'month' => $nowUtc->format('F'),
+        'year' => $nowUtc->format('Y'),
+        'time' => $nowUtc->format('H:i:s'),
+    ];
+}
+
+function mtz_palmier_time() {
+    global $historicalHourMap;
+
+    try {
+        $now = new DateTime('now', new DateTimeZone('UTC'));
+        $epoch = new DateTime('1899-12-30 00:00:00', new DateTimeZone('UTC'));
+
+        $diffDays = ($now->getTimestamp() - $epoch->getTimestamp()) / 86400;
+        $j = (((($diffDays / 365.262541748) + 1900) / 7) - 2 - 184) * 365.262541748;
+
+        $hist = clone $epoch;
+        $days = (int)round($j);
+
+        if ($days >= 0) {
+            $hist->modify("+$days days");
+        } else {
+            $hist->modify("$days days");
+        }
+
+        $weekday = (int)$now->format('w');
+        $base = $historicalHourMap[$weekday] ?? 0;
+
+        $secToday = ($now->format('H') * 3600) + ($now->format('i') * 60) + $now->format('s');
+        $progress = $secToday / 86400;
+        $histSec = $progress * 14400;
+
+        $h = floor($histSec / 3600);
+        $m = floor(($histSec % 3600) / 60);
+        $s = floor($histSec % 60);
+
+        $hour = ($base + $h) % 24;
+        $hist->setTime($hour, $m, $s);
+
+        return [$now, $hist];
+    } catch (Exception $e) {
+        mtz_log('ENGINE_FAIL', ['message' => $e->getMessage()]);
+        return [null, null];
+    }
+}
+
+function mtz_get_probe_value() {
+    $probeUrl = 'https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php?probe=now';
+    $json = @file_get_contents($probeUrl);
+
+    if ($json === false || $json === '') {
+        return null;
+    }
+
+    $data = json_decode($json, true);
+    if (!is_array($data)) {
+        return null;
+    }
+
+    return $data['probe_iso'] ?? null;
+}
+
+if (isset($_GET['endpoint'])) {
+    header('Content-Type: application/json');
+    [$now, $hist] = mtz_palmier_time();
+
+    if ($now === null || $hist === null) {
+        http_response_code(500);
+        echo json_encode(['error' => 'palmier clock unavailable']);
+        exit;
+    }
+
+    $snapshot = mtz_resolve_snapshot();
+
+    switch ($_GET['endpoint']) {
+        case 'historical':
+            echo json_encode([
+                'iso' => $hist->format(DateTime::ATOM),
+                'date' => $hist->format('Y-m-d'),
+                'day' => $hist->format('D'),
+                'month' => $hist->format('F'),
+                'year' => $hist->format('Y'),
+                'time' => $hist->format('H:i:s'),
+            ]);
+            exit;
+        case 'current':
+            echo json_encode([
+                'iso' => $now->format(DateTime::ATOM),
+                'date' => $now->format('Y-m-d'),
+                'day' => $now->format('D'),
+                'month' => $now->format('F'),
+                'year' => $now->format('Y'),
+                'time' => $now->format('H:i:s'),
+                'snapshot' => $snapshot,
+            ]);
+            exit;
+        case 'probe':
+            $probe = mtz_get_probe_value();
+            echo json_encode([
+                'probe_iso' => $probe,
+                'probe_value' => $probe,
+                'snapshot' => $snapshot,
+            ]);
+            exit;
+        case 'timezone':
+            echo json_encode([
+                'snapshot' => $snapshot,
+                'current' => [
+                    'iso' => $now->format(DateTime::ATOM),
+                    'date' => $now->format('Y-m-d'),
+                ],
+                'historical' => [
+                    'iso' => $hist->format(DateTime::ATOM),
+                    'date' => $hist->format('Y-m-d'),
+                ],
+            ]);
+            exit;
+        default:
+            http_response_code(404);
+            echo json_encode(['error' => 'invalid endpoint']);
+            exit;
+    }
+}
+
+[$now, $hist] = mtz_palmier_time();
+$snapshot = mtz_resolve_snapshot();
+$probeIso = mtz_get_probe_value();
+
+if ($now && $hist) {
+    $comboDay = $daysShort[$hist->format('w')] . $daysFull[$now->format('w')];
+    $ordinalValue = ordinal($hist->format('d'));
+    $monthName = $months[$hist->format('n') - 1];
+    $jub = jubilee($now->format('Y'));
+    $refYear = $hist->format('Y');
+    $histTime = $hist->format('H:i:s');
+    $currentIso = $now->format(DateTime::ATOM);
+} else {
+    $comboDay = 'ERR';
+    $ordinalValue = 'ERR';
+    $monthName = 'ERR';
+    $jub = 'ERR';
+    $refYear = 'ERR';
+    $histTime = 'ERR';
+    $currentIso = 'ERR';
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Millennium Timezone</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            margin: 0;
+            background: #0f172a;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        .wrap {
+            max-width: 980px;
+            margin: 28px auto;
+            padding: 24px;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 18px;
+        }
+        .group {
+            margin: 6px;
+        }
+        .big {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        .mid {
+            font-size: 1.1rem;
+            font-family: monospace;
+        }
+        .label {
+            font-size: 11px;
+            opacity: .7;
+            text-transform: uppercase;
+        }
+        @media (max-width: 600px) {
+            .row { flex-direction: column; }
+            .big { font-size: 1.2rem; }
+            .mid { font-size: .9rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="row">
+            <div class="group">
+                <div class="big"><?= htmlspecialchars($comboDay) ?></div>
+                <div class="label">Day</div>
+            </div>
+
+            <div class="group">
+                <div class="big"><?= htmlspecialchars($ordinalValue) ?></div>
+                <div class="label">Date</div>
+            </div>
+
+            <div class="group">
+                <div class="big"><?= htmlspecialchars($monthName) ?></div>
+                <div class="label">Month</div>
+            </div>
+
+            <div class="group">
+                <div class="big"><?= htmlspecialchars($jub) ?></div>
+                <div class="label">Jubilee</div>
+            </div>
+
+            <div class="group">
+                <div class="big"><?= htmlspecialchars($refYear) ?></div>
+                <div class="label">Reference Year</div>
+            </div>
+        </div>
+
+        <div class="row" style="margin-top:24px">
+            <div class="group">
+                <div class="mid"><?= htmlspecialchars($histTime) ?></div>
+                <div class="label">Local</div>
+            </div>
+
+            <div class="group">
+                <div class="mid"><?= htmlspecialchars($currentIso) ?></div>
+                <div class="label">Current</div>
+            </div>
+
+            <div class="group">
+                <div class="mid"><?= htmlspecialchars($probeIso ?? '--') ?></div>
+                <div class="label">Probe</div>
+            </div>
+        </div>
+
+        <div class="row" style="margin-top:20px">
+            <div class="group">
+                <div class="mid"><?= htmlspecialchars($snapshot['formatted'] ?? 'n/a') ?></div>
+                <div class="label">Timezone Snapshot</div>
+            </div>
+        </div>
+
+        <div class="row" style="margin-top:18px">
+            <div class="group">
+                <div class="mid" style="font-size: 0.82rem; color: #bfe5ff;">
+                    cache ttl: <?= MTZ_CACHE_TTL ?>s
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+```
+
+File: shared/millennium-timezone/millennium-probe.php
+```php name=shared/millennium-timezone/millennium-probe.php
+<?php
+// Millennium Probe Engine 2026
+// Moved to shared/millennium-timezone/
+// Log-first + TTL refresh to avoid repeated external polling
+
+define('MTZ_PROBE_LOG_FILE', __DIR__ . '/millennium-probe.log');
+define('MTZ_PROBE_LOG_TTL', 12345);
+define('MTZ_PROBE_MAX_LOG', 180);
+
+define('OSC_URL', 'https://buzzjuice.net/shared/palmier/oscillator/palmier-oscillator.php?oscillation=live');
+define('BASE_DAYS', 74144.0);
+
+function mtz_probe_read_log() {
+    if (!file_exists(MTZ_PROBE_LOG_FILE)) return [];
+    $raw = @file_get_contents(MTZ_PROBE_LOG_FILE);
+    if ($raw === false || trim($raw) === '') return [];
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function mtz_probe_write_log($log) {
+    if (count($log) > MTZ_PROBE_MAX_LOG) {
+        $log = array_slice($log, -MTZ_PROBE_MAX_LOG);
+    }
+    @file_put_contents(MTZ_PROBE_LOG_FILE, json_encode(array_values($log), JSON_PRETTY_PRINT));
+}
+
+function mtz_probe_append_log($entry) {
+    $log = mtz_probe_read_log();
+    $log[] = $entry;
+    mtz_probe_write_log($log);
+}
+
+function mtz_probe_recent_log($now, $phase_idx, $osc, $ttl = MTZ_PROBE_LOG_TTL) {
+    foreach (array_reverse(mtz_probe_read_log()) as $e) {
+        if (
+            isset($e['phase_idx']) &&
+            $e['phase_idx'] === $phase_idx &&
+            abs((float)($e['oscillation_index'] ?? 0) - (float)$osc) < 1e-10 &&
+            ($now - (int)($e['timestamp'] ?? 0)) < $ttl
+        ) {
+            return $e;
+        }
+    }
+    return null;
+}
+
+function mtz_probe_fetch_osc_index() {
+    $json = @file_get_contents(OSC_URL);
+    if (!$json) return 0.0;
+
+    $data = json_decode($json, true);
+    if (!is_array($data)) return 0.0;
+
+    return isset($data['oscillation_index']) ? (float)$data['oscillation_index'] : 0.0;
+}
+
+function mtz_probe_get_phase_bounds_table($year) {
+    return [
+        [strtotime("$year-01-10 UTC"), strtotime("$year-03-15 23:59:59 UTC")],
+        [strtotime("$year-03-16 UTC"), strtotime("$year-05-25 23:59:59 UTC")],
+        [strtotime("$year-05-26 UTC"), strtotime("$year-08-05 23:59:59 UTC")],
+        [strtotime("$year-08-15 UTC"), strtotime("$year-10-15 23:59:59 UTC")],
+        [strtotime("$year-10-16 UTC"), strtotime("$year-12-20 23:59:59 UTC")],
+    ];
+}
+
+function mtz_probe_get_phase_labels() {
+    return [
+        'Jan 10 – Mar 15',
+        'Mar 16 – May 25',
+        'May 26 – Aug 5',
+        'Aug 15 – Oct 15',
+        'Oct 16 – Dec 20'
+    ];
+}
+
+function mtz_probe_find_phase($now) {
+    $phases = mtz_probe_get_phase_bounds_table(gmdate('Y', $now));
+    foreach ($phases as $idx => [$start, $end]) {
+        if ($now >= $start && $now <= $end) {
+            return [$idx, $start, $end, gmdate('Y', $now)];
+        }
+    }
+
+    if ($now < $phases[0][0]) {
+        $prev = mtz_probe_get_phase_bounds_table(gmdate('Y', $now) - 1);
+        return [4, $prev[4][0], $prev[4][1], gmdate('Y', $now) - 1];
+    }
+
+    $next = mtz_probe_get_phase_bounds_table(gmdate('Y', $now) + 1);
+    return [0, $next[0][0], $next[0][1], gmdate('Y', $now) + 1];
+}
+
+function mtz_probe_amplitude($osc) {
+    return BASE_DAYS * (1.0 + $osc);
+}
+
+function mtz_probe_value($t, $ps, $pe, $osc) {
+    $A = mtz_probe_amplitude($osc);
+    $span = max(1, $pe - $ps + 1);
+    $u = ($t - $ps) / $span;
+
+    if ($u < 0.25) {
+        return $A * sin(($u / 0.25) * (M_PI / 2));
+    } elseif ($u < 0.5) {
+        return $A * cos((($u - 0.25) / 0.25) * (M_PI / 2));
+    } elseif ($u < 0.75) {
+        return -$A * sin((($u - 0.5) / 0.25) * (M_PI / 2));
+    } else {
+        return -$A * cos((($u - 0.75) / 0.25) * (M_PI / 2));
+    }
+}
+
+function mtz_probe_to_iso($basets, $days) {
+    return gmdate('Y-m-d\TH:i:s\Z', $basets + round($days * 86400));
+}
+
+$now = time();
+$labels = mtz_probe_get_phase_labels();
+
+if (isset($_GET['phase'])) {
+    $requested = intval($_GET['phase']);
+    $year = gmdate('Y', $now);
+    $bounds = mtz_probe_get_phase_bounds_table($year);
+    $phase_idx = max(0, min(4, $requested));
+    [$ps, $pe] = $bounds[$phase_idx];
+} else {
+    [$phase_idx, $ps, $pe, $year] = mtz_probe_find_phase($now);
+}
+
+$osc = mtz_probe_fetch_osc_index();
+$log = mtz_probe_recent_log($now, $phase_idx, $osc);
+
+if ($log) {
+    $probe_val = (float)($log['probe_value_days'] ?? 0);
+    $probe_iso = $log['probe_iso'] ?? null;
+} else {
+    $probe_val = mtz_probe_value($now, $ps, $pe, $osc);
+    $probe_iso = mtz_probe_to_iso($now, $probe_val);
+    mtz_probe_append_log([
+        'timestamp' => $now,
+        'phase_idx' => $phase_idx,
+        'phase_label' => $labels[$phase_idx],
+        'phase_start' => $ps,
+        'phase_end' => $pe,
+        'oscillation_index' => $osc,
+        'amplitude_days' => mtz_probe_amplitude($osc),
+        'probe_value_days' => $probe_val,
+        'probe_iso' => $probe_iso,
+        'now_iso' => gmdate('Y-m-d\TH:i:s\Z', $now),
+    ]);
+}
+
+if (isset($_GET['probe']) && $_GET['probe'] === 'now') {
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode([
+        'probe_iso' => $probe_iso,
+        'now_iso' => gmdate('Y-m-d\TH:i:s\Z', $now),
+        'phase_index' => $phase_idx + 1,
+        'phase_label' => $labels[$phase_idx],
+        'phase_start_iso' => gmdate('Y-m-d\TH:i:s\Z', $ps),
+        'phase_end_iso' => gmdate('Y-m-d\TH:i:s\Z', $pe),
+        'oscillation_index' => $osc,
+        'amplitude_days' => mtz_probe_amplitude($osc),
+        'probe_value_days' => $probe_val,
+    ]);
+    exit;
+}
+
+$PLEN = 180;
+$phasePoints = [];
+$span = $pe - $ps + 1;
+
+for ($i = 0; $i <= $PLEN; ++$i) {
+    $t = $ps + intval($i * $span / $PLEN);
+    $u = ($t - $ps) / $span;
+    $phasePoints[] = [
+        'x' => $u,
+        'y' => mtz_probe_value($t, $ps, $pe, $osc),
+        'date' => gmdate('Y-m-d', $t),
+    ];
+}
+
+$now_u = ($now - $ps) / $span;
+
+$yearPoints = [];
+$yphases = mtz_probe_get_phase_bounds_table($year);
+list($ys, $ye) = [$yphases[0][0], $yphases[4][1]];
+$yd = $ye - $ys + 1;
+
+foreach ($yphases as $pidx => $PH) {
+    [$s2, $e2] = $PH;
+    $pd2 = $e2 - $s2 + 1;
+    for ($j = 0; $j <= 36; ++$j) {
+        $t2 = $s2 + intval($j * $pd2 / 36);
+        $xu = ($t2 - $ys) / $yd;
+        $yearPoints[] = [
+            'x' => $xu,
+            'y' => mtz_probe_value($t2, $s2, $e2, $osc),
+            'date' => gmdate('Y-m-d', $t2),
+        ];
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Millennium Probe</title>
+    <meta name="viewport" content="width=1100">
+    <style>
+        body { background: #131b29; color:#fff; font-family:system-ui,Arial,sans-serif; margin:0; }
+        .container { max-width: 1100px; margin:40px auto 0; background:#161f34; border-radius:14px; padding:38px 36px; box-shadow:0 0 16px #111b2a88; }
+        .main-title { font-size:2.18rem; letter-spacing:-.01em; font-weight:bold; margin-bottom:2px; }
+        .phase-title { font-size:1.12rem; color:#79ecff; text-shadow:0 1px 6px #008aee1e; }
+        .meta { font-size:.97rem; margin-bottom:0; opacity:.88; }
+        .probeval { font-size:1.06rem; }
+        .stats-row { display:flex; gap:30px; flex-wrap:wrap; }
+        .stat-label { color:#79ecff; margin-right:3px; }
+        .canvas-wrap { overflow:hidden; padding:10px; background:#111b2c; border-radius:14px; }
+        canvas { background:#161d2d; display:block; border-radius:8px; margin:0 auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="main-title">Millennium Probe Engine</div>
+        <div class="phase-title">
+            <b>Phase <?= ($phase_idx + 1) ?> of 5:</b>
+            <?= $labels[$phase_idx] ?>
+        </div>
+        <div class="stats-row meta">
+            <div><span class="stat-label">Phase Start:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $ps) ?></div>
+            <div><span class="stat-label">Phase End:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $pe) ?></div>
+        </div>
+        <div class="stats-row meta">
+            <div><span class="stat-label">Now:</span> <?= gmdate('Y-m-d\TH:i:s\Z', $now) ?></div>
+            <div><span class="stat-label">Oscillation Index:</span> <?= round($osc, 8) ?></div>
+            <div><span class="stat-label">Amplitude:</span> <?= number_format(mtz_probe_amplitude($osc), 2) ?> days</div>
+        </div>
+        <div class="meta"><span class="stat-label">Current Probe x (days):</span> <b><?= round($probe_val, 4) ?></b></div>
+        <div class="probeval"><span class="stat-label">Probe mapped ISO date:</span> <b id="live-probe-iso"><?= $probe_iso ?></b></div>
+    </div>
+</body>
+</html>
+```
+
+File: shared/palmier/gold_calc/gold_calc_helpers.php
+```php name=shared/palmier/gold_calc/gold_calc_helpers.php
+<?php
+
+function getLatest6hSlot() {
+    $slots = ['00:00:00','06:00:00','12:00:00','18:00:00'];
+    $now = new DateTime('now', new DateTimeZone('UTC'));
+    foreach (array_reverse($slots) as $slot) {
+        if ($now->format('H:i:s') >= $slot) return $now->format('Y-m-d') . ' ' . $slot;
+    }
+    return (new DateTime('yesterday', new DateTimeZone('UTC')))->format('Y-m-d') . ' 18:00:00';
+}
+
+function getLogFile($slot) {
+    return dirname(__DIR__) . '/gold_calc/gold_prices/gold_cache_' . substr($slot, 0, 7) . '.log';
+}
+
+function logExists($file, $slot) {
+    if (!file_exists($file)) return false;
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return true;
+    }
+    return false;
+}
+
+function readLogRow($file, $slot) {
+    foreach (file($file) as $line) {
+        $row = json_decode($line, true);
+        if (isset($row['timestamp']) && $row['timestamp'] === $slot) return $row;
+    }
+    return null;
+}
+
+function appendLog($file, $row) {
+    $f = fopen($file, 'a');
+    if ($f) {
+        fwrite($f, json_encode($row, JSON_UNESCAPED_SLASHES) . PHP_EOL);
+        fclose($f);
+    }
+}
+
+function getPalmierHistoricalDate($endpoint) {
+    $resp = file_get_contents($endpoint . '?endpoint=historical');
+    $json = json_decode($resp, true);
+    if (!isset($json['iso'])) {
+        throw new RuntimeException('Invalid Millennium Timezone response');
+    }
+    return new DateTime($json['iso'], new DateTimeZone('UTC'));
+}
+
+// Returns array: ['date1'=>[...], 'date2'=>[...]]
+function loadCsvFull($file) {
+    $lines = file($file);
+    if (!$lines) return [];
+    $lines[0] = preg_replace('/^\x{FEFF}/u', '', $lines[0]);
+    $rows = array_map('str_getcsv', $lines);
+    $header = array_map('strtolower', $rows[0]);
+    unset($rows[0]);
+    $data = [];
+    foreach ($rows as $row) {
+        $entry = array_combine($header, $row);
+        if (isset($entry['date'])) $data[$entry['date']] = $entry;
+    }
+    ksort($data);
+    return $data;
+}
+
+// Prefer 'close' if valid, fallback to 'open'
+function getRate($row) {
+    if (isset($row['close']) && $row['close'] != '' && $row['close'] != 0) {
+        return (float)$row['close'];
+    }
+    if (isset($row['open']) && $row['open'] != '' && $row['open'] != 0) {
+        return (float)$row['open'];
+    }
+    return null;
+}
+
+// Finds exact/interpolated rate or skips currency if ineligible
+function findRateMeta($data, $targetDate) {
+    $dates = array_keys($data);
+    $prev = null;
+    $next = null;
+
+    foreach ($dates as $d) {
+        $row = $data[$d];
+        $value = getRate($row);
+        if ($value === null) continue;
+        if ($d == $targetDate) {
+            return [
+                'type' => 'exact',
+                'date_used' => $d,
+                'rate' => $value,
+            ];
+        }
+        if ($d < $targetDate) $prev = ['date' => $d, 'value' => $value];
+        if ($d > $targetDate && !$next) $next = ['date' => $d, 'value' => $value];
+    }
+
+    if (!$prev || !$next) return null;
+
+    $t1 = strtotime($prev['date']);
+    $t2 = strtotime($next['date']);
+    $t = strtotime($targetDate);
+
+    $interp = $prev['value'] + ($next['value'] - $prev['value']) * (($t - $t1) / ($t2 - $t1));
+
+    return [
+        'type' => 'interpolated',
+        'date_used' => $targetDate,
+        'rate' => $interp,
+        'prev' => $prev,
+        'next' => $next,
+    ];
+}
+
+// Format: 1'2345'6789.0123 (groups of 4)
+function formatPalmierNumber($num) {
+    $num = number_format((float)$num, 4, '.', '');
+    $parts = explode('.', $num);
+    $int = strrev(implode("'", str_split(strrev($parts[0]), 4)));
+    return $int . '.' . $parts[1];
+}
+```
+
+File: shared/palmier/gold_calc/gold_calc.php
+```php name=shared/palmier/gold_calc/gold_calc.php
+<?php
+
+require_once __DIR__ . '/gold_calc_helpers.php';
+
+$currencyDir = dirname(__DIR__) . '/currency_data/';
+$sabbatical = 'https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php';
+
+$format = $_GET['format'] ?? 'html';
+$force = isset($_GET['force']);
+
+$slot = getLatest6hSlot();
+$logFile = getLogFile($slot);
+
+if (!$force && logExists($logFile, $slot)) {
+    $result = readLogRow($logFile, $slot);
+    $currencies = $result['currencies'] ?? [];
+    ksort($currencies, SORT_STRING);
+    $i = 1;
+    foreach ($currencies as &$row) {
+        $row['no'] = $i++;
+    }
+    unset($row);
+
+    $result['currencies'] = $currencies;
+    $result['historical_currencies_count'] = count($currencies);
+} else {
+    $histDT = getPalmierHistoricalDate($sabbatical);
+    $histDate = $histDT->format('Y-m-d');
+
+    $goldData = loadCsvFull($currencyDir . 'XAU_USD.csv');
+    $goldMeta = findRateMeta($goldData, $histDate);
+
+    if (!$goldMeta) {
+        die("Missing gold anchor (XAU/USD) for {$histDate}");
+    }
+
+    $goldUSD = $goldMeta['rate'];
+
+    $currencies = [];
+
+    foreach (glob($currencyDir . 'USD_*.csv') as $file) {
+        $ccy = strtoupper(str_replace(['USD_', '.csv'], '', basename($file)));
+
+        $data = loadCsvFull($file);
+        $meta = findRateMeta($data, $histDate);
+
+        if (!$meta && $ccy !== 'USD') continue;
+
+        $rate = ($ccy === 'USD') ? 1.0 : $meta['rate'];
+
+        $currencies[$ccy] = [
+            'date_used' => $meta['date_used'] ?? $histDate,
+            'rate' => $rate,
+            'prev_date' => $meta['prev']['date'] ?? '',
+            'prev_value' => $meta['prev']['value'] ?? '',
+            'next_date' => $meta['next']['date'] ?? '',
+            'next_value' => $meta['next']['value'] ?? '',
+            'interpolated' => ($meta['type'] ?? '') === 'interpolated' ? $rate : '',
+            'gold_price' => $rate * $goldUSD
+        ];
+    }
+
+    if (!isset($currencies['USD'])) {
+        $currencies['USD'] = [
+            'date_used' => $histDate,
+            'rate' => 1.0,
+            'prev_date' => '',
+            'prev_value' => '',
+            'next_date' => '',
+            'next_value' => '',
+            'interpolated' => '',
+            'gold_price' => $goldUSD
+        ];
+    }
+
+    ksort($currencies, SORT_STRING);
+    $i = 1;
+    foreach ($currencies as &$row) {
+        $row['no'] = $i++;
+    }
+    unset($row);
+
+    $sum = 0;
+    foreach ($currencies as $c) {
+        $sum += $c['gold_price'];
+    }
+    $count = count($currencies);
+    $average = $count ? $sum / $count : 0;
+
+    $result = [
+        'timestamp' => $slot,
+        'historical_date' => $histDT->format(DateTime::ATOM),
+        'gold_usd' => $goldUSD,
+        'currencies' => $currencies,
+        'historical_gold_average' => $average,
+        'historical_currencies_count' => $count
+    ];
+
+    appendLog($logFile, $result);
+}
+
+if ($format === 'json') {
+    header('Content-Type: application/json');
+    echo json_encode($result, JSON_PRETTY_PRINT);
+    exit;
+}
+
+if ($format === 'average') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'timestamp' => $result['timestamp'],
+        'historical_gold_average' => $result['historical_gold_average'],
+        'formatted_average' => formatPalmierNumber($result['historical_gold_average']),
+        'historical_currencies_count' => $result['historical_currencies_count']
+    ], JSON_PRETTY_PRINT);
+    exit;
+}
+
+echo "<h2>Palmier Gold Prices</h2>";
+echo "<b>Slot:</b> {$result['timestamp']}<br>";
+echo "<b>Historical Palmier Date:</b> {$result['historical_date']}<br>";
+echo "<b>Total Currencies:</b> {$result['historical_currencies_count']}<br>";
+echo "<h3 style='color:gold'>Gold Price in USD: {$result['gold_usd']}</h3>";
+
+echo "<table border=1 cellpadding=6>
+<tr>
+<th>No.</th>
+<th>Currency</th>
+<th>Date Used</th>
+<th>Rate Used</th>
+<th>Prev Date</th>
+<th>Prev Value</th>
+<th>Next Date</th>
+<th>Next Value</th>
+<th>Interpolated</th>
+<th>Gold Price in Currency</th>
+</tr>";
+foreach ($result['currencies'] as $ccy => $c) {
+    echo "<tr>";
+    echo "<td>{$c['no']}</td>";
+    echo "<td>{$ccy}</td>";
+    echo "<td>{$c['date_used']}</td>";
+    echo "<td>{$c['rate']}</td>";
+    echo "<td>{$c['prev_date']}</td>";
+    echo "<td>{$c['prev_value']}</td>";
+    echo "<td>{$c['next_date']}</td>";
+    echo "<td>{$c['next_value']}</td>";
+    echo "<td>{$c['interpolated']}</td>";
+    echo "<td><b>{$c['gold_price']}</b></td>";
+    echo "</tr>";
+}
+echo "<tr style='font-weight:bold;background:#eaeaea'>
+<td colspan=9 align=right>Average</td>
+<td>" . formatPalmierNumber($result['historical_gold_average']) . "</td>
+</tr>";
+echo "</table>";
+
+echo "<form method='get'><input type='hidden' name='format' value='json'/><button>Download JSON</button></form>";
+```
+
+File: shared/palmier/palmier_logger.php
+```php name=shared/palmier/palmier_logger.php
+<?php
+require_once __DIR__ . '/../db_helpers.php';
+
+function bzj_palmier_activity_log_file() {
+    return __DIR__ . '/logs/palmier-activity.log';
+}
+
+function bzj_log_activity($user_id, $action_type, $ref_id = null, $ref_type = null, $value = 1, $source_table = null) {
+    $file = bzj_palmier_activity_log_file();
+
+    $dir = dirname($file);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0775, true);
+    }
+
+    $entry = [
+        'user_id' => (int)$user_id,
+        'action_type' => $action_type,
+        'ref_id' => $ref_id,
+        'ref_type' => $ref_type,
+        'value' => $value,
+        'source_table' => $source_table,
+        'created_at' => gmdate('Y-m-d H:i:s\Z'),
+    ];
+
+    $line = json_encode($entry, JSON_UNESCAPED_SLASHES) . PHP_EOL;
+    @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+}
+```
+
+Important notes:
+- This keeps the database for real data structures, not for log accumulation.
+- Log data remains historical and inspectable.
+- This prevents database bloat.
+
+I also recommend this exact migration map to avoid broken paths:
+
+- old: https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php
+- new: https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php
+
+- old: https://buzzjuice.net/shared/palmier/probe/millennium-probe.php
+- new: https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php
+
+Then update all in-repo references from:
+- `shared/palmier/calendar/sabbatical-date.php`
+- `shared/palmier/probe/millennium-probe.php`
+
+to:
+- `shared/millennium-timezone/millennium-timezone.php`
+- `shared/millennium-timezone/millennium-probe.php`
+
+This is the cleanest fix because it matches the “cache first / log-first / TTL-based refresh” requirement and it avoids unnecessary same-domain API calls.
+
+If you want, I can also produce the exact updated code for:
+- the remaining script files (`bulk_convert_currency_csvs.php`, `currency-bulk-multiplier.php`)
+- a database schema SQL for `koware_iapd.millennium_timezone_*`
+- a full recommended directory structure for `shared/millennium-timezone/`
+
+produce the exact updated code for:
+
+the remaining script files (bulk_convert_currency_csvs.php, currency-bulk-multiplier.php)
+a database schema SQL for koware_iapd.millennium_timezone_*
+a full recommended directory structure for shared/millennium-timezone/
+
+Below are the exact updated versions for the remaining script files, the database schema SQL for the `koware_iapd.millennium_timezone_*` tables, and the recommended directory structure for `shared/millennium-timezone/`.
+
+1) bulk_convert_currency_csvs.php
+
+```php name=shared/palmier/scripts/bulk_convert_currency_csvs.php
+<?php
+/**
+ * Bulk normalize currency CSV files.
+ * - standardizes headers
+ * - normalizes date format
+ * - keeps valid close prices
+ * - archives originals
+ * - writes updated CSV into the same folder
+ */
+
+$currencyDir = __DIR__ . '/../currency_data/';
+$oldDir = $currencyDir . 'old/';
+
+if (!is_dir($oldDir)) {
+    mkdir($oldDir, 0755, true);
+}
+
+$cleanNumber = function ($val) {
+    $val = str_replace([',', '"'], '', (string)$val);
+    return is_numeric($val) ? floatval($val) : null;
+};
+
+foreach (glob($currencyDir . '*.csv') as $file) {
+    if (strpos($file, '/old/') !== false) continue;
+
+    $basename = basename($file);
+
+    $cleanName = null;
+    if (preg_match('/^USD_([A-Z]+).*\.csv$/i', $basename, $m)) {
+        $cleanName = 'USD_' . strtoupper($m[1]) . '.csv';
+    } elseif (preg_match('/^XAU_USD.*\.csv$/i', $basename)) {
+        $cleanName = 'XAU_USD.csv';
+    } else {
+        $cleanName = preg_replace(
+            ['/Historical Data/i', '/\s+/', '/[^A-Z0-9_\.]/i'],
+            ['', '', ''],
+            $basename
+        );
+        if (preg_match('/USD_([A-Z]+)\.csv/i', $cleanName, $mm)) {
+            $cleanName = 'USD_' . strtoupper($mm[1]) . '.csv';
+        }
+    }
+
+    $outFile = $currencyDir . $cleanName;
+
+    echo "Checking {$basename} → {$cleanName} ...\n";
+
+    $lines = file($file);
+    if (!$lines || count($lines) < 2) {
+        echo "  Skipping (empty)\n";
+        continue;
+    }
+
+    $lines[0] = preg_replace('/^\x{FEFF}/u', '', $lines[0]);
+    $rows = array_map('str_getcsv', $lines);
+    $header = array_map('strtolower', array_map('trim', $rows[0]));
+    $dataRows = array_slice($rows, 1);
+
+    // Skip already normalized files
+    if ($header === ['date', 'open', 'high', 'low', 'close'] && $cleanName === $basename) {
+        echo "  Already normalized\n";
+        continue;
+    }
+
+    $iDate = array_search('date', $header);
+    $iOpen = array_search('open', $header);
+    $iHigh = array_search('high', $header);
+    $iLow = array_search('low', $header);
+    $iClose = array_search('close', $header);
+    if ($iClose === false) {
+        $iClose = array_search('price', $header);
+    }
+
+    $usdIndex = false;
+    foreach ($header as $idx => $name) {
+        if (in_array($name, ['usd/ghc', 'usd/ghs'])) {
+            $usdIndex = $idx;
+            break;
+        }
+    }
+
+    $newRows = [['Date', 'Open', 'High', 'Low', 'Close']];
+
+    foreach ($dataRows as $r) {
+        $dateRaw = ($iDate !== false && isset($r[$iDate])) ? trim((string)$r[$iDate]) : null;
+        if (!$dateRaw) continue;
+
+        // Normalize date to YYYY-MM-DD
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $dateRaw)) {
+            $parts = explode('/', $dateRaw);
+            $month = $parts[0];
+            $day = $parts[1];
+            $year = $parts[2];
+            $date = "{$year}-{$month}-{$day}";
+        } else {
+            $date = date('Y-m-d', strtotime($dateRaw));
+        }
+
+        if (!$date) continue;
+
+        $close = ($iClose !== false && isset($r[$iClose])) ? $cleanNumber($r[$iClose]) : null;
+        if (($close === null || $close == 0.0) && $usdIndex !== false) {
+            $close = isset($r[$usdIndex]) ? $cleanNumber($r[$usdIndex]) : null;
+        }
+        if ($close === null || $close == 0.0) continue;
+
+        $open = ($iOpen !== false && isset($r[$iOpen]) && $cleanNumber($r[$iOpen]) !== null)
+            ? $cleanNumber($r[$iOpen])
+            : $close;
+
+        $high = ($iHigh !== false && isset($r[$iHigh]) && $cleanNumber($r[$iHigh]) !== null)
+            ? $cleanNumber($r[$iHigh])
+            : $close;
+
+        $low = ($iLow !== false && isset($r[$iLow]) && $cleanNumber($r[$iLow]) !== null)
+            ? $cleanNumber($r[$iLow])
+            : $close;
+
+        $newRows[] = [$date, $open, $high, $low, $close];
+    }
+
+    if (count($newRows) <= 1) {
+        echo "  No valid rows, skipping\n";
+        continue;
+    }
+
+    $tmpFile = $currencyDir . '__tmp_' . $cleanName;
+    $fout = fopen($tmpFile, 'w');
+    foreach ($newRows as $row) {
+        fputcsv($fout, $row);
+    }
+    fclose($fout);
+
+    $archive = $oldDir . $basename;
+    $i = 2;
+    while (file_exists($archive)) {
+        $archive = $oldDir . pathinfo($basename, PATHINFO_FILENAME) . "_bak{$i}." . pathinfo($basename, PATHINFO_EXTENSION);
+        $i++;
+    }
+    rename($file, $archive);
+
+    rename($tmpFile, $outFile);
+
+    echo "  ✔ Converted and saved as {$cleanName} (original moved to /old/)\n";
+}
+
+echo "✅ Bulk CSV conversion complete.\n";
+```
+
+2) currency-bulk-multiplier.php
+
+```php name=shared/palmier/scripts/currency-bulk-multiplier.php
+<?php
+/**
+ * Multiply numeric CSV values by 10.
+ * Useful for scaling historical FX series in a batch.
+ */
+
+$inputFile = __DIR__ . '/../currency_data/USD_MRO.csv';
+$outputFile = __DIR__ . '/../currency_data/USD_MRO_multiplied.csv';
+
+if (!file_exists($inputFile)) {
+    exit("Input CSV file not found at {$inputFile}");
+}
+
+$inputHandle = fopen($inputFile, 'r');
+if (!$inputHandle) {
+    exit("Failed to open input CSV file.");
+}
+
+$outputHandle = fopen($outputFile, 'w');
+if (!$outputHandle) {
+    exit("Failed to open output CSV file.");
+}
+
+$header = fgetcsv($inputHandle);
+fputcsv($outputHandle, $header);
+
+while (($row = fgetcsv($inputHandle)) !== false) {
+    for ($i = 1; $i < count($row); $i++) {
+        if (is_numeric($row[$i])) {
+            $row[$i] = $row[$i] * 10;
+        }
+    }
+    fputcsv($outputHandle, $row);
+}
+
+fclose($inputHandle);
+fclose($outputHandle);
+
+echo "CSV processing complete. Output saved to {$outputFile}\n";
+```
+
+3) Database schema SQL for `koware_iapd.millennium_timezone_*`
+
+This is structured around the main prefix:
+
+- `koware_iapd.millennium_timezone_snapshot`
+- `koware_iapd.millennium_timezone_probe`
+- `koware_iapd.millennium_timezone_log`
+
+Use MySQL/MariaDB syntax:
+
+```sql name=database/schema/koware_iapd_millennium_timezone.sql
+CREATE DATABASE IF NOT EXISTS koware_iapd;
+
+USE koware_iapd;
+
+CREATE TABLE IF NOT EXISTS millennium_timezone_snapshot (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `timestamp` BIGINT UNSIGNED NOT NULL,
+    iso VARCHAR(255) NOT NULL,
+    day VARCHAR(16) NOT NULL,
+    `date` VARCHAR(16) NOT NULL,
+    month VARCHAR(32) NOT NULL,
+    year VARCHAR(16) NOT NULL,
+    time VARCHAR(32) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_millennium_timezone_snapshot_ts (`timestamp`),
+    KEY idx_millennium_timezone_snapshot_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS millennium_timezone_probe (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `timestamp` BIGINT UNSIGNED NOT NULL,
+    phase_idx INT NOT NULL,
+    phase_label VARCHAR(128) NOT NULL,
+    phase_start BIGINT UNSIGNED NOT NULL,
+    phase_end BIGINT UNSIGNED NOT NULL,
+    oscillation_index DOUBLE NULL,
+    amplitude_days DOUBLE NULL,
+    probe_value_days DOUBLE NULL,
+    probe_iso VARCHAR(255) NULL,
+    now_iso VARCHAR(255) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_millennium_timezone_probe_ts (`timestamp`),
+    KEY idx_millennium_timezone_probe_phase_idx (phase_idx),
+    KEY idx_millennium_timezone_probe_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS millennium_timezone_log (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `timestamp` BIGINT UNSIGNED NOT NULL,
+    action_type VARCHAR(128) NOT NULL,
+    source VARCHAR(128) NOT NULL DEFAULT 'system',
+    payload JSON NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_millennium_timezone_log_ts (`timestamp`),
+    KEY idx_millennium_timezone_log_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+If you want a single table only, the best one to keep is:
+
+```sql name=database/schema/koware_iapd_millennium_timezone_single.sql
+CREATE TABLE IF NOT EXISTS koware_iapd.millennium_timezone_snapshot (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `timestamp` BIGINT UNSIGNED NOT NULL,
+    iso VARCHAR(255) NOT NULL,
+    day VARCHAR(16) NOT NULL,
+    `date` VARCHAR(16) NOT NULL,
+    month VARCHAR(32) NOT NULL,
+    year VARCHAR(16) NOT NULL,
+    time VARCHAR(32) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_millennium_timezone_snapshot_ts (`timestamp`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+4) Full recommended directory structure for `shared/millennium-timezone/`
+
+```text name=shared/millennium-timezone/structure.txt
+shared/
+├── millennium-timezone/
+│   ├── README.md
+│   ├── millennium-timezone.php
+│   ├── millennium-probe.php
+│   ├── millennium-timezone.log
+│   ├── millennium-probe.log
+│   └── logs/
+│       ├── .gitkeep
+│       └── historical/
+│           └── .gitkeep
+├── palmier/
+│   ├── ...
+│   ├── gold_calc/
+│   │   ├── gold_calc.php
+│   │   ├── gold_calc_helpers.php
+│   │   └── ...
+│   ├── scripts/
+│   │   ├── bulk_convert_currency_csvs.php
+│   │   ├── currency-bulk-multiplier.php
+│   │   └── ...
+│   └── ...
+└── db_helpers.php
+```
+
+Recommended practical reality:
+- Keep all runtime log history in file logs, not the database.
+- Keep database tables only for:
+  - current snapshot
+  - probe result snapshot
+  - operational metadata needed by other files
+- Preserve `koware_iapd.millennium_timezone_*` as the prefix.
+
+If you want, I can also produce the final merged version of:
+- `shared/millennium-timezone/millennium-timezone.php`
+- `shared/millennium-timezone/millennium-probe.php`
+- `shared/palmier/palmier_logger.php`
+into one complete finalized package, with all file paths and constants aligned exactly to your current structure.
