@@ -1,3 +1,713 @@
+# Millennium Timezone — Refactoring and Implementation
+
+The right approach is to make `millennium-timezone.php` the central source of Millennium/Palmier date calculations, move the Probe engine alongside it, and eliminate unnecessary HTTP requests between PHP files running on Buzzjuice itself.
+
+I have reviewed the supplied original PHP resources and both the previous ChatGPT and GitHub responses. The important architectural decision is to separate shared data, historical calculation records, and live calculations. GitHub's recommendations provide a useful starting point, but the implementation needs several corrections before it should be deployed.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+## 1. Target architecture
+
+## `shared/millennium-timezone/`
+
+Central calculation and data-access layer
+
+`millennium-timezone.php`
+
+Historical Palmier date, current UTC date/time, Jubilee, Reference Year and machine-readable output.
+
+`millennium-probe.php`
+
+Probe phase calculations, Probe values and oscillator integration.
+
+Shared local PHP functions and database connections
+
+`koware_iapd`
+
+Shared timezone snapshots, structured state and cache metadata.
+
+`koware_palmier`
+
+Existing Palmier business data and currency-related state.
+
+File-based logs
+
+Historical calculation records, refresh timestamps and diagnostics.
+
+Existing calculators
+
+Gold, oscillator, currency conversion and Palmier calculations.
+
+### Required file moves
+
+| Existing path                                 | Target path                                          |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `shared/palmier/calendar/sabbatical-date.php` | `shared/millennium-timezone/millennium-timezone.php` |
+| `shared/palmier/probe/millennium-probe.php`   | `shared/millennium-timezone/millennium-probe.php`    |
+
+The other eight PHP files remain in their existing directories unless a separate requirement calls for moving them.
+
+The new endpoints should be:
+
+- [Millennium Timezone](https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php?utm_source=chatgpt.com)
+- [Millennium Probe](https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php?utm_source=chatgpt.com)
+
+These are the intended destination URLs, not a claim that the files have already been moved on the production server.
+
+## 2. Corrections that must be incorporated
+
+The source files expose several issues beyond simple path changes.
+
+| Area            | Finding                                                                                                               | Required correction                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Timezone engine | The existing `palmier_time()` calculation contains the historical-date algorithm.                                     | Preserve its calculation and test its outputs before changing anything.                           |
+| HTTP calls      | Gold and Palmier calculators request other Buzzjuice PHP endpoints over HTTPS.                                        | Replace equivalent same-server calls with local functions where possible.                         |
+| Probe           | The old timezone page requests the old Probe URL, and the Probe requests the oscillator over HTTP.                    | Update the path and introduce callable functions for internal use.                                |
+| Caching         | The oscillator and Probe have file-based caching, but the cache paths and freshness checks are not fully coordinated. | Apply the 12,345-second freshness rule consistently, with locking to avoid duplicate refreshes.   |
+| Database        | `db_helpers.php` already defines the two requested connection functions.                                              | Reuse those functions rather than creating parallel connections.                                  |
+| Logs            | `palmier_logger.php` writes user activity to the Palmier database.                                                    | Separate business activity data from calculation-history logs; retain logs in files as requested. |
+| Output          | The timezone page mixes HTML rendering and date calculations.                                                         | Provide structured JSON as well as a human-readable HTML page.                                    |
+| Security        | Some scripts expose PHP errors and make remote requests without robust timeout/error handling.                        | Disable public error display, validate remote responses and log diagnostics safely.               |
+
+The current `gold_calc_helpers.php` calls the old endpoint using `file_get_contents()`. The Palmier calculator also makes same-domain requests for gold and oscillator data. Those are concrete places to eliminate redundant HTTP calls.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+### Important distinction: current time versus historical date
+
+The new engine must not treat these as the same value.
+
+- Current: the actual UTC timestamp at the time of calculation.
+- Local: the date/time representation defined by the existing Palmier algorithm.
+- Historical / Reference Year: the date and year calculated by that algorithm.
+- Jubilee: the existing Jubilee calculation, using its established input year.
+- Probe: the output of the Probe calculation at the selected instant.
+
+The external time service should not be allowed to redefine the Palmier historical calendar. If the server's UTC clock is the trusted clock source, a remote request is not required for every calculation. If you retain an external time API as a fallback or synchronization source, its response must be validated and cached separately.
+
+This is also why I would not blindly adopt the GitHub example's proposed `worldtimeapi.org` integration as a replacement for the existing algorithm. It is a different responsibility from calculating the Palmier historical date.
+
+## 3. Step one — Update `shared/db_helpers.php`
+
+Keep the existing `get_iapd_db_conn()` and `get_palmier_db_conn()` functions. The current file already defines both and sets the connection character set to `utf8mb4`.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+Add the following block immediately after those connection functions. It centralizes the table prefix and validates suffixes before constructing SQL identifiers.
+
+```
+
+/**
+ * Millennium Timezone database configuration.
+ *
+ * Tables are stored in the koware_iapd database and use
+ * the millennium_timezone_ prefix.
+ */
+if (!defined('MILLENNIUM_TIMEZONE_DB_NAME')) {
+    define('MILLENNIUM_TIMEZONE_DB_NAME', 'koware_iapd');
+}
+
+if (!defined('MILLENNIUM_TIMEZONE_TABLE_PREFIX')) {
+    define(
+        'MILLENNIUM_TIMEZONE_TABLE_PREFIX',
+        'millennium_timezone_'
+    );
+}
+
+/**
+ * Return a fully qualified, quoted Millennium Timezone table name.
+ *
+ * Example:
+ * millennium_timezone_table('snapshot')
+ * returns `koware_iapd`.`millennium_timezone_snapshot`
+ *
+ * Only use fixed, application-controlled suffixes.
+ */
+if (!function_exists('millennium_timezone_table')) {
+    function millennium_timezone_table(string $suffix): string
+    {
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $suffix)) {
+            throw new InvalidArgumentException(
+                'Invalid Millennium Timezone table suffix.'
+            );
+        }
+
+        return '`' . MILLENNIUM_TIMEZONE_DB_NAME . '`.`'
+            . MILLENNIUM_TIMEZONE_TABLE_PREFIX
+            . $suffix . '`';
+    }
+}
+
+```
+
+Why this is necessary: the requested prefix is a database-and-table naming convention, not a standalone table. For example, the complete table name for a current snapshot is `koware_iapd.millennium_timezone_snapshot`.
+
+### Database access permissions
+
+Before deploying, verify that the MySQL user configured for `get_iapd_db_conn()` has the required permissions on the new tables. If it cannot write to `koware_iapd`, the code should log the database failure and continue serving valid cached data when possible.
+
+Do not duplicate database credentials in any of the new files.
+
+## 4. Step two — Create the Millennium Timezone tables
+
+Use `koware_iapd` for shared, structured timezone state and cache data. Do not create a database table for every calculation or log entry.
+
+Run the following SQL in phpMyAdmin against the `koware_iapd` database. It creates a current-state snapshot table and a small cache-metadata table.
+
+```
+
+CREATE TABLE IF NOT EXISTS `millennium_timezone_snapshot` (
+    `id` TINYINT UNSIGNED NOT NULL,
+    `timestamp` BIGINT UNSIGNED NOT NULL,
+    `iso` VARCHAR(40) NOT NULL,
+    `day` VARCHAR(20) NOT NULL,
+    `date` VARCHAR(20) NOT NULL,
+    `month` VARCHAR(20) NOT NULL,
+    `year` SMALLINT UNSIGNED NOT NULL,
+    `time` VARCHAR(20) NOT NULL,
+    `historical_iso` VARCHAR(40) DEFAULT NULL,
+    `historical_year` SMALLINT DEFAULT NULL,
+    `jubilee` VARCHAR(32) DEFAULT NULL,
+    `probe_value` VARCHAR(80) DEFAULT NULL,
+    `updated_at` TIMESTAMP NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `millennium_timezone_cache` (
+    `cache_key` VARCHAR(100) NOT NULL,
+    `fetched_at` BIGINT UNSIGNED NOT NULL,
+    `payload_json` LONGTEXT NOT NULL,
+    `updated_at` TIMESTAMP NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`cache_key`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+```
+
+These are proposed new tables, not existing tables confirmed on your server. The `snapshot` table holds the latest structured result; the `cache` table holds cached payloads for data that is expensive to retrieve.
+
+Historical calculation records remain in append-only log files. Use the database only for state that must be queried by multiple PHP files.
+
+## 5. Step three — Move and refactor `millennium-timezone.php`
+
+Source: [original ](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/calendar/sabbatical-date.php?utm_source=chatgpt.com)[`sabbatical-date.php`](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/calendar/sabbatical-date.php?utm_source=chatgpt.com).
+
+Create `shared/millennium-timezone/` and move the file there, renaming it `millennium-timezone.php`.
+
+### 5.1 Fix the database helper path
+
+The original file does not load `db_helpers.php`. Add this near the top of the new file:
+
+```
+
+<?php
+
+declare(strict_types=1);
+
+date_default_timezone_set('UTC');
+
+require_once dirname(__DIR__) . '/db_helpers.php';
+
+if (!defined('MTZ_CACHE_TTL')) {
+    define('MTZ_CACHE_TTL', 12345);
+}
+
+if (!defined('MTZ_LOG_FILE')) {
+    define(
+        'MTZ_LOG_FILE',
+        __DIR__ . '/millennium-timezone.log'
+    );
+}
+
+```
+
+The path is important: `dirname(__DIR__)` resolves to `shared/`, so the include resolves to `shared/db_helpers.php`.
+
+Retain the existing `$historicalHourMap`, weekday/month arrays, `ordinal()`, `jubilee()` and `palmier_time()` functions. Do not replace them with a new date formula just to accommodate the new filename.
+
+### 5.2 Make the historical calculation reusable
+
+The existing `palmier_time()` returns the current time, the calculated historical date and an error value. It should become the internal calculation function used by both the HTML page and JSON responses.
+
+Add a result-building function that derives the display fields from those values. For example, the following function illustrates the required output structure and can be used once the existing engine has been retained in the file.
+
+```
+
+if (!function_exists('mtz_build_calendar_result')) {
+    function mtz_build_calendar_result(): array
+    {
+        global $daysShort, $daysFull, $months;
+
+        [$now, $historical, $error] = palmier_time();
+
+        if (!$now instanceof DateTime ||
+            !$historical instanceof DateTime) {
+            throw new RuntimeException(
+                'Palmier date calculation did not return valid dates.'
+            );
+        }
+
+        $currentUtc = clone $now;
+        $currentUtc->setTimezone(new DateTimeZone('UTC'));
+
+        $historicalUtc = clone $historical;
+        $historicalUtc->setTimezone(new DateTimeZone('UTC'));
+
+        $weekdayIndex = (int) $currentUtc->format('w');
+        $historicalWeekdayIndex = (int) $historicalUtc->format('w');
+
+        return [
+            'status' => $error ? 'warning' : 'ok',
+            'timezone' => 'UTC',
+            'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'day' =>
+                $daysShort[$historicalWeekdayIndex] .
+                $daysFull[$weekdayIndex],
+            'date' => ordinal(
+                (int) $historicalUtc->format('d')
+            ),
+            'month' =>
+                $months[(int) $historicalUtc->format('n') - 1],
+            'jubilee' => jubilee(
+                (int) $currentUtc->format('Y')
+            ),
+            'reference_year' =>
+                (int) $historicalUtc->format('Y'),
+            'local' => $historicalUtc->format(
+                'Y-m-d\TH:i:s\Z'
+            ),
+            'current' => $currentUtc->format(
+                'Y-m-d\TH:i:s\Z'
+            ),
+            'historical_iso' => $historicalUtc->format(
+                'Y-m-d\TH:i:s\Z'
+            ),
+            'error' => $error ?: null
+        ];
+    }
+}
+
+```
+
+This function establishes the machine-readable contract. It is not a complete replacement for the existing engine: the original `palmier_time()` must remain available, and the Probe value still needs to be added by the Probe integration described below.
+
+The `local` field above deliberately retains the UTC representation of the historical value produced by the existing algorithm. If “Local” is intended to mean a different timezone or a specific historical display value, that semantic must be established before changing it.
+
+### 5.3 Add JSON endpoint handling
+
+The new page should support these query parameters:
+
+| Query                  | Purpose                                        |
+| ---------------------- | ---------------------------------------------- |
+| `?endpoint=historical` | Return the historical date and reference year. |
+| `?endpoint=current`    | Return the current UTC date/time.              |
+| `?endpoint=probe`      | Return the current Probe result.               |
+| `?endpoint=timezone`   | Return the complete structured payload.        |
+| No query parameter     | Render the human-readable HTML page.           |
+
+The JSON handler must execute before HTML output and must not run when the file is included by another PHP script.
+
+Use a single dispatcher, with `json_encode()` and the `Content-Type: application/json` header. Return an appropriate HTTP status code when a requested calculation fails. Do not return PHP warnings or HTML fragments inside a JSON response.
+
+### 5.4 Implement the 12,345-second cache correctly
+
+Use the log file to determine the age of the last successful refresh. When it is fresh, serve the cached result. When it is stale, refresh only once, then update both the file log and the database snapshot.
+
+The required refresh condition is:
+
+```
+$shouldRefresh = (
+    !$lastSuccessfulRefresh ||
+    (time() - $lastSuccessfulRefresh) >= 12345
+);
+```
+
+That is the freshness rule, not a complete concurrency-safe cache implementation. In production, use `flock()` around the refresh operation so simultaneous AI-agent requests do not all fetch the same endpoint.
+
+The fallback order should be:
+
+1. Return the fresh cached result.
+2. If stale, acquire the lock and check the cache again.
+3. Refresh the necessary external data only if still stale.
+4. Persist the successful payload to the log and database.
+5. If the refresh fails, return the last valid cached payload and report its age.
+6. If no valid cached payload exists, return an explicit error rather than fabricating a successful remote result.
+
+Important: a 12,345-second refresh interval is approximately 3 hours, 25 minutes and 45 seconds. It does not mean that the current UTC clock should be stale for that duration. A locally generated current timestamp can be calculated without a network request; the cache applies to the expensive shared data being refreshed.
+
+## 6. Step four — Move and refactor `millennium-probe.php`
+
+Source: [original Probe engine](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/probe/millennium-probe.php?utm_source=chatgpt.com).
+
+Move it to `shared/millennium-timezone/millennium-probe.php`.
+
+The existing Probe engine has a 12,345-second TTL, a file log and five calendar phases. Its phase boundaries and Probe formula should be preserved unless a separate change to the Probe model is approved.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+### 6.1 Update the oscillator reference
+
+Replace the old URL:
+
+```
+define(
+    'OSC_URL',
+    'https://buzzjuice.net/shared/palmier/oscillator/palmier-oscillator.php?oscillation=live'
+);
+```
+
+with a local callable integration, rather than another HTTP request.
+
+In `palmier-oscillator.php`, extract the current calculation and cached-result logic into a function such as:
+
+```
+function bzj_get_oscillator_data(): array
+```
+
+That function should return the same fields currently exposed by `?oscillation=live`, including `timestamp`, `oscillation`, and `oscillation_index`. The existing web endpoint should call the function and return JSON as before.
+
+Then the Probe engine can load the oscillator code using `require_once` and call `bzj_get_oscillator_data()` directly. Guard the function declaration with `function_exists()` if multiple scripts can include it.
+
+Do not include the oscillator's HTML dashboard as a side effect of an internal function call. Separate calculation and rendering first.
+
+### 6.2 Prevent repeated Probe refreshes
+
+The Probe should use its log before recomputing. The cached entry must contain the timestamp, phase information, oscillator index and calculated Probe value. Reuse it only when the entry is valid and within the TTL.
+
+The existing implementation also supports `?probe=now`; retain that external behavior, but make the internal calculation reusable without executing the dashboard.
+
+### 6.3 Return a stable Probe payload
+
+The timezone endpoint should expose the Probe value as a field of its complete JSON payload, not require the consumer to call a second URL to discover it.
+
+A recommended response structure is:
+
+```
+{
+  "status": "ok",
+  "timezone": "UTC",
+  "generated_at": "2026-10-28T21:00:00Z",
+  "day": "WedWednesday",
+  "date": "28th",
+  "month": "October",
+  "jubilee": "calculated-value",
+  "reference_year": 2026,
+  "local": "calculated-historical-timestamp",
+  "current": "2026-10-28T21:00:00Z",
+  "probe": {
+    "value": "calculated-probe-value",
+    "timestamp": 1793221200
+  }
+}
+```
+
+Illustrative schema only. The Jubilee, historical timestamp and Probe value must be computed by the existing algorithms; the example values are not a validated calculation output.
+
+For AI agents, also include a cache timestamp, cache age and a `stale` indicator. This allows the agent to read the page directly and decide whether the data is sufficiently recent without repeatedly polling the endpoint.
+
+## 7. Step five — Update `gold_calc_helpers.php` and `gold_calc.php`
+
+Sources: [gold calculator](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/gold_calc/gold_calc.php?utm_source=chatgpt.com) and [gold helpers](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/gold_calc/gold_calc_helpers.php?utm_source=chatgpt.com).
+
+These files should be updated together because the main calculator delegates historical-date retrieval to its helper.
+
+### 7.1 Replace the old endpoint
+
+In `gold_calc.php`, replace:
+
+```
+$sabbatical = 'https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php';
+```
+
+with the new path only if it remains necessary for external access:
+
+```
+$millenniumTimezoneEndpoint =
+    'https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php';
+```
+
+The preferred implementation is to use the central PHP function directly rather than make an HTTP request.
+
+### 7.2 Replace `getPalmierHistoricalDate()`
+
+The current helper calls `file_get_contents()` on the endpoint and expects an `iso` field.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub
+
+
+
+Replace that network-dependent helper with a local function:
+
+```
+function getPalmierHistoricalDate(): DateTime
+{
+    if (!function_exists('mtz_build_calendar_result')) {
+        require_once dirname(__DIR__, 2)
+            . '/millennium-timezone/millennium-timezone.php';
+    }
+
+    $result = mtz_build_calendar_result();
+
+    if (empty($result['historical_iso'])) {
+        throw new RuntimeException(
+            'Millennium Timezone did not return a historical date.'
+        );
+    }
+
+    return new DateTime(
+        $result['historical_iso'],
+        new DateTimeZone('UTC')
+    );
+}
+```
+
+Integration requirement: the new timezone file must expose its calculation functions without automatically rendering HTML or exiting when included. Its endpoint dispatcher must run only when the file is requested directly. The helper should also be adjusted to match the actual return contract of the finalized engine.
+
+Then in `gold_calc.php`, replace:
+
+```
+$histDT = getPalmierHistoricalDate($sabbatical);
+```
+
+with:
+
+```
+$histDT = getPalmierHistoricalDate();
+```
+
+The CSV lookup, gold-rate selection and currency interpolation should remain unchanged. Do not change the historical-date formula merely because the endpoint is moving.
+
+### 7.3 Improve cache-file handling
+
+The existing gold cache uses six-hour slots and monthly log files. Preserve that business rule, but make the implementation safer:
+
+- Create the log directory when it does not exist.
+- Use `LOCK_EX` when appending log records.
+- Validate decoded JSON before using it.
+- Handle unreadable or malformed log files without fatal errors.
+- Keep the existing currency normalization and calculation fields.
+- Avoid calling the timezone endpoint when the local calculation function can supply the date.
+
+The gold calculator's six-hour cache is a separate policy from the timezone engine's 12,345-second refresh. Do not merge them into one TTL.
+
+## 8. Step six — Update `palmier-oscillator.php`
+
+Source: [original oscillator](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/oscillator/palmier-oscillator.php?utm_source=chatgpt.com).
+
+The oscillator already has:
+
+- Its own log file.
+- A 12,345-second refresh interval.
+- A `?oscillation=live` JSON endpoint.
+- Calculation functions for Palmier, solar, lunar and Passover variances.
+
+Its current output includes `oscillation_index`, which is consumed by the Probe.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+The refactor should therefore be modest.
+
+1. Preserve the existing formulas and output fields.
+2. Extract the current cached-data retrieval into a callable function.
+3. Keep the HTTP endpoint as a thin JSON wrapper.
+4. Ensure internal calls do not generate the HTML dashboard.
+5. Use file locking around cache refreshes.
+6. Ensure the log directory is writable by PHP.
+
+Do not rewrite the oscillator's mathematical model as part of this path migration.
+
+## 9. Step seven — Update `palmier_calc.php`
+
+Source: [original Palmier calculator](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/palmier_calc.php?utm_source=chatgpt.com).
+
+This file has several network dependencies, not all of which are same-domain calls. It currently references:
+
+- The WooCommerce currency endpoint.
+- A local base-currency configuration endpoint.
+- External exchange-rate and market-data services.
+- The local gold calculator.
+- The local oscillator.
+
+The current configuration and `fetch_json()` implementation are at the top of the file.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub+1
+
+
+
+### Required changes
+
+A. Gold data
+
+Replace the same-domain gold endpoint with a local function that reads the gold calculator's cached data or invokes its calculation logic when necessary.
+
+B. Oscillator data
+
+Replace the same-domain oscillator endpoint with `bzj_get_oscillator_data()` from the refactored oscillator.
+
+C. Base currency
+
+Investigate the `BASE_CONFIG_API` dependency. If it exists solely to return a setting already available through WordPress or the existing configuration, retrieve that setting locally. Do not guess the base currency or silently default to USD.
+
+D. WooCommerce currency registry
+
+Determine whether the currency endpoint does more than return a local configuration value. If it applies plugin-specific rules, reuse those rules through an appropriate local WordPress integration. Do not replace the registry with a different list of currencies.
+
+E. External market data
+
+Keep genuine external API requests where the data cannot be obtained locally. Cache the results independently, use timeouts, check HTTP status and validate returned data. Never treat an external failure as a valid zero rate.
+
+F. Logs
+
+Preserve the calculator's existing 12,345-second cache policy and currency calculation logic. The shared timezone cache must not replace its own currency-rate cache.
+
+The key architectural improvement is to eliminate unnecessary same-domain HTTP requests without removing legitimate external data sources.
+
+## 10. Step eight — Update the two currency scripts
+
+### `bulk_convert_currency_csvs.php`
+
+Source: [original CSV normalizer](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/scripts/bulk_convert_currency_csvs.php?utm_source=chatgpt.com).
+
+This script operates on CSV files in the existing `currency_data/` directory. It does not directly call the old Sabbatical endpoint.
+
+Required action: no path change is needed solely because the timezone files move. Retain the existing CSV directory, filename normalization and historical-data behavior. Improve error handling around unreadable files and CSV rows if desired, but do not introduce database writes for each CSV row.
+
+### `currency-bulk-multiplier.php`
+
+Source: [original multiplier](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/scripts/currency-bulk-multiplier.php?utm_source=chatgpt.com).
+
+This script reads `USD_MRO.csv` and writes `USD_MRO_multiplied.csv`. It does not reference the timezone engine directly.
+
+Required action: no timezone path change is needed. Keep the original input/output paths and multiplication behavior unless a separate business requirement changes them.
+
+These two scripts should not be rewritten unnecessarily as part of this migration.
+
+## 11. Step nine — Update `palmier-helpers.php`
+
+Source: [original Palmier helpers](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/palmier-helpers.php?utm_source=chatgpt.com).
+
+This file provides WooCommerce/myCRED helper functions for Palmier points. It does not reference either timezone endpoint.
+
+Required action: no direct modification is required for the file move.
+
+Keep the existing functions for product ID, balance retrieval and point checks. Do not move them into the Millennium Timezone directory, and do not mix points accounting with timezone cache state.
+
+If future work requires these helpers to use the shared Palmier database, handle that as a separate change because it affects payment and balance behavior.
+
+## 12. Step ten — Refactor `palmier_logger.php`
+
+Source: [original Palmier logger](https://raw.githubusercontent.com/cupidblack/buzzjuice.net/refs/heads/main/shared/palmier/palmier_logger.php?utm_source=chatgpt.com).
+
+This is the file that requires a decision about your logging policy. The current `bzj_log_activity()` inserts records into `Wo_UserActivityLog` in the Palmier database.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://raw.githubusercontent.com\&sz=32)
+
+GitHub
+
+
+
+There is an important distinction:
+
+- Calculation history: should be recorded in append-only files, as requested.
+- User activity history: may be business data needed by other systems, such as social analytics or account activity.
+
+If your instruction is to move all records currently handled by `palmier_logger.php` to files, replace its database insert with a JSON-lines logger. If the activity table remains a source of truth for social analytics, do not remove it without migrating those consumers.
+
+For file-based logging, use a stable directory outside public access, `LOCK_EX`, JSON encoding, UTC timestamps, and rotation or size limits. Never store credentials or session tokens in the logs.
+
+## 13. Summary of the changes by file
+
+| File                             | Action                                                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `shared/db_helpers.php`          | Add table-prefix configuration and safe table-name helper; reuse existing connections.                            |
+| `sabbatical-date.php`            | Move, rename and refactor into the central timezone engine.                                                       |
+| `millennium-probe.php`           | Move, expose reusable calculation functions and remove unnecessary HTTP dependency on the oscillator.             |
+| `gold_calc_helpers.php`          | Replace old endpoint retrieval with the local timezone function.                                                  |
+| `gold_calc.php`                  | Update historical-date integration; retain gold calculations and six-hour caching.                                |
+| `palmier-oscillator.php`         | Extract reusable calculation/cache function; preserve the public JSON endpoint.                                   |
+| `palmier_calc.php`               | Replace same-domain gold/oscillator/config requests where equivalent local access is available.                   |
+| `palmier_logger.php`             | Align logging behavior with the file-history policy after determining whether activity records are business data. |
+| `bulk_convert_currency_csvs.php` | No timezone path change; retain CSV processing.                                                                   |
+| `currency-bulk-multiplier.php`   | No timezone path change; retain multiplication behavior.                                                          |
+| `palmier-helpers.php`            | No direct change required.                                                                                        |
+
+## 14. Step eleven — Deployment and validation
+
+Do not deploy all changes at once. Use a staged migration so the existing calculators remain available while the new engine is tested.
+
+1. Back up the current files and database. Save copies of the original PHP files, existing logs and relevant database schemas.
+2. Create the new directory and tables. Verify that PHP can write to the log directory and that `get_iapd_db_conn()` can access the new tables.
+3. Deploy the timezone engine. Test HTML and JSON output, including the historical date and Jubilee calculation.
+4. Deploy the Probe integration. Confirm that the Probe still produces valid output and that internal oscillator access does not render HTML.
+5. Update the gold calculator. Compare the new output with the existing six-hour cache and confirm that historical dates and gold prices have not changed unexpectedly.
+6. Update the Palmier calculator. Remove same-domain HTTP calls one at a time and verify that currency results remain consistent.
+7. Validate logging and permissions. Confirm that successful refreshes are logged, failed requests do not overwrite valid cache entries, and historical logs remain available.
+8. Retire the old paths. Only after all consumers have been updated should the old endpoints be removed or redirected.
+
+### Acceptance tests
+
+| Test                                         | Expected result                                                                   |
+| -------------------------------------------- | --------------------------------------------------------------------------------- |
+| Open the new timezone URL in a browser       | Human-readable date and time values appear.                                       |
+| Request `?endpoint=timezone`                 | Valid JSON containing the complete timezone payload.                              |
+| Request `?endpoint=historical`               | Valid historical date response.                                                   |
+| Request `?endpoint=current`                  | Current UTC timestamp, not a stale cached clock value.                            |
+| Request `?endpoint=probe`                    | Valid Probe result without an unnecessary second HTTP request.                    |
+| Repeat requests within 12,345 seconds        | No unnecessary external refresh.                                                  |
+| Request after cache expiry                   | One refresh per cache key, with locking.                                          |
+| Temporarily make an external API unavailable | A valid cached result is served where available.                                  |
+| Run the gold calculator                      | Historical date, gold anchor and currency calculations remain consistent.         |
+| Run the Palmier calculator                   | No unnecessary same-domain HTTP requests remain in the updated calculation paths. |
+
+## 15. Final implementation status
+
+The architectural plan and the principal code changes are outlined above. However, this is not yet the complete, fully refactored 11-file code package you requested. The code blocks are targeted implementation examples and patches; they should not be treated as complete replacement files.
+
+There are two reasons not to claim otherwise:
+
+1. The new central engine must preserve the exact existing date and Probe algorithms while exposing reusable functions. The complete integration and function contracts still need to be reconciled across the source files.
+2. The database schema, permissions, cache behavior and output compatibility have not been tested against your actual production environment.
+
+The next deliverable should be a complete, internally consistent set of replacement PHP files, together with the SQL migration and a test report. Every file should contain its full implementation, with no placeholders, and should pass PHP syntax checks before deployment. Production files should remain untouched until those checks and the migration review are complete.
+
+
+
+
+
+
+
+
 # Millennium Timezone — refactoring and implementation
 
 The correct approach is to make `millennium-timezone.php` the central source for date and timezone calculations, expose reusable PHP functions for the other Palmier scripts, use the existing IAPD and Palmier database connections for shared state, and retain calculation history in log files rather than database tables.
