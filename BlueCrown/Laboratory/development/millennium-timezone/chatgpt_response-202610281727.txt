@@ -1,0 +1,1966 @@
+# Palmier Currency: Millennium Timezone Migration and Database Integration Plan
+
+## 1. Executive summary
+
+After reviewing the ten PHP files you provided, I recommend treating this as a **small architectural migration**, rather than simply renaming two files and changing their URLs.
+
+There are three interconnected objectives:
+
+1. **Relocate the Millennium Timezone and Millennium Probe engines** to their new directories without breaking existing functionality.
+2. **Replace internal HTTP/API calls between PHP scripts** with direct database reads and writes using `koware_iapd`.
+3. **Centralise the storage of Millennium Timezone and Palmier Currency data** so that the different PHP scripts can retrieve the same calculated values without repeatedly recalculating them or calling one another through HTTP.
+
+The key is to accomplish this without unnecessarily changing the existing currency calculations, Palmier valuation formula, oscillator mathematics, or user-facing interfaces.
+
+### Proposed final structure
+
+```text
+buzzjuice.net/
+│
+├── shared/
+│   │
+│   ├── db_helpers.php
+│   │
+│   ├── millennium-timezone/
+│   │   ├── millennium-timezone.php
+│   │   ├── millennium-probe.php
+│   │   ├── millennium-timezone-db.php
+│   │   └── millennium-timezone-core.php
+│   │
+│   └── palmier/
+│       │
+│       ├── palmier_calc.php
+│       ├── palmier-helpers.php
+│       ├── palmier_logger.php
+│       │
+│       ├── gold_calc/
+│       │   ├── gold_calc.php
+│       │   ├── gold_calc_helpers.php
+│       │   └── gold_prices/
+│       │
+│       ├── oscillator/
+│       │   └── palmier-oscillator.php
+│       │
+│       ├── scripts/
+│       │   ├── bulk_convert_currency_csvs.php
+│       │   └── currency-bulk-multiplier.php
+│       │
+│       └── currency_data/
+│
+└── wp-content/
+    └── ...
+```
+
+The two additional files, `millennium-timezone-db.php` and `millennium-timezone-core.php`, are proposed shared components rather than files you currently have.
+
+Their purpose is to separate database access and calculation logic from the presentation layer.
+
+**Important:** I recommend retaining the existing currency CSV files and historical data during the first phase. Moving the engines does not require moving all their supporting data files.
+
+---
+
+# 2. Findings from the existing files
+
+I reviewed the source code at the GitHub URLs you supplied. The findings below distinguish changes that are necessary for the relocation from changes that are necessary for the database migration.
+
+## 2.1 File-by-file impact assessment
+
+| File                             | Current situation                                                                                   | Required changes                                                                                                      | Priority |
+| -------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------- |
+| `sabbatical-date.php`            | Contains the Millennium Timezone calculation, JSON endpoints, HTML interface and JavaScript updates | Rename, relocate, update database integration and review internal probe retrieval                                     | Critical |
+| `millennium-probe.php`           | Retrieves oscillator data through an HTTP request and stores its logs in a local file               | Relocate, replace oscillator HTTP retrieval with database access, migrate logging                                     | Critical |
+| `gold_calc.php`                  | Uses the historical-date engine and maintains its gold-price calculation and output                 | Update historical-data retrieval and persist calculated results                                                       | High     |
+| `gold_calc_helpers.php`          | Retrieves historical time through an HTTP request; reads and writes local JSON log files            | Replace historical-date HTTP retrieval with database access and replace file-based caching                            | High     |
+| `palmier-oscillator.php`         | Calculates oscillation values and caches them in a local log file                                   | Store and retrieve oscillator results through `koware_iapd`                                                           | High     |
+| `palmier_calc.php`               | Uses several internal endpoints and external currency-data APIs; maintains local log files          | Replace internal endpoint dependencies and local calculation caching with database operations                         | Critical |
+| `palmier-helpers.php`            | Provides WordPress/myCRED Palmier balance helpers                                                   | No relocation-related change required                                                                                 | Low      |
+| `palmier_logger.php`             | Writes activity data to `Wo_UserActivityLog` using a separate database connection                   | Review database configuration, but do not change its destination table without confirming the intended data ownership | Low      |
+| `bulk_convert_currency_csvs.php` | Normalises currency CSV files using relative filesystem paths                                       | No change required for the two file moves                                                                             | Low      |
+| `currency-bulk-multiplier.php`   | Reads and writes currency CSV files using relative filesystem paths                                 | No change required for the two file moves                                                                             | Low      |
+
+The historical-date dependency is in `gold_calc.php` and `gold_calc_helpers.php`. The oscillator dependency is in `millennium-probe.php`. The main Palmier calculation has additional internal dependencies that must also be addressed. 
+
+Let's work through the changes in the order I recommend implementing them.
+
+---
+
+# Phase 1 — Prepare the database architecture
+
+## Step 1. Establish the database naming convention
+
+You specified these two database table prefixes:
+
+* `koware_iapd.millennium timezone_`
+* `koware_iapd.palmier_`
+
+There is one naming detail worth resolving before creating tables.
+
+I recommend interpreting the first prefix as:
+
+```text
+millennium_timezone_
+```
+
+The space in `millennium timezone_` is undesirable in MySQL table names. Although MySQL can support identifiers containing spaces when appropriately quoted, using underscores will make your PHP code, SQL queries and future integrations considerably easier to maintain.
+
+The resulting table names would be:
+
+```text
+koware_iapd.millennium_timezone_cache
+koware_iapd.millennium_timezone_logs
+
+koware_iapd.palmier_cache
+koware_iapd.palmier_logs
+```
+
+These are proposed names, not existing tables that I have verified in your database.
+
+## Step 2. Decide what belongs in each table
+
+I recommend using two complementary storage mechanisms:
+
+1. **Cache tables:** Store the latest calculated values that other PHP files need to retrieve.
+2. **Log tables:** Preserve historical calculation records for auditing, troubleshooting and later analysis.
+
+This avoids treating a historical record as though it were necessarily the latest value.
+
+### A. Millennium Timezone cache
+
+`millennium_timezone_cache` should store the latest shared Millennium Timezone data.
+
+For example:
+
+| cache_key           | Purpose                                   |
+| ------------------- | ----------------------------------------- |
+| `current_time`      | Current UTC timestamp                     |
+| `historical_time`   | Calculated historical timestamp           |
+| `timezone_snapshot` | Complete current and historical time data |
+| `probe_snapshot`    | Latest Millennium Probe result            |
+
+Each record should contain a JSON payload and a timestamp indicating when the data was generated.
+
+### B. Millennium Timezone logs
+
+`millennium_timezone_logs` should preserve historical snapshots where those records are useful.
+
+For example:
+
+* Historical-time calculations.
+* Probe calculations.
+* Calculation timestamps.
+* Phase and year information.
+* Calculation inputs needed to reproduce a result.
+
+Do not automatically record every second indefinitely. The existing browser interface updates frequently, but a database log should use a deliberate retention policy.
+
+### C. Palmier cache
+
+`palmier_cache` should hold the latest reusable currency calculations.
+
+Suggested keys include:
+
+| cache_key          | Purpose                                    |
+| ------------------ | ------------------------------------------ |
+| `gold_prices`      | Latest historical gold-price calculation   |
+| `oscillator`       | Latest oscillator values                   |
+| `palmier_currency` | Latest Palmier valuation and currency data |
+
+The `palmier_currency` payload should preserve the existing structure returned by `palmier_calc.php`, including the base currency, live currencies, gold-price averages and Palmier values.
+
+### D. Palmier logs
+
+`palmier_logs` should preserve historical calculation records.
+
+Suggested record types include:
+
+* `gold_prices`
+* `oscillator`
+* `palmier_currency`
+
+Each record should identify its calculation period or slot. This is important because your current gold calculator and Palmier calculator use different caching intervals.
+
+**Architectural principle:** The cache holds the latest reusable result; the log holds the historical record. They should not be treated as interchangeable.
+
+---
+
+## Step 3. Create the initial database tables
+
+Before changing any PHP file, open phpMyAdmin, select `koware_iapd`, and verify that your database user has the required privileges.
+
+Then execute the following SQL.
+
+```sql
+CREATE TABLE IF NOT EXISTS millennium_timezone_cache (
+    cache_key VARCHAR(100) NOT NULL,
+    payload_json LONGTEXT NOT NULL,
+    generated_at DATETIME NOT NULL,
+    expires_at DATETIME NULL,
+    updated_at TIMESTAMP NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (cache_key),
+    KEY idx_generated_at (generated_at),
+    KEY idx_expires_at (expires_at)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS millennium_timezone_logs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    record_type VARCHAR(50) NOT NULL,
+    period_key VARCHAR(100) NOT NULL,
+    recorded_at DATETIME NOT NULL,
+    payload_json LONGTEXT NOT NULL,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_record_period (
+        record_type,
+        period_key
+    ),
+    KEY idx_recorded_at (recorded_at)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS palmier_cache (
+    cache_key VARCHAR(100) NOT NULL,
+    payload_json LONGTEXT NOT NULL,
+    generated_at DATETIME NOT NULL,
+    expires_at DATETIME NULL,
+    updated_at TIMESTAMP NOT NULL
+        DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (cache_key),
+    KEY idx_generated_at (generated_at),
+    KEY idx_expires_at (expires_at)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS palmier_logs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    record_type VARCHAR(50) NOT NULL,
+    period_key VARCHAR(100) NOT NULL,
+    recorded_at DATETIME NOT NULL,
+    payload_json LONGTEXT NOT NULL,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_record_period (
+        record_type,
+        period_key
+    ),
+    KEY idx_recorded_at (recorded_at)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+```
+
+### Why use JSON payloads?
+
+Your existing calculators already produce structured PHP arrays that can be encoded as JSON.
+
+For example, `palmier_calc.php` produces a data structure containing currency records, gold-price calculations, historical averages and Palmier values. Storing that structure as JSON allows other scripts to retrieve the complete result without reconstructing it from several separate tables. 
+
+This is appropriate for a first implementation.
+
+If you later need extensive historical currency analysis, ranking, filtering or reporting directly in SQL, individual currency observations can be normalised into additional tables. I would not introduce that complexity yet.
+
+### Checkpoint
+
+Before proceeding, confirm that all four tables exist in `koware_iapd`.
+
+Do not modify the production PHP files yet.
+
+---
+
+# Phase 2 — Create the shared database access layer
+
+## Step 4. Create `millennium-timezone-db.php`
+
+Create the following file:
+
+```text
+/home/enkaby/public_html/buzzjuice.net/shared/millennium-timezone/millennium-timezone-db.php
+```
+
+This file will provide a common database interface for the Millennium Timezone and Palmier engines.
+
+It should not contain any currency formulas or HTML output.
+
+### 4.1 Establish the database connection
+
+Your existing `palmier_logger.php` loads:
+
+```php
+require_once __DIR__ . '/../db_helpers.php';
+```
+
+That establishes the existing shared database-helper convention. However, its connection uses the `PALMIER_DB_*` constants, and the source does not establish whether those constants point to `koware_iapd`. Verify their definitions before reusing them. 
+
+In the new database helper, use the same credential source but explicitly select `koware_iapd`.
+
+For example:
+
+```php
+<?php
+
+require_once __DIR__ . '/../db_helpers.php';
+
+function bzj_millennium_db(): ?mysqli
+{
+    static $db = null;
+
+    if ($db instanceof mysqli) {
+        return $db;
+    }
+
+    mysqli_report(
+        MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT
+    );
+
+    try {
+        $db = new mysqli(
+            PALMIER_DB_HOST,
+            PALMIER_DB_USER,
+            PALMIER_DB_PASS,
+            'koware_iapd'
+        );
+
+        $db->set_charset('utf8mb4');
+
+        return $db;
+
+    } catch (mysqli_sql_exception $e) {
+        error_log(
+            '[BZJ MILLENNIUM DB] Connection failed: '
+            . $e->getMessage()
+        );
+
+        return null;
+    }
+}
+```
+
+**Important:** This example assumes the three credential constants are defined in `shared/db_helpers.php`. Verify that before using it. If your project uses different constant names or an existing central connection function, adapt this portion to match the actual implementation.
+
+The important design decision is that the connection explicitly selects `koware_iapd`, rather than silently relying on whichever database `PALMIER_DB_NAME` currently selects.
+
+Also ensure that the database user has the required privileges on `koware_iapd`.
+
+### 4.2 Add a generic cache-write function
+
+Below the connection function, add:
+
+```php
+function bzj_cache_set(
+    string $table,
+    string $key,
+    array $payload,
+    int $ttl = 0
+): bool {
+
+    $allowedTables = [
+        'millennium_timezone_cache',
+        'palmier_cache'
+    ];
+
+    if (!in_array($table, $allowedTables, true)) {
+        throw new InvalidArgumentException(
+            'Invalid cache table'
+        );
+    }
+
+    $db = bzj_millennium_db();
+
+    if (!$db) {
+        return false;
+    }
+
+    $json = json_encode(
+        $payload,
+        JSON_UNESCAPED_UNICODE
+        | JSON_UNESCAPED_SLASHES
+        | JSON_THROW_ON_ERROR
+    );
+
+    $now = gmdate('Y-m-d H:i:s');
+
+    $expires = $ttl > 0
+        ? gmdate('Y-m-d H:i:s', time() + $ttl)
+        : null;
+
+    $sql = "
+        INSERT INTO {$table}
+            (
+                cache_key,
+                payload_json,
+                generated_at,
+                expires_at
+            )
+        VALUES (?, ?, ?, ?)
+
+        ON DUPLICATE KEY UPDATE
+            payload_json = VALUES(payload_json),
+            generated_at = VALUES(generated_at),
+            expires_at = VALUES(expires_at)
+    ";
+
+    $stmt = $db->prepare($sql);
+
+    $stmt->bind_param(
+        'ssss',
+        $key,
+        $json,
+        $now,
+        $expires
+    );
+
+    $stmt->execute();
+    $stmt->close();
+
+    return true;
+}
+```
+
+The allowlist is important because SQL table identifiers cannot be protected by parameter binding in the same way as ordinary data values.
+
+Only explicitly approved table names should be accepted.
+
+### 4.3 Add a generic cache-read function
+
+Next, add:
+
+```php
+function bzj_cache_get(
+    string $table,
+    string $key
+): ?array {
+
+    $allowedTables = [
+        'millennium_timezone_cache',
+        'palmier_cache'
+    ];
+
+    if (!in_array($table, $allowedTables, true)) {
+        throw new InvalidArgumentException(
+            'Invalid cache table'
+        );
+    }
+
+    $db = bzj_millennium_db();
+
+    if (!$db) {
+        return null;
+    }
+
+    $sql = "
+        SELECT payload_json
+        FROM {$table}
+        WHERE cache_key = ?
+          AND (
+              expires_at IS NULL
+              OR expires_at >= UTC_TIMESTAMP()
+          )
+        LIMIT 1
+    ";
+
+    $stmt = $db->prepare($sql);
+    $stmt->bind_param('s', $key);
+    $stmt->execute();
+
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+
+    $stmt->close();
+
+    if (!$row) {
+        return null;
+    }
+
+    $data = json_decode(
+        $row['payload_json'],
+        true
+    );
+
+    return is_array($data) ? $data : null;
+}
+```
+
+These two functions establish the basic pattern:
+
+```php
+// Save shared data.
+bzj_cache_set(
+    'millennium_timezone_cache',
+    'historical_time',
+    $payload,
+    60
+);
+
+// Retrieve shared data.
+$payload = bzj_cache_get(
+    'millennium_timezone_cache',
+    'historical_time'
+);
+```
+
+The example uses a 60-second expiry for illustration. The appropriate expiry depends on the type of data being stored.
+
+For example, the historical date changes continuously under your calculation, whereas a historical gold-price result may be deliberately calculated on a six-hour schedule.
+
+**Do not apply one universal TTL to every cache entry.**
+
+### 4.4 Add a shared logging function
+
+You will also need a common way to write historical records.
+
+Add the following:
+
+```php
+function bzj_db_log(
+    string $table,
+    string $type,
+    string $periodKey,
+    array $payload
+): bool {
+
+    $allowedTables = [
+        'millennium_timezone_logs',
+        'palmier_logs'
+    ];
+
+    if (!in_array($table, $allowedTables, true)) {
+        throw new InvalidArgumentException(
+            'Invalid log table'
+        );
+    }
+
+    $db = bzj_millennium_db();
+
+    if (!$db) {
+        return false;
+    }
+
+    $json = json_encode(
+        $payload,
+        JSON_UNESCAPED_UNICODE
+        | JSON_UNESCAPED_SLASHES
+        | JSON_THROW_ON_ERROR
+    );
+
+    $now = gmdate('Y-m-d H:i:s');
+
+    $sql = "
+        INSERT INTO {$table}
+            (
+                record_type,
+                period_key,
+                recorded_at,
+                payload_json
+            )
+        VALUES (?, ?, ?, ?)
+
+        ON DUPLICATE KEY UPDATE
+            recorded_at = VALUES(recorded_at),
+            payload_json = VALUES(payload_json)
+    ";
+
+    $stmt = $db->prepare($sql);
+
+    $stmt->bind_param(
+        'ssss',
+        $type,
+        $periodKey,
+        $now,
+        $json
+    );
+
+    $stmt->execute();
+    $stmt->close();
+
+    return true;
+}
+```
+
+This logging function uses the unique `record_type` and `period_key` pair to prevent the same logical period from accumulating duplicate records.
+
+One consequence is worth understanding: repeated writes for the same period update that record rather than preserving every intermediate calculation. That is useful for periodic snapshots, but it is not a substitute for a separate audit log when every change must be retained.
+
+---
+
+# Phase 3 — Relocate the two Millennium files
+
+## Step 5. Rename and move `sabbatical-date.php`
+
+### Current location
+
+```text
+shared/palmier/calendar/sabbatical-date.php
+```
+
+### New location
+
+```text
+shared/millennium-timezone/millennium-timezone.php
+```
+
+### New public URL
+
+[Millennium Timezone](https://buzzjuice.net/shared/millennium-timezone/millennium-timezone.php?utm_source=chatgpt.com)
+
+Move the file through your repository or cPanel File Manager.
+
+Do not delete the old copy immediately.
+
+### 5.1 Update the page title
+
+The existing PHP file contains:
+
+```html
+<title>Sabbatical Date</title>
+```
+
+Change it to:
+
+```html
+<title>Millennium Timezone</title>
+```
+
+This is not required for the calculations to work, but it makes the page consistent with its new name.
+
+### 5.2 Update the logging location
+
+The existing date engine currently uses:
+
+```php
+function palmier_log($msg, $data=null){
+    error_log(
+        "[PALMIER] "
+        . $msg
+        . ($data ? " | " . json_encode($data) : "")
+    );
+}
+```
+
+This function sends messages to the PHP error log. It does not persist records in `koware_iapd`.
+
+I recommend renaming the function to avoid confusion with the existing Palmier logger:
+
+```php
+function bzj_millennium_log($msg, $data = null)
+{
+    error_log(
+        '[BZJ MILLENNIUM] '
+        . $msg
+        . (
+            $data !== null
+                ? ' | ' . json_encode($data)
+                : ''
+        )
+    );
+}
+```
+
+Then update its caller inside `palmier_time()`.
+
+The database should hold structured calculation records, while `error_log()` should remain available for exceptional conditions such as database failures.
+
+Do not send every routine calculation to the PHP error log.
+
+### 5.3 Preserve the time-calculation algorithm
+
+The existing function `palmier_time()` calculates the current and historical timestamps using a fixed epoch, a historical-day calculation and a compressed four-hour time progression.
+
+That calculation is the core of this engine. The file relocation does not, by itself, justify changing its mathematics. 
+
+I recommend separating the calculation from the HTML page.
+
+Create:
+
+```text
+shared/millennium-timezone/millennium-timezone-core.php
+```
+
+Move the following calculation-related components into that file:
+
+* `$historicalHourMap`
+* The date-formatting helper functions.
+* The `palmier_time()` calculation, renamed to a Millennium-specific function.
+
+For example, use:
+
+```php
+function bzj_millennium_time()
+{
+    // Existing palmier_time() calculation goes here.
+    // Preserve the existing calculation logic.
+}
+```
+
+Update references to the old function name accordingly.
+
+The new core file should return data without rendering HTML, setting response headers or exiting the request.
+
+This will allow other PHP scripts to use the calculation directly:
+
+```php
+require_once __DIR__
+    . '/../millennium-timezone/millennium-timezone-core.php';
+
+[$now, $hist, $err] = bzj_millennium_time();
+```
+
+The exact relative path depends on the calling file's location.
+
+For example, a script under `shared/palmier/gold_calc/` needs a different relative path from one under `shared/millennium-timezone/`.
+
+**Do not copy the same calculation into multiple files.** The core file should be the single source of truth.
+
+### 5.4 Write the result to the database
+
+In `millennium-timezone.php`, load the shared database helper and the new calculation library:
+
+```php
+require_once __DIR__ . '/millennium-timezone-db.php';
+require_once __DIR__ . '/millennium-timezone-core.php';
+```
+
+After calculating the dates successfully, save the values.
+
+For example:
+
+```php
+[$now, $hist, $err] = bzj_millennium_time();
+
+if ($err || !$now || !$hist) {
+    http_response_code(500);
+    exit('Millennium Timezone calculation failed.');
+}
+
+$payload = [
+    'current_iso' => $now->format(DateTime::ATOM),
+    'historical_iso' => $hist->format(DateTime::ATOM),
+    'current_timestamp' => $now->getTimestamp(),
+    'historical_timestamp' => $hist->getTimestamp()
+];
+
+bzj_cache_set(
+    'millennium_timezone_cache',
+    'timezone_snapshot',
+    $payload,
+    60
+);
+```
+
+This is an example of the intended integration. Adapt the surrounding code to the actual function return type when extracting the core calculation.
+
+The database payload should preserve both the current and historical timestamps.
+
+The reason is straightforward: different consumers may need different representations, and they should not need to call the date engine through an HTTP endpoint to obtain them.
+
+### 5.5 Update the existing JSON endpoints
+
+Your original file supports the following endpoint types:
+
+* `historical`
+* `current`
+* `probe`
+
+It also has a JavaScript function that fetches `?endpoint=probe` periodically. 
+
+For the transition, I recommend retaining these public interfaces while changing their implementation.
+
+For example, the historical endpoint can return the value already calculated for the current request:
+
+```php
+if (isset($_GET['endpoint'])) {
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    switch ($_GET['endpoint']) {
+
+        case 'historical':
+            echo json_encode([
+                'iso' => $hist->format(DateTime::ATOM)
+            ]);
+            exit;
+
+        case 'current':
+            echo json_encode([
+                'iso' => $now->format(DateTime::ATOM)
+            ]);
+            exit;
+
+        case 'probe':
+            // Read the latest probe snapshot from the database.
+            $probe = bzj_cache_get(
+                'millennium_timezone_cache',
+                'probe_snapshot'
+            );
+
+            if (!$probe) {
+                http_response_code(503);
+
+                echo json_encode([
+                    'error' => 'Probe data unavailable'
+                ]);
+
+                exit;
+            }
+
+            echo json_encode($probe);
+            exit;
+
+        default:
+            http_response_code(404);
+
+            echo json_encode([
+                'error' => 'Invalid endpoint'
+            ]);
+
+            exit;
+    }
+}
+```
+
+This is a structural example, not a complete replacement for the current page. Retain the existing HTML and JavaScript, and preserve any additional response fields that existing consumers depend on.
+
+Also verify that the database contains the probe data before removing the old endpoint dependency.
+
+---
+
+## Step 6. Move `millennium-probe.php`
+
+### Current location
+
+```text
+shared/palmier/probe/millennium-probe.php
+```
+
+### New location
+
+```text
+shared/millennium-timezone/millennium-probe.php
+```
+
+### New public URL
+
+[Millennium Probe](https://buzzjuice.net/shared/millennium-timezone/millennium-probe.php?utm_source=chatgpt.com)
+
+The important change is not merely the new path.
+
+The current Millennium Probe obtains its oscillation index from the oscillator through an HTTP request:
+
+```php
+function fetchOscIndex() {
+    $json = @file_get_contents(OSC_URL);
+
+    if (!$json) return 0.0;
+
+    $d = @json_decode($json, true);
+
+    return isset($d['oscillation_index'])
+        ? floatval($d['oscillation_index'])
+        : 0.0;
+}
+```
+
+It also maintains a local JSON log file. 
+
+Both behaviours should be changed.
+
+### 6.1 Replace the oscillator URL
+
+Remove the dependency on the old constant:
+
+```php
+define(
+    'OSC_URL',
+    'https://buzzjuice.net/shared/palmier/oscillator/palmier-oscillator.php?oscillation=live'
+);
+```
+
+Replace it with shared database access.
+
+For example:
+
+```php
+require_once __DIR__ . '/millennium-timezone-db.php';
+```
+
+Then replace `fetchOscIndex()` with:
+
+```php
+function bzj_get_oscillation_index(): ?float
+{
+    $data = bzj_cache_get(
+        'palmier_cache',
+        'oscillator'
+    );
+
+    if (
+        !$data
+        || !isset($data['oscillation_index'])
+        || !is_numeric($data['oscillation_index'])
+    ) {
+        return null;
+    }
+
+    return (float) $data['oscillation_index'];
+}
+```
+
+Update the call site to:
+
+```php
+$osc = bzj_get_oscillation_index();
+
+if ($osc === null) {
+    http_response_code(503);
+    exit('Oscillator data unavailable.');
+}
+```
+
+### Why change the error behaviour?
+
+Your original implementation returns `0.0` when the oscillator endpoint cannot be reached.
+
+That is risky because zero is a legitimate numerical value. A connection failure can therefore look like a valid calculation.
+
+The revised implementation distinguishes between:
+
+* A valid oscillator index of zero.
+* Missing oscillator data.
+* Database connection failure.
+
+This distinction is particularly important because the oscillator index influences the Millennium Probe amplitude and mapped date.
+
+### 6.2 Replace the file-based probe log
+
+The current file defines:
+
+```php
+define('LOG_FILE', __DIR__ . '/millennium-probe.log');
+define('LOG_TTL', 12345);
+define('MAX_LOG', 180);
+```
+
+The `read_log()`, `write_log()`, `append_log()` and `recent_log()` functions manage the probe's local log. 
+
+Replace this file-based cache with database operations.
+
+The latest probe result should be stored under:
+
+```text
+millennium_timezone_cache
+    └── probe_snapshot
+```
+
+Historical records should be stored in:
+
+```text
+millennium_timezone_logs
+```
+
+A record should contain at least:
+
+```php
+[
+    'timestamp' => $now,
+    'phase_idx' => $phase_idx,
+    'phase_label' => $labels[$phase_idx],
+    'phase_start' => $ps,
+    'phase_end' => $pe,
+    'oscillation_index' => $osc,
+    'amplitude_days' => $amplitude,
+    'probe_value_days' => $probe_val,
+    'probe_iso' => $probe_iso,
+    'now_iso' => gmdate(
+        'Y-m-d\TH:i:s\Z',
+        $now
+    )
+]
+```
+
+Preserve the existing phase selection, amplitude calculation, probe formula and output structure.
+
+### 6.3 Preserve the probe's caching behaviour
+
+The existing code uses `LOG_TTL = 12345` seconds and retains up to 180 log records.
+
+Do not automatically assume these values are the right database retention policy.
+
+Instead:
+
+* Preserve the current calculation freshness interval initially.
+* Store the latest result separately from historical records.
+* Define an explicit policy for how long historical records should be retained.
+* Ensure that a database failure cannot silently produce a false zero-valued probe.
+
+The result should continue to support the existing `?probe=now` response and HTML interface.
+
+---
+
+# Phase 4 — Update the gold calculator
+
+## Step 7. Modify `gold_calc.php`
+
+The gold calculator is one of the most directly affected files.
+
+At present, it defines the historical-date engine URL:
+
+```php
+$sabbatical = 'https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php';
+```
+
+It then passes this URL to a helper that retrieves the historical timestamp. 
+
+### 7.1 Remove the old URL
+
+Delete:
+
+```php
+$sabbatical = 'https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php';
+```
+
+Replace the existing helper loading and historical-date retrieval with shared calculation/database access.
+
+At the top of `gold_calc.php`, retain:
+
+```php
+require_once __DIR__ . '/gold_calc_helpers.php';
+```
+
+Then ensure that `gold_calc_helpers.php` loads the appropriate shared files.
+
+### 7.2 Update `gold_calc_helpers.php`
+
+The existing function is:
+
+```php
+function getPalmierHistoricalDate($endpoint) {
+    $resp = file_get_contents(
+        $endpoint . '?endpoint=historical'
+    );
+
+    $json = json_decode($resp, true);
+
+    if (!isset($json['iso'])) {
+        die("Invalid sabbatical response");
+    }
+
+    return new DateTime(
+        $json['iso'],
+        new DateTimeZone('UTC')
+    );
+}
+```
+
+This is an internal HTTP call that can be eliminated. 
+
+Replace it with:
+
+```php
+function getPalmierHistoricalDate(): DateTime
+{
+    $data = bzj_cache_get(
+        'millennium_timezone_cache',
+        'timezone_snapshot'
+    );
+
+    if (
+        !$data
+        || empty($data['historical_iso'])
+    ) {
+        throw new RuntimeException(
+            'Historical timezone data unavailable'
+        );
+    }
+
+    return new DateTime(
+        $data['historical_iso'],
+        new DateTimeZone('UTC')
+    );
+}
+```
+
+At the top of `gold_calc_helpers.php`, load the database helper:
+
+```php
+require_once __DIR__
+    . '/../../millennium-timezone/millennium-timezone-db.php';
+```
+
+The path above is relative to `shared/palmier/gold_calc/`, so it points to the proposed shared helper.
+
+### 7.3 Update the caller
+
+In `gold_calc.php`, change:
+
+```php
+$histDT = getPalmierHistoricalDate($sabbatical);
+```
+
+to:
+
+```php
+$histDT = getPalmierHistoricalDate();
+```
+
+The resulting historical date should still be formatted as:
+
+```php
+$histDate = $histDT->format('Y-m-d');
+```
+
+The subsequent gold-price calculation can remain unchanged.
+
+### 7.4 Migrate the gold cache to the database
+
+The existing gold calculator uses local JSON log files. Its helper functions include:
+
+* `getLatest6hSlot()`
+* `getLogFile()`
+* `logExists()`
+* `readLogRow()`
+* `appendLog()`
+
+These functions implement the existing six-hour cache. 
+
+I recommend retaining the six-hour calculation schedule but moving the stored result to `palmier_cache` and `palmier_logs`.
+
+For the cache, use a key derived from the existing slot:
+
+```php
+$slot = getLatest6hSlot();
+
+$cacheKey = 'gold_prices_' .
+    str_replace(
+        [' ', ':', '-'],
+        '_',
+        $slot
+    );
+```
+
+You have two reasonable choices.
+
+**Option A — Latest result only**
+
+Use:
+
+```text
+palmier_cache
+    └── gold_prices
+```
+
+Store the current calculation, including its slot timestamp, in the payload.
+
+This is the simplest option if only the latest result needs to be available.
+
+**Option B — Preserve historical six-hour results**
+
+Use a slot-specific cache key and write a corresponding historical record to `palmier_logs`.
+
+This is preferable if other tools need to retrieve gold prices for previous calculation periods.
+
+For Palmier Currency, I recommend Option B because it preserves the historical calculation trail.
+
+Do not delete the existing log files until you have verified that the database contains the expected records.
+
+### 7.5 Preserve the existing output interfaces
+
+The current calculator supports JSON output, an average-only response and an HTML table.
+
+Preserve:
+
+```text
+?format=json
+?format=average
+```
+
+These interfaces may already be consumed by other scripts or users.
+
+Once the migration is complete, those endpoints can remain available for compatibility, even though the internal PHP scripts no longer need to call them.
+
+---
+
+# Phase 5 — Update the oscillator
+
+## Step 8. Modify `palmier-oscillator.php`
+
+The oscillator is not one of the files being moved.
+
+Its existing location remains:
+
+```text
+shared/palmier/oscillator/palmier-oscillator.php
+```
+
+Its calculation logic uses predefined seasonal anchors, solar and lunar variance calculations, Passover variance and a combined oscillation formula.
+
+It currently stores the latest calculation in a local file named `palmier-oscillator.log`. 
+
+### 8.1 Load the database helper
+
+At the top of the file, add:
+
+```php
+require_once __DIR__
+    . '/../../millennium-timezone/millennium-timezone-db.php';
+```
+
+This is the relative path from `shared/palmier/oscillator/`.
+
+### 8.2 Preserve the calculation functions
+
+Do not modify these functions merely to accommodate the new storage architecture:
+
+```php
+palmier_variance()
+solar_variance()
+lunar_variance()
+passover_variance()
+palmier_oscillation()
+```
+
+The database migration should not change the mathematical outputs.
+
+### 8.3 Replace the file-based cache
+
+The existing code reads and appends to the local log through `read_log()` and `write_log()`.
+
+The latest result is only recalculated when the log is missing or its interval has elapsed. 
+
+Replace that section with database-backed retrieval and storage.
+
+The intended flow is:
+
+1. Retrieve the latest oscillator result.
+2. Check whether it is still fresh.
+3. If fresh, reuse it.
+4. Otherwise, calculate a new result.
+5. Save the new result in `palmier_cache`.
+6. Record the historical calculation in `palmier_logs`.
+
+For example, the saved payload should preserve the current data structure:
+
+```php
+$data = [
+    'timestamp' => $t,
+    'datetime' => date(
+        'Y-m-d H:i:s',
+        $t
+    ),
+    'lunar_variance' => $lunarVariance,
+    'solar_variance' => $solarVariance,
+    'palmier_max' => PALMIER_MAX,
+    'palmier_max_index' => round(
+        PALMIER_MAX / 100,
+        10
+    ),
+    'palmier_variance' => $palmierVariance,
+    'passover_variance' => $passoverVariance,
+    'oscillation' => $oscillation,
+    'oscillation_index' => round(
+        $oscillation / 100,
+        10
+    )
+];
+```
+
+Here, the variables represent the values calculated by the existing engine. Retain your actual calculation calls rather than introducing new formulas.
+
+Then save:
+
+```php
+bzj_cache_set(
+    'palmier_cache',
+    'oscillator',
+    $data,
+    12345
+);
+```
+
+The example retains your existing `LOG_INTERVAL` of 12,345 seconds.
+
+For the historical record, use a period key derived from the calculation timestamp. The precise format should be consistent with your chosen logging policy.
+
+### 8.4 Preserve the live endpoint
+
+The existing endpoint:
+
+```text
+?oscillation=live
+```
+
+should continue to work.
+
+It should simply return the database-backed result.
+
+That preserves compatibility for browser clients while allowing the PHP engines to read oscillator data directly from `koware_iapd`.
+
+---
+
+# Phase 6 — Refactor `palmier_calc.php`
+
+## Step 9. Remove internal HTTP dependencies
+
+This is the most important integration change after moving the two Millennium files.
+
+The current `palmier_calc.php` has several internal and external dependencies. Not all of them should be removed.
+
+Its internal requests include the following:
+
+| Current dependency | Purpose                                      | Recommended replacement                                                    |
+| ------------------ | -------------------------------------------- | -------------------------------------------------------------------------- |
+| `WOOCS_API`        | Retrieves WooCommerce currency configuration | Shared configuration storage or an appropriate local WordPress integration |
+| `BASE_CONFIG_API`  | Retrieves the configured base currency       | Read the actual source of truth locally                                    |
+| `HISTORICAL_API`   | Retrieves historical gold-price averages     | Read the gold-calculator result from `palmier_cache`                       |
+| `OSC_URL`          | Retrieves oscillator data                    | Read `palmier_cache` directly                                              |
+
+The current code uses these URLs to obtain data needed for its currency calculations. 
+
+The important distinction is that **replacing internal HTTP calls does not mean eliminating all external APIs**.
+
+Your Alpha Vantage, Twelve Data and ExchangeRate-API calls are external data sources. Those should remain external integrations unless you separately decide to replace them.
+
+### 9.1 Update the configuration constants
+
+At the top of `palmier_calc.php`, you currently define constants for the internal endpoints as well as external providers.
+
+The internal constants to review are:
+
+```php
+define('WOOCS_API', ...);
+define('BASE_CONFIG_API', ...);
+define('HISTORICAL_API', ...);
+define('OSC_URL', ...);
+```
+
+Remove these constants once every caller has been migrated to a database or local integration.
+
+Retain the external-provider configuration only where it is still required.
+
+### 9.2 Replace historical gold retrieval
+
+The current implementation retrieves the historical gold average through:
+
+```php
+$hist = fetch_json(HISTORICAL_API);
+
+$histAvg = (float)(
+    $hist['historical_gold_average'] ?? 0
+);
+
+$histCount = (int)(
+    $hist['historical_currencies_count'] ?? 0
+);
+```
+
+Replace this with a database read.
+
+For example:
+
+```php
+$hist = bzj_cache_get(
+    'palmier_cache',
+    'gold_prices'
+);
+
+if (
+    !$hist
+    || !isset(
+        $hist['historical_gold_average'],
+        $hist['historical_currencies_count']
+    )
+) {
+    throw new RuntimeException(
+        'Historical gold-price data unavailable'
+    );
+}
+
+$histAvg = (float)
+    $hist['historical_gold_average'];
+
+$histCount = (int)
+    $hist['historical_currencies_count'];
+```
+
+This example assumes that the gold calculator's cache payload contains the indicated fields.
+
+**You must align the stored payload with the actual `$result` structure in `gold_calc.php`.** Do not assume that every existing field is already available in the cache until you have verified it.
+
+If the gold calculator stores its result under a slot-specific cache key, retrieve the latest valid slot rather than using the fixed key shown in this illustration.
+
+### 9.3 Replace oscillator retrieval
+
+The current code obtains oscillator data through:
+
+```php
+$osc = fetch_json(OSC_URL);
+
+$oscillation =
+    ((float)($osc['palmier_max_index'] ?? 0))
+    -
+    (2 * (
+        (float)($osc['oscillation_index'] ?? 0)
+    ));
+```
+
+Replace the HTTP retrieval with:
+
+```php
+$osc = bzj_cache_get(
+    'palmier_cache',
+    'oscillator'
+);
+
+if (
+    !$osc
+    || !isset(
+        $osc['palmier_max_index'],
+        $osc['oscillation_index']
+    )
+) {
+    throw new RuntimeException(
+        'Oscillator data unavailable'
+    );
+}
+
+$oscillation =
+    (float) $osc['palmier_max_index']
+    -
+    (
+        2 * (float) $osc['oscillation_index']
+    );
+```
+
+Preserve the existing formula exactly.
+
+The new implementation should change only where the data comes from, not how the oscillator value is used.
+
+### 9.4 Replace the base-currency endpoint
+
+The existing `getBaseCurrency()` function retrieves its value from `BASE_CONFIG_API`.
+
+It looks for `fox_currency`, then `base_currency`, and otherwise defaults to USD. 
+
+Before replacing this endpoint, identify where the configured base currency is actually stored.
+
+Possible sources include:
+
+* A WordPress option.
+* A WooCommerce currency configuration.
+* A custom Palmier configuration record.
+
+I cannot determine which is authoritative from the supplied PHP files alone.
+
+Once identified, the replacement should read that source locally.
+
+For example, if the value is stored in a WordPress option, a direct local WordPress integration may be more appropriate than duplicating the setting in `koware_iapd`.
+
+If you decide that the database should be the authoritative source instead, define a single configuration record and update the existing configuration interface to write to it.
+
+**Do not create a second independent base-currency setting without deciding which value takes precedence.**
+
+### 9.5 Replace the WOOCS endpoint carefully
+
+The current `getVerifiedRegistry()` function obtains the currency registry through `WOOCS_API`.
+
+It then uses the returned currency metadata to determine the list of supported currencies and their rates. 
+
+This requires a separate decision.
+
+You should not simply replace the endpoint with an empty database table. The database must contain the same currency registry information, or the code must obtain that information through a supported local integration.
+
+A sensible staged approach is:
+
+1. Identify the source used by the existing WOOCS endpoint.
+2. Retrieve the configuration through an appropriate local integration.
+3. Store the resulting registry in `koware_iapd` if multiple scripts need it.
+4. Change `getVerifiedRegistry()` to read the shared record.
+5. Verify that the currency list and rates match the previous implementation.
+
+Do not remove the old endpoint until the new source has been verified.
+
+### 9.6 Replace local Palmier calculation logs
+
+The current Palmier calculator stores calculation results in local JSON log files.
+
+Its functions include:
+
+```php
+getPalmierSlot()
+getLogFilePath()
+readLog()
+appendLog()
+```
+
+The main engine checks for a cached result before performing a new calculation. 
+
+Replace those functions with database-backed equivalents.
+
+The desired behaviour is:
+
+```text
+Request arrives
+      |
+      v
+Calculate current Palmier slot
+      |
+      v
+Retrieve the result for that slot
+      |
+      +---- Fresh result exists
+      |          |
+      |          v
+      |     Reuse result
+      |
+      +---- No fresh result
+                 |
+                 v
+          Calculate currency data
+                 |
+                 v
+          Store in palmier_cache
+                 |
+                 v
+          Record in palmier_logs
+                 |
+                 v
+          Return result
+```
+
+Preserve the current slot calculation and weekend suspension logic unless you separately intend to change the calculation schedule.
+
+The existing implementation suspends updates during a defined weekend window and uses `LOG_INTERVAL` to calculate its regular slots. Those rules are part of the existing behaviour, not merely a file-storage detail. 
+
+### 9.7 Preserve the existing Palmier output
+
+Your existing calculator supports:
+
+```text
+?endpoint=palmier
+```
+
+and a broader JSON endpoint.
+
+It also supports currency rebasing through the `ref` parameter.
+
+Those are output interfaces, not necessarily internal dependencies. You can retain them while eliminating PHP-to-PHP HTTP calls.
+
+That distinction allows you to migrate the backend without breaking existing consumers.
+
+---
+
+# Phase 7 — Review the remaining files
+
+## Step 10. `gold_calc_helpers.php`
+
+After the historical-date retrieval has been changed, review the remaining helper functions.
+
+The CSV loader and historical rate-resolution functions do not need to be rewritten simply because the date engine has moved.
+
+The primary changes are:
+
+* Replace `getPalmierHistoricalDate($endpoint)`.
+* Replace local gold-log reads and writes with database operations.
+* Preserve the six-hour slot calculation.
+* Ensure that missing historical data results in an explicit error rather than an invalid calculation.
+
+The existing helper prefers a valid `close` rate and falls back to `open`. Preserve that behaviour. 
+
+## Step 11. `palmier-helpers.php`
+
+No change is required for the file relocation.
+
+This file checks WordPress availability, returns the configured Palmier product ID, retrieves a user's myCRED balance and provides a basic points-eligibility helper. 
+
+Its purpose is different from the Millennium Timezone and currency-calculation engines.
+
+I would leave it untouched during this migration.
+
+## Step 12. `palmier_logger.php`
+
+This file deserves a database-configuration review, but not necessarily a migration.
+
+It currently uses the shared `db_helpers.php` and writes to:
+
+```text
+Wo_UserActivityLog
+```
+
+It is not currently writing to either of the proposed Palmier cache or logging tables. 
+
+I recommend keeping this activity log separate unless you explicitly intend to consolidate it into `koware_iapd`.
+
+If the activity log must remain in its current database, changing the database connection to `koware_iapd` without migrating the destination table could break activity logging.
+
+The new Millennium database helper should therefore be independent of the existing activity logger's connection.
+
+## Step 13. `bulk_convert_currency_csvs.php`
+
+No path change is required.
+
+The script determines the currency-data directory relative to its own location:
+
+```php
+$currencyDir = __DIR__ . '/../currency_data/';
+```
+
+It also creates an `old` directory and processes CSV files. 
+
+Because this script is staying in `shared/palmier/scripts/`, its relative paths remain valid.
+
+Do not move the CSV directory simply because the Millennium files are moving.
+
+## Step 14. `currency-bulk-multiplier.php`
+
+No path change is required here either.
+
+It reads and writes CSV files using paths relative to `__DIR__`, and it does not reference either of the relocated files. 
+
+I recommend leaving it unchanged during the migration.
+
+This reduces the number of moving parts and makes troubleshooting easier.
+
+---
+
+# Phase 8 — Add a common data contract
+
+## Step 15. Standardise the data exchanged through the database
+
+Once the files are connected to `koware_iapd`, they need to agree on what each cached record means.
+
+I recommend establishing the following initial contract.
+
+| Producer                   | Cache table                 | Cache key                            | Consumers                                             |
+| -------------------------- | --------------------------- | ------------------------------------ | ----------------------------------------------------- |
+| Millennium Timezone engine | `millennium_timezone_cache` | `timezone_snapshot`                  | Gold calculator and other time-dependent scripts      |
+| Millennium Probe           | `millennium_timezone_cache` | `probe_snapshot`                     | Millennium Timezone interface and future integrations |
+| Gold calculator            | `palmier_cache`             | `gold_prices` or a slot-specific key | Palmier calculator and reporting tools                |
+| Palmier oscillator         | `palmier_cache`             | `oscillator`                         | Millennium Probe and Palmier calculator               |
+| Palmier calculator         | `palmier_cache`             | `palmier_currency`                   | Currency display, valuation and future integrations   |
+
+The distinction between the producer and consumers matters.
+
+For example, the oscillator should produce its own calculated data. The probe should consume that data rather than independently reproducing the oscillator's calculation.
+
+Likewise, the gold calculator should own its historical gold-price calculation, while the Palmier calculator consumes the relevant output.
+
+This establishes a clear dependency graph:
+
+```text
+              MILLENNIUM TIMEZONE
+                      |
+                      v
+           millennium_timezone_cache
+                      |
+                      v
+                Gold Calculator
+                      |
+                      v
+                palmier_cache
+                      |
+             +--------+--------+
+             |                 |
+             v                 v
+       Palmier Calculator   Other Consumers
+             ^
+             |
+       Palmier Oscillator
+             |
+             v
+       Millennium Probe
+             |
+             v
+    millennium_timezone_cache
+```
+
+The diagram describes the intended data flow, not the current implementation.
+
+The current implementation still contains internal HTTP requests and local-file caching that must be replaced.
+
+---
+
+# Phase 9 — Handle cache freshness and dependency order
+
+## Step 16. Avoid stale or circular dependencies
+
+There is a subtle problem with replacing HTTP requests with database reads.
+
+A database does not automatically guarantee that the value being read is current.
+
+For example, if the oscillator's latest value is missing or stale, the Millennium Probe must not silently assume that it is zero.
+
+Similarly, if the gold calculator's latest record is absent, the Palmier calculator should not treat an empty historical average as a valid result.
+
+I recommend the following dependency order for a cache refresh:
+
+1. Calculate and store the Millennium Timezone snapshot.
+2. Calculate and store the oscillator snapshot.
+3. Calculate and store the Millennium Probe result using the latest valid oscillator data.
+4. Calculate and store the historical gold-price result.
+5. Calculate and store the latest Palmier Currency result.
+
+The two independent branches—the oscillator and historical gold-price calculation—can be run separately. The critical rule is that a consumer must not read a result before its producer has generated a valid record.
+
+### Recommended initial freshness policies
+
+These are starting recommendations, not requirements already present in your system.
+
+| Data                                 | Suggested initial policy                           |
+| ------------------------------------ | -------------------------------------------------- |
+| Current and historical time snapshot | Refresh on demand, with a short cache lifetime     |
+| Millennium Probe                     | Preserve the existing freshness interval initially |
+| Oscillator                           | Preserve the existing 12,345-second interval       |
+| Historical gold prices               | Preserve the existing six-hour slots               |
+| Palmier Currency                     | Preserve the existing slot and weekend rules       |
+
+The correct values should be confirmed against your intended business logic before deployment.
+
+### Missing-data policy
+
+Use three distinct outcomes:
+
+* **Valid result:** Return the stored value.
+* **Stale result:** Recalculate or refresh according to the existing schedule.
+* **Unavailable result:** Return a controlled error and log the failure.
+
+Do not replace missing values with zero unless zero is explicitly the correct mathematical result.
+
+This is especially important for the oscillator and probe.
+
+---
+
+# Phase 10 — Preserve compatibility during the migration
+
+## Step 17. Keep the old URLs working temporarily
+
+Moving the files immediately breaks consumers that still call the old paths.
+
+The original date engine URL is:
+
+```text
+https://buzzjuice.net/shared/palmier/calendar/sabbatical-date.php
+```
+
+The original probe URL is:
+
+```text
+https://buzzjuice.net/shared/palmier/probe/millennium-probe.php
+```
+
+I recommend retaining small compatibility wrappers at those locations while you migrate the other scripts.
+
+For the old date-engine path, the wrapper can load the new implementation:
+
+```php
+<?php
+
+require_once dirname(__DIR__, 2)
+    . '/millennium-timezone/millennium-timezone.php';
+```
+
+For the old probe path:
+
+```php
+<?php
+
+require_once dirname(__DIR__, 2)
+    . '/millennium-timezone/millennium-probe.php';
+```
+
+These paths assume that the new files are located in the proposed directories.
+
+The wrappers should not contain duplicate calculation logic.
+
+Because the new scripts may define functions, constants or headers, test each wrapper carefully for redeclaration errors and output behaviour.
+
+The old date-engine page also uses relative JavaScript requests, so verify that its browser-side probe updates continue to work when the page is accessed through the old URL.
+
+**Keep the compatibility wrappers until all known callers have been migrated and tested.**
+
+---
+
+# Phase 11 — Validate the migration
+
+## Step 18. Test the database layer first
+
+Before testing the full application, verify that the new database helper can:
+
+1. Connect to `koware_iapd`.
+2. Write a cache entry.
+3. Read that entry back.
+4. Update an existing entry.
+5. Reject an invalid table name.
+6. Handle missing or expired records.
+7. Report a database connection failure without returning fabricated data.
+
+For the first test, insert a harmless test record using the PHP helper, then retrieve it and compare the decoded payload.
+
+Do not use a production currency result as your first database-write test.
+
+## Step 19. Test the two relocated files
+
+Test the new Millennium Timezone URL first.
+
+Confirm that:
+
+* The page renders.
+* The current timestamp is valid UTC.
+* The historical timestamp is generated correctly.
+* The date and time displayed in the browser update as intended.
+* The `historical`, `current` and `probe` responses retain their expected structure.
+* The database contains the corresponding records.
+
+Then test the new Millennium Probe URL.
+
+Confirm that:
+
+* The current phase is correct.
+* The phase start and end timestamps are correct.
+* The oscillator index is retrieved from the database.
+* The probe value and mapped ISO date are generated.
+* The `?probe=now` response works.
+* The HTML graphs still render.
+* Missing oscillator data produces an explicit error.
+
+## Step 20. Test the gold calculator
+
+Test both existing output modes:
+
+```text
+?format=json
+```
+
+and:
+
+```text
+?format=average
+```
+
+Verify that:
+
+* The historical date is obtained without an internal HTTP call.
+* The gold anchor date is unchanged.
+* The currency list is unchanged for the same input data.
+* The six-hour slot is correct.
+* The cache is reused when it should be.
+* The historical gold average matches the pre-migration result.
+
+Use a fixed test slot when comparing old and new outputs. Comparing calculations performed at different times can introduce unrelated differences.
+
+## Step 21. Test the oscillator
+
+Compare the pre-migration and post-migration outputs for the same timestamp.
+
+At minimum, compare:
+
+* `lunar_variance`
+* `solar_variance`
+* `palmier_variance`
+* `passover_variance`
+* `oscillation`
+* `oscillation_index`
+
+These values should remain consistent when calculated with the same inputs.
+
+Also verify that the live endpoint continues to work.
+
+## Step 22. Test the Palmier calculator
+
+Finally, test the main Palmier Currency calculation.
+
+Verify that:
+
+* The base currency is correct.
+* The verified currency registry is unchanged.
+* The external exchange-rate providers still work.
+* The historical gold-price average is retrieved from the database.
+* The oscillator value is retrieved from the database.
+* The Palmier valuation formula remains unchanged.
+* Currency rebasing through `ref` still works.
+* The Palmier JSON endpoint still returns the expected values.
+* The calculation cache and historical logs are populated correctly.
+
+Do not remove the old cache files until the database-backed implementation has produced matching results across the relevant calculation periods.
+
+---
+
+# Phase 12 — Two additional issues discovered during the review
+
+## 23. External API credentials need attention
+
+The supplied public source for `palmier_calc.php` contains hardcoded credentials for external currency-data services. 
+
+Because the repository is publicly accessible, treat any credentials exposed in that source as potentially compromised.
+
+I recommend:
+
+1. Reviewing the credentials' status with the respective providers.
+2. Rotating exposed credentials where appropriate.
+3. Moving secrets into your existing environment configuration.
+4. Ensuring that the repository contains no active secrets.
+5. Keeping credentials out of database cache payloads and application logs.
+
+This is a separate security task, but it should be completed before or alongside the migration.
+
+Moving the internal calculations to a database does not remove the need for external exchange-rate providers.
+
+## 24. Avoid mixing Palmier application logs with database integration logs
+
+Your existing `palmier_logger.php` writes activity records to `Wo_UserActivityLog`.
+
+The new `palmier_logs` table is intended to store calculation history.
+
+These serve different purposes:
+
+| Table                      | Purpose                                     |
+| -------------------------- | ------------------------------------------- |
+| `Wo_UserActivityLog`       | User activity records                       |
+| `millennium_timezone_logs` | Millennium Timezone and Probe history       |
+| `palmier_logs`             | Currency and oscillator calculation history |
+
+Keeping these concerns separate will make it easier to diagnose errors, reconstruct currency calculations and analyse user activity without conflating them.
+
+---
+
+# 25. Final implementation checklist
+
+Here is the sequence I recommend following in production.
+
+| Stage | Task                                                              | Completion criterion                                 |
+| ----- | ----------------------------------------------------------------- | ---------------------------------------------------- |
+| 1     | Back up the current files and database                            | Existing production state can be restored            |
+| 2     | Create the four database tables                                   | All tables exist in `koware_iapd`                    |
+| 3     | Create `millennium-timezone-db.php`                               | Read/write tests pass                                |
+| 4     | Extract the Millennium Timezone calculation core                  | The calculation can be called without rendering HTML |
+| 5     | Move and rename `sabbatical-date.php`                             | New URL renders and returns valid data               |
+| 6     | Move `millennium-probe.php`                                       | New URL renders and returns valid probe data         |
+| 7     | Replace the probe's oscillator HTTP request                       | Oscillator data comes from the database              |
+| 8     | Update `gold_calc_helpers.php`                                    | Historical-date retrieval no longer uses HTTP        |
+| 9     | Update `gold_calc.php`                                            | Gold calculation and existing output formats work    |
+| 10    | Migrate oscillator caching                                        | Database cache matches the existing calculation      |
+| 11    | Migrate `palmier_calc.php`                                        | Internal dependencies use database/local integration |
+| 12    | Preserve the existing base-currency and currency-registry sources | Configuration remains consistent                     |
+| 13    | Add temporary compatibility wrappers                              | Old URLs continue to work during migration           |
+| 14    | Compare old and new calculation results                           | Results match for equivalent inputs                  |
+| 15    | Review external API credentials                                   | Exposed credentials are addressed                    |
+| 16    | Remove obsolete file-based caches after verification              | No remaining code depends on them                    |
+| 17    | Remove compatibility wrappers when safe                           | No known callers use the old URLs                    |
+
+## My recommendation
+
+**Do not begin by changing all ten PHP files simultaneously.**
+
+The safest approach is to establish the database interface first, then migrate the Millennium Timezone and Probe engines, followed by the gold calculator, oscillator and main Palmier calculator.
+
+The two CSV scripts and the WordPress points helper should remain untouched unless subsequent testing identifies a genuine dependency.
+
+The next concrete task is to create the four database tables and the shared database helper, then test that helper independently. Once that foundation is working, the relocation and integration changes can proceed in controlled stages without unnecessarily disrupting the existing Palmier Currency calculations.
