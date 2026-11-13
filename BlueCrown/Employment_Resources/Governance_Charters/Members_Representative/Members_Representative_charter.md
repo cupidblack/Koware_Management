@@ -1,52 +1,51 @@
 ---
 document_id: KOWARE-GOV-MEMBERS_REPRESENTATIVE
 document_type: governance-charter
+document_version: 0.4.0
+document_status: DRAFT_AWAITING_HUMAN_REVIEW
 source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
 source_chart_line: 3
-source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
-document_version: 0.2.0
-document_status: DRAFT_AWAITING_HUMAN_REVIEW
 approval_required: true
+review_date: '2026-11-13'
 ---
 # Members Representative — Draft Governance Charter
 
-## Purpose and status
-A representative selected through client and member nominations and votes. This charter is a draft framework only. It does not amend the constitution, bylaws, shareholder rights, member rights or applicable law.
+**Purpose.** Provide a traceable channel for clients and members to nominate, elect and communicate an independent representative within the rights conferred by effective governing instruments.
 
-## Composition and appointment
-The authoritative composition, eligibility, appointment/selection process, tenure, quorum and removal provisions must be confirmed against approved governing instruments. No additional members or powers are created here.
+**Authority warning.** This is not an appointment, amended constitution, member election rule, statutory filing, authorised committee resolution or employee job description. Refer to valid corporate documents, applicable law and qualified advisers before adoption.
 
-## Mandate
-- Act only within the lawful remit conferred by the constitution, bylaws and valid resolutions.
-- Consider matters within that remit and record decisions, dissent and declared conflicts.
-- Monitor implementation of approved decisions and request reports from accountable officers.
-- Protect organisational purpose, assets, reputation and lawful interests.
-- Ensure decisions are documented, proportionate and consistent with applicable requirements.
+## Core mandate and required records
 
-## Meetings and records
-Maintain an approved meeting calendar, notice procedure, agenda, quorum record, minutes, resolutions and action register. Retain records securely with access limited to authorised persons.
+- Maintain transparent, accessible nomination and voting guidance only after authorised election rules are adopted.
+- Receive member submissions, verify consent and aggregate concerns fairly without promising confidential access beyond the approved scheme.
+- Declare conflicts and communicate relevant interests to authorised governance forums without misrepresenting a personal preference as a member mandate.
+- Publish neutral activity summaries and explain how unresolved concerns are escalated.
+- Maintain accurate election, correspondence, decision and complaint records under independent custody rules.
 
-## Authority limitations
-This draft creates no statutory powers, fiduciary appointment, signing authority, employment relationship or financial approval limit. Powers must be established by governing instruments and formally approved delegations. The Board, Governing Committee, shareholders and members retain distinct rights and duties as defined by law and constitution.
+## Representation, membership and meetings
 
-## Conflicts and confidentiality
-Members must declare actual, potential or perceived conflicts, protect confidential information, act honestly and in good faith, and follow applicable recusal and conduct procedures.
+Eligibility, composition, appointment or election process, tenure, chairing, voting rights, quorum, recusals, meeting frequency and removal **must be established through effective governing instruments and documented decisions**, not inferred from role labels. Verify and retain those authoritative documents through Corporate Secretary or the lawful records custodian. Record each meeting's authorised agenda, attendance, declared interests, minutes, decision owners and evidence of distribution to eligible recipients.
 
-## Reporting and accountability
-Report activities, decisions and material risks to the authority specified in governing instruments. A representative role must communicate member interests fairly and must not claim a mandate beyond the selection process.
+## Delegations, reserved matters and legal limits
 
-## Approval
-Review against the current constitution, bylaws, shareholder/member arrangements and Ghanaian legal advice before adoption.
+The representative does not thereby become a director, shareholder proxy, voting delegate or employee. Eligibility, electorate, term, removal, appeals and voting rights require separate valid rules.
 
-| Review/approval | Name/signature | Date |
+No authority to bind Koware, spend, enter agreements, hire, discipline, waive rights, handle protected data, or appoint agents arises simply from this draft. Delegation must be explicit, current and auditable. Independent legal and finance review is required for material commitments where applicable.
+
+## Accountability and integrity
+
+Answer to the authorised member constituency through the agreed selection and accountability process, while preserving the independent rights of individual members. Declare conflicts in advance, recuse where required, protect personal information, avoid discrimination, preserve records of dissent and direct serious safeguarding or fraud concerns to competent authorities. Protect anonymous and whistleblowing channels where legally appropriate; no promise of unrestricted secrecy is implied.
+
+## Performance evidence and review
+
+Evaluate timely, lawful meeting process, completeness of resolutions and follow-up, closure of material audit and risk actions and fairness of constituent participation where relevant. The organisation must adopt any numerical targets and reporting cycles through authorised governance rules.
+
+## Source, status and revision
+
+- **Chart:** [Organisational source](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt), one-based line **3**.
+- **Prior branch source reference:** `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8` (recorded by prior collection, reverify for merge).
+- **Status:** Draft, not in force. Review and approval belong to the lawful corporate governance process with Ghanaian legal advice where needed; no invented signatures or effective date.
+
+| Version | Date | Change |
 |---|---|---|
-| Governance/legal review | | |
-| Authorised adoption | | |
-
-
-## Source traceability and control
-
-- Source chart line: 3 (1-based), source blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`.
-- This charter is a draft governance reference, not an appointment or grant of statutory, fiduciary, financial or signing powers.
-- Composition, appointment, voting, quorum, tenure, reserved matters and authority must be reconciled with the constitution, bylaws, company records and applicable law.
-- Revision 0.2.0 (2026-11-13): added source-line provenance and reinforced the approval boundary.
+| 0.4.0 | 2026-11-13 | Differentiated mandate, governance controls, safe decision rights and source traceability. |

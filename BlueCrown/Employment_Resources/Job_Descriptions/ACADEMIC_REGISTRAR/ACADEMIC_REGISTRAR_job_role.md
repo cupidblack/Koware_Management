@@ -1,82 +1,118 @@
 ---
 document_id: KOWARE-JD-ACADEMIC_REGISTRAR
-position_title: "Academic Registrar"
-department: "Academic Administration"
+position_title: Academic Registrar
+functional_area: Academic programmes
 document_type: job-description
-document_version: 0.2.0
+document_version: 0.4.0
 document_status: DRAFT_AWAITING_HUMAN_REVIEW
-reports_to: "Director of Academic Programs"
+source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
 source_chart_branch: main
 source_chart_line: 48
-source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
-direct_reports:
-  - "None shown in source chart"
-source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
+source_chart_parent_line: 47
+source_chart_heading: Academic Registrar
+reports_to: Director of Academic Programs
+reports_to_role_id: KOWARE-JD-DIRECTOR_OF_ACADEMIC_PROGRAMS
+direct_reports: []
 approval_required: true
+review_date: '2026-11-13'
+aliases_included: false
 ---
-# Academic Registrar
+# Academic Registrar — Job Description
 
-## Position purpose
-Maintain authoritative academic administration and learner records from enquiry and registration through progression and completion.
+**Koware Group / BlueCrown · Employment Resources · Draft v0.4.0 · 2026-11-13**
 
-## Placement and reporting
-**Department:** Academic Administration  
-**Reports to:** Director of Academic Programs  
-**Direct reports:** As explicitly identified beneath this role in the source chart; otherwise none specified.
+> **Draft status and source integrity:** This defines the role, not a named person, employment contract or authorised appointment. Chart aliases, names and the 20-day check sequence are planning metadata only; neither verifies an incumbent nor establishes working hours. All powers, employment terms, legal requirements and operating policies require the relevant authorised instrument.
 
-## Responsibilities
-1. Maintain admissions, enrolment and progression records.
-2. Coordinate calendars and examinations.
-3. Issue verified transcripts and certificates under controls.
-4. Maintain academic regulations and secure records.
-5. Prepare enrolment and completion reports.
+## 01 · Role purpose and expected contribution
 
-## Deliverables and performance
-- Approved plans and schedules delivered to agreed milestones.
-- Accurate records, reports and handovers maintained.
-- Quality, safety, privacy and compliance requirements met.
-- Risks, exceptions and corrective actions tracked to closure.
-- Measurable targets set by the supervisor after scope and resources are confirmed.
+Preserve the accuracy, security and procedural integrity of admissions, enrolment, academic progression and credential records.
 
-## Qualifications and experience
-Education, administration or records qualification; accuracy and confidentiality. Verify legally required credentials and professional standing before assigning regulated duties. Aliases in the chart do not prove qualifications or appointments.
+The principal contribution is to deliver reliable, evidence-backed work in **Academic programmes**, protect the interests of people affected by that work and support the next authorised decision-maker with an accurate handover.
 
-## Authority and limitations
-No implied financial approval, signing, hiring, contracting or policy-making authority. Routine decisions must remain within written delegation. Escalate material cost, schedule, quality, legal, safety, privacy and safeguarding concerns.
+## 02 · Position placement, accountability and interfaces
 
-## Competencies and professional conduct
-Leadership appropriate to role level; planning; communication; collaboration; integrity; sound judgement; recordkeeping; confidentiality; conflict disclosure and respectful conduct.
+- **Chart reporting line:** Director of Academic Programs (source line 47).
+- **Direct reports shown in chart:** No positions directly beneath this entry in the chart.
+- **Functional area:** Academic programmes.
+- **Working interfaces:** the charted supervisor, dependent service owners, Human & Employment Resources, finance or records custodians when relevant, and external parties only with the permissions required for the interaction.
+- **Reporting interpretation:** This is a position-description reporting edge inferred from source indentation, not a separate grant of managerial or financial authority.
 
-## Working conditions and development
-Hours, location, travel, benefits and contract conditions are set separately. Complete induction and role-specific training. Review performance against agreed objectives and evidence.
+## 03 · Specific duties and operational accountabilities
 
-| Approval | Name/signature | Date |
+- Maintain authorised student identity, enrolment and course registers.
+- Apply approved registration, withdrawal and transcript workflows consistently.
+- Verify assessment and graduation evidence against duly approved decisions.
+- Control corrections to student records with a traceable approval history.
+- Coordinate official notices and exam schedules with academic leaders.
+- Respond to student record requests according to privacy and identity checks.
+- Reconcile registration counts, status anomalies and retention deadlines.
+
+### Operating cadence
+
+- **Each assignment or service cycle:** check the authorising brief and current risk controls, complete the relevant duties above, and record decisions and exceptions using student information system, permissions register and controlled transcript procedures.
+- **Weekly or at a suitable operational interval:** reconcile outstanding items, confirm responsible owners and hand over incomplete actions with dates and supporting evidence.
+- **Monthly, milestone or event-driven:** provide a concise supervisor-ready review of the outputs below, with performance evidence, lessons and unresolved material risks. The actual reporting cadence must be authorised for the service.
+
+## 04 · Required deliverables and record controls
+
+- Accurate enrolment and progression registers.
+- Authenticated transcript and status workflows.
+- Correction audit trail and academic reporting.
+
+Each deliverable must identify its responsible owner, period or case, source evidence, revision or approval status, access classification and next action. Maintain retention and transfer practices under approved rules, including a clear correction history where records can affect legal, financial, academic, safety or personal rights.
+
+## 05 · Responsibility, decision rights and boundaries
+
+- **Responsible for:** the role-specific work and deliverables in §§03–04, performing documented checks and alerting the relevant supervisor to problems.
+- **Routine discretion:** sequence assigned tasks and propose solutions only within competence, safety procedures and a written delegation where one exists.
+- **Specific limits:** Cannot confer degrees, approve grade changes or release restricted records without designated academic authority.
+- **Approval reserved elsewhere:** expenditure, appointments, staff discipline, public representations, binding contracts, sensitive-data access, regulated practice and exceptions to policy are not conferred by this description.
+- **Escalation:** promptly raise any out-of-scope request, apparent fraud, material compliance issue, conflict of interest, safeguarding concern, serious incident or suspected privacy/security breach through the designated authorised channel. Preserve evidence without conducting an unauthorised investigation.
+
+## 06 · Qualifications, professional capabilities and selection
+
+Academic administration, records governance, data accuracy and familiarity with student information systems.
+
+Selection should assess role-relevant work samples, demonstrable judgement, communication, accurate recordkeeping, ethical conduct and ability to follow safe and lawful procedures. Equivalent experience should be considered where proportionate and lawful. Verify licences, certifications and safeguarding clearances **only if actually required** for assigned functions. No claimed alias is an appointment, qualification or employment history.
+
+## 07 · Performance indicators and review evidence
+
+| Proposed indicator | Evidence and review approach |
+|---|---|
+| Student record accuracy and correction rate | Compare dated records against the approved work brief or acceptance standard, examine exceptions and review monthly or per service cycle. |
+| Processing timeliness for approved requests | Sample the relevant completed deliverables, record corrections and confirm independently resolved exceptions. |
+| Unauthorised access or missing approval incidents | Examine trend, consent/compliance records and follow-up to determine whether corrective actions were effective. |
+
+**No numerical target is implied.** The supervisor and Human & Employment Resources must agree measure definitions, denominators, review period and realistic thresholds after staffing, resources and initial baselines are confirmed. Safety, fair treatment and record integrity must not be sacrificed for speed.
+
+## 08 · Risks, safeguarding, professional conduct and assurance
+
+- **Principal role-specific risks:** False credentials, identity mismatch, privacy breaches and records tampering.
+- **Controls:** follow authorised hazard assessments, privacy and confidentiality rules, consent and accessibility procedures, anti-harassment requirements and appropriate incident escalation.
+- **Segregation of duties:** do not self-approve high-risk transactions, assessments or exceptions where independent review is required. Retain decision provenance and decline instructions that would conceal a material risk.
+- **Safe delivery:** use appropriate training, equipment and personal protective measures. Halt or report work that presents an imminent safety concern under applicable emergency procedures; seek qualified assistance for regulated or emergency activities.
+
+## 09 · Systems, tools and information stewardship
+
+Student information system, permissions register and controlled transcript procedures.
+
+Request only role-appropriate access. Use approved organisation-controlled systems, recorded custody and auditable storage. Do not move private, commercially sensitive, student, patient or employment information to unapproved devices or messaging channels.
+
+## 10 · Learning, handover and employment conditions
+
+- **Induction focus:** core processes described in §03, specialist tools in §09 and the occupational risks in §08.
+- **Continuing development:** refresh technical methods, quality expectations and relevant professional requirements; incorporate independently validated corrective actions into work instructions.
+- **Handover:** maintain enough dated evidence for a trained successor to continue work without relying on informal personal knowledge.
+- **Employment conditions:** duties and seniority here do not define pay, benefits, grade, weekly hours, attendance days, work location, contractor/employee status or travel entitlements. Set these in the applicable approved appointment or service contract and law. No role requires uninterrupted work simply because accommodation or equipment is provided.
+
+## 11 · Governance, approval and revision control
+
+**Prepared as an operational draft; NOT adopted or effective.** Review sequence: chart owner → immediate supervisor / function specialist → Human & Employment Resources → legal, audit, finance, safety or academic specialist as needed → authorised approving office. Acknowledgement of receipt is not a substitute for a contract or delegated authority. Approval names, dates and signatures are not fabricated.
+
+- **Source:** [Koware organisational chart](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt), line **48** (1-based).
+- **Related chart lines:** parent **47**; direct reports **none**.
+- **Source snapshot:** Earlier branch cited blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`. The source was independently checked against the live chart on 2026-11-13; recheck the chart at merge/adoption. The earlier-branch SHA is a historical reference, not a claim about the current source revision.
+
+| Version | Date | Material change |
 |---|---|---|
-| Departmental review | | |
-| HR review | | |
-| Authorised approval | | |
-| Employee acknowledgement (receipt only) | | |
-
-**Status:** Draft 0.1.0 — awaiting human review.
-
-## Role-specific performance indicators
-
-- Record accuracy and correction rate
-- registration/transcript turnaround
-- deadline and privacy compliance.
-Targets require workload, resource and baseline confirmation.
-
-## Position-specific authority boundary
-
-Do not alter grades, admit outside criteria, issue unapproved awards or disclose student records unlawfully.
-
-## Source traceability
-
-- Source chart line: 48; reports to: Director of Academic Programs; direct reports: None shown.
-- Source aliases are planning references only, not identity, qualification or appointment evidence.
-
-## Revision history
-
-| Version | Date | Change |
-|---|---|---|
-| 0.2.0 | 2026-11-13 | Added source traceability, reporting metadata, role-specific duties, KPIs and authority boundary |
+| 0.4.0 | 2026-11-13 | Full role-specific refactor with corrected line mapping, duties, outputs, authority, performance and source controls. |

@@ -1,72 +1,120 @@
 ---
 document_id: KOWARE-JD-LIAISON_ASSISTANT
-position_title: "Liaison Assistant"
-department: "Corporate Management — Liaison Support"
+position_title: Liaison Assistant
+functional_area: Corporate management and liaison
 document_type: job-description
-document_version: 0.3.0
+document_version: 0.4.0
 document_status: DRAFT_AWAITING_HUMAN_REVIEW
-reports_to: "Corporate Manager"
+source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
 source_chart_branch: main
 source_chart_line: 14
-source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
-direct_reports:
-  - "None shown in source chart"
-source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
+source_chart_parent_line: 12
+source_chart_heading: Liaison Assistant
+reports_to: Corporate Manager
+reports_to_role_id: KOWARE-JD-CORPORATE_MANAGER
+direct_reports: []
 approval_required: true
+review_date: '2026-11-13'
+aliases_included: false
 ---
-# Liaison Assistant
+# Liaison Assistant — Job Description
 
-## 01 · Position purpose
-Provide reliable administrative and coordination support for the Corporate Manager's liaison work. Help ensure that enquiries, meetings, correspondence and follow-up actions are recorded and routed accurately, while leaving relationship commitments and decisions with the authorised role-holder.
+**Koware Group / BlueCrown · Employment Resources · Draft v0.4.0 · 2026-11-13**
 
-## 02 · Organisational placement
-- **Functional area:** Corporate Management — Liaison Support.
-- **Reports to:** Corporate Manager.
-- **Charted direct reports:** None shown.
-- **Chart interpretation:** Source line 14 is indented at the same level as Liaison Officer (line 13), directly beneath Corporate Manager (line 12). The assistant is therefore a peer of the Liaison Officer in the chart, not a charted direct report of that officer. Work may be coordinated with the Liaison Officer when assigned.
-- **Interfaces:** Corporate Manager, Liaison Officer, Corporate Administrator, Department Secretary, relevant teams and contacts specifically authorised for an engagement.
+> **Draft status and source integrity:** This defines the role, not a named person, employment contract or authorised appointment. Chart aliases, names and the 20-day check sequence are planning metadata only; neither verifies an incumbent nor establishes working hours. All powers, employment terms, legal requirements and operating policies require the relevant authorised instrument.
 
-## 03 · Core accountabilities
-1. Maintain assigned liaison calendars, contact and engagement records, action logs and follow-up reminders using approved systems and access controls.
-2. Prepare meeting agendas, briefing packs, attendance lists, correspondence drafts and routine acknowledgements for review; check names, dates, attachments and version accuracy before submission.
-3. Coordinate appointments, meeting access, logistics and practical follow-up; promptly advise the Corporate Manager of conflicts, missed commitments or requests requiring a decision.
-4. Receive and log enquiries, acknowledge them only within approved wording, route technical, legal, financial, employment or sensitive matters to the authorised owner, and monitor the referral to closure.
-5. Capture decisions and assigned actions accurately, distribute records only to approved recipients, and maintain an orderly handover when coverage changes.
-6. Support respectful, accessible and culturally considerate engagement; identify communication barriers and request suitable arrangements through approved channels.
+## 01 · Role purpose and expected contribution
 
-## 04 · Deliverables and service standards
-- Current, access-controlled engagement records and assigned contact data.
-- Accurate meeting and correspondence materials, with review status clear and no unauthorised commitments.
-- Action and enquiry logs showing ownership, due dates where assigned, status and escalation.
-- Timely handovers and periodic status summaries to the Corporate Manager.
+Provide administrative, scheduling and accurate information support to the Corporate Manager's liaison work without replacing the Liaison Officer.
 
-Performance evidence may include record completeness, scheduling and document accuracy, timely routing, closure of assigned follow-ups, confidentiality compliance and service feedback. Numerical targets must be agreed only after workload, tools and baselines are confirmed.
+The principal contribution is to deliver reliable, evidence-backed work in **Corporate management and liaison**, protect the interests of people affected by that work and support the next authorised decision-maker with an accurate handover.
 
-## 05 · Authority, limits and escalation
-The role may perform routine coordination and administrative tasks within written procedures and specific delegation. It does not grant authority to negotiate or sign agreements, make public statements, promise outcomes, approve expenditure, appoint staff, give legal advice, disclose restricted information, or bind Koware Group. Obtain approval before sending substantive external communications. Escalate complaints, safeguarding concerns, suspected fraud, data incidents, threats, conflicts of interest, legal or regulatory questions, and any request outside delegated scope promptly through the approved route.
+## 02 · Position placement, accountability and interfaces
 
-## 06 · Requirements and competencies
-Demonstrated administrative, customer-service or coordination capability; clear written and spoken communication; accurate digital recordkeeping; calendar/document tools; discretion; prioritisation; tact; dependable follow-through; and willingness to learn approved systems. Equivalent practical experience may be considered. No degree or professional licence is implied; verify any credential required by a separately assigned regulated task.
+- **Chart reporting line:** Corporate Manager (source line 12).
+- **Direct reports shown in chart:** No positions directly beneath this entry in the chart.
+- **Functional area:** Corporate management and liaison.
+- **Working interfaces:** the charted supervisor, dependent service owners, Human & Employment Resources, finance or records custodians when relevant, and external parties only with the permissions required for the interaction.
+- **Reporting interpretation:** This is a position-description reporting edge inferred from source indentation, not a separate grant of managerial or financial authority.
 
-## 07 · Conduct, privacy and safety
-Use personal and organisational information only for an authorised purpose and on a need-to-know basis. Follow records-retention, privacy, cybersecurity, safeguarding, accessibility, respectful-workplace and site-safety rules. Report hazards, incidents, inappropriate contact and suspected information loss promptly. Declare actual or perceived conflicts and do not use liaison contacts for personal purposes.
+**Peer distinction:** Liaison Officer and this Liaison Assistant are both indented directly beneath Corporate Manager. This post is not automatically supervised by Liaison Officer. The separate Liaison Personnel position reports through Cooperative Intern at chart line 17.
 
-## 08 · Review and working conditions
-Complete induction and role-specific systems, privacy, safeguarding and safety training before relevant tasks. Work location, schedule, travel, classification, pay, benefits and contract terms are determined separately by approved instruments. Review performance using agreed objectives and documented evidence with the Corporate Manager and Human & Employment Resources.
+## 03 · Specific duties and operational accountabilities
 
-## 09 · Approval
-| Review | Name/signature | Date |
+- Log incoming liaison correspondence with source, owner and sensitivity tags.
+- Draft meeting invitations, calendar changes and routine acknowledgements for approval.
+- Verify contact details, attachments and meeting arrangements.
+- Track action items, follow-up reminders and unresolved enquiries.
+- Prepare attendance and documentation packs for assigned engagements.
+- Arrange accessible visitor logistics and escalate unexpected requests.
+- Make organised end-of-day handovers to the Corporate Manager or authorised officer.
+
+### Operating cadence
+
+- **Each assignment or service cycle:** check the authorising brief and current risk controls, complete the relevant duties above, and record decisions and exceptions using calendars, contact register, meeting templates and internal task tracker.
+- **Weekly or at a suitable operational interval:** reconcile outstanding items, confirm responsible owners and hand over incomplete actions with dates and supporting evidence.
+- **Monthly, milestone or event-driven:** provide a concise supervisor-ready review of the outputs below, with performance evidence, lessons and unresolved material risks. The actual reporting cadence must be authorised for the service.
+
+## 04 · Required deliverables and record controls
+
+- Clean calendars and appointment packs.
+- Updated action and enquiry registers.
+- Accurate handover and draft correspondence.
+
+Each deliverable must identify its responsible owner, period or case, source evidence, revision or approval status, access classification and next action. Maintain retention and transfer practices under approved rules, including a clear correction history where records can affect legal, financial, academic, safety or personal rights.
+
+## 05 · Responsibility, decision rights and boundaries
+
+- **Responsible for:** the role-specific work and deliverables in §§03–04, performing documented checks and alerting the relevant supervisor to problems.
+- **Routine discretion:** sequence assigned tasks and propose solutions only within competence, safety procedures and a written delegation where one exists.
+- **Specific limits:** Reports directly to Corporate Manager as a peer of Liaison Officer, not subordinate to that officer unless a separate written task delegation applies. No contractual or public-commitment authority.
+- **Approval reserved elsewhere:** expenditure, appointments, staff discipline, public representations, binding contracts, sensitive-data access, regulated practice and exceptions to policy are not conferred by this description.
+- **Escalation:** promptly raise any out-of-scope request, apparent fraud, material compliance issue, conflict of interest, safeguarding concern, serious incident or suspected privacy/security breach through the designated authorised channel. Preserve evidence without conducting an unauthorised investigation.
+
+## 06 · Qualifications, professional capabilities and selection
+
+Clerical, scheduling and customer-service capability, strong confidentiality and digital office-tool competence.
+
+Selection should assess role-relevant work samples, demonstrable judgement, communication, accurate recordkeeping, ethical conduct and ability to follow safe and lawful procedures. Equivalent experience should be considered where proportionate and lawful. Verify licences, certifications and safeguarding clearances **only if actually required** for assigned functions. No claimed alias is an appointment, qualification or employment history.
+
+## 07 · Performance indicators and review evidence
+
+| Proposed indicator | Evidence and review approach |
+|---|---|
+| Appointment accuracy and attendance confirmations | Compare dated records against the approved work brief or acceptance standard, examine exceptions and review monthly or per service cycle. |
+| Routing timeliness of enquiries | Sample the relevant completed deliverables, record corrections and confirm independently resolved exceptions. |
+| Completeness of follow-up records | Examine trend, consent/compliance records and follow-up to determine whether corrective actions were effective. |
+
+**No numerical target is implied.** The supervisor and Human & Employment Resources must agree measure definitions, denominators, review period and realistic thresholds after staffing, resources and initial baselines are confirmed. Safety, fair treatment and record integrity must not be sacrificed for speed.
+
+## 08 · Risks, safeguarding, professional conduct and assurance
+
+- **Principal role-specific risks:** Private contact disclosure, calendar conflicts and unauthorised promises.
+- **Controls:** follow authorised hazard assessments, privacy and confidentiality rules, consent and accessibility procedures, anti-harassment requirements and appropriate incident escalation.
+- **Segregation of duties:** do not self-approve high-risk transactions, assessments or exceptions where independent review is required. Retain decision provenance and decline instructions that would conceal a material risk.
+- **Safe delivery:** use appropriate training, equipment and personal protective measures. Halt or report work that presents an imminent safety concern under applicable emergency procedures; seek qualified assistance for regulated or emergency activities.
+
+## 09 · Systems, tools and information stewardship
+
+Calendars, contact register, meeting templates and internal task tracker.
+
+Request only role-appropriate access. Use approved organisation-controlled systems, recorded custody and auditable storage. Do not move private, commercially sensitive, student, patient or employment information to unapproved devices or messaging channels.
+
+## 10 · Learning, handover and employment conditions
+
+- **Induction focus:** core processes described in §03, specialist tools in §09 and the occupational risks in §08.
+- **Continuing development:** refresh technical methods, quality expectations and relevant professional requirements; incorporate independently validated corrective actions into work instructions.
+- **Handover:** maintain enough dated evidence for a trained successor to continue work without relying on informal personal knowledge.
+- **Employment conditions:** duties and seniority here do not define pay, benefits, grade, weekly hours, attendance days, work location, contractor/employee status or travel entitlements. Set these in the applicable approved appointment or service contract and law. No role requires uninterrupted work simply because accommodation or equipment is provided.
+
+## 11 · Governance, approval and revision control
+
+**Prepared as an operational draft; NOT adopted or effective.** Review sequence: chart owner → immediate supervisor / function specialist → Human & Employment Resources → legal, audit, finance, safety or academic specialist as needed → authorised approving office. Acknowledgement of receipt is not a substitute for a contract or delegated authority. Approval names, dates and signatures are not fabricated.
+
+- **Source:** [Koware organisational chart](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt), line **14** (1-based).
+- **Related chart lines:** parent **12**; direct reports **none**.
+- **Source snapshot:** Earlier branch cited blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`. The source was independently checked against the live chart on 2026-11-13; recheck the chart at merge/adoption. The earlier-branch SHA is a historical reference, not a claim about the current source revision.
+
+| Version | Date | Material change |
 |---|---|---|
-| Corporate Manager / departmental review | | |
-| Human & Employment Resources review | | |
-| Specialist review, if applicable | | |
-| Authorised approval | | |
-| Employee acknowledgement (receipt only) | | |
-
-## Source traceability
-Source: `Organizational_Chart_Structure-Aliased_Checks.txt`, line 14, main blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`. The chart's alias is a planning reference only and is not evidence of identity, qualification, appointment or employment status.
-
-## Revision history
-| Version | Date | Change |
-|---|---|---|
-| 0.3.0 | 2026-11-13 | Corrected the reporting line from Liaison Officer to Corporate Manager per chart indentation; added role-specific accountabilities, outputs, authority limits, escalation and safeguards. |
+| 0.4.0 | 2026-11-13 | Full role-specific refactor with corrected line mapping, duties, outputs, authority, performance and source controls. |

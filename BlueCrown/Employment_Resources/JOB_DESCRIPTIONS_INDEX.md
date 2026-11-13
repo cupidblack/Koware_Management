@@ -1,104 +1,92 @@
-# Koware Group — Job Descriptions Index
+# Koware Group — Controlled Job Descriptions Index
 
-**Version:** 0.2.0  
-**Status:** Draft collection — awaiting human review; not an approved employment instrument  
-**Source:** [Organizational_Chart_Structure-Aliased_Checks.txt](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt)  
-**Development branch:** `employment/job-descriptions-v0.1.0`
-**Authoritative source blob SHA:** `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`
-**Last refactored:** 2026-11-13
+**Collection:** v0.4.0 · **Date:** 2026-11-13 · **Status:** DRAFT_AWAITING_HUMAN_REVIEW
 
-## Document standard
+**Canonical location:** `BlueCrown/Employment_Resources/` on the **existing** `employment/job-descriptions-v0.1.0` development branch; **not** a second `BlueCrown/Employment_Resources/BlueCrown/Employment_Resources/` tree.
 
-- [Job Description Document Standard](./JOB_DESCRIPTION_DOCUMENT_STANDARD.md)
+The [organisational chart](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt) contains **67 chart entries**: **62 individual employment positions**, **three governance positions/bodies** requiring charters (Members Representative, Governing Committee, Board of Directors), and **two ownership constituencies** (Stakeholders, Shareholders). No staff appointments are inferred. Titles and reporting follow chart indentation except that the anomalous single-space offset on Stylists & Prep Coordinator requires owner confirmation.
 
-## Individual job descriptions
+## Governing collection controls
 
-- [Corporate Secretary](./Job_Descriptions/CORPORATE_SECRETARY/CORPORATE_SECRETARY_job_role.md)
-- [Department Secretary](./Job_Descriptions/DEPARTMENT_SECRETARY/DEPARTMENT_SECRETARY_job_role.md)
-- [Corporate Administrator](./Job_Descriptions/CORPORATE_ADMINISTRATOR/CORPORATE_ADMINISTRATOR_job_role.md)
-- [Administrative Auditor](./Job_Descriptions/ADMINISTRATIVE_AUDITOR/ADMINISTRATIVE_AUDITOR_job_role.md)
-- [Accounts & Finance Executive](./Job_Descriptions/ACCOUNTS_AND_FINANCE_EXECUTIVE/ACCOUNTS_AND_FINANCE_EXECUTIVE_job_role.md)
-- [Assets & Records Coordinator](./Job_Descriptions/ASSETS_AND_RECORDS_COORDINATOR/ASSETS_AND_RECORDS_COORDINATOR_job_role.md)
-- [Legal Journalist](./Job_Descriptions/LEGAL_JOURNALIST/LEGAL_JOURNALIST_job_role.md)
-- [Corporate Manager](./Job_Descriptions/CORPORATE_MANAGER/CORPORATE_MANAGER_job_role.md)
-- [Liaison Officer](./Job_Descriptions/LIAISON_OFFICER/LIAISON_OFFICER_job_role.md)
-- [Liaison Assistant](./Job_Descriptions/LIAISON_ASSISTANT/LIAISON_ASSISTANT_job_role.md)
-- [Cooperative Intern](./Job_Descriptions/COOPERATIVE_INTERN/COOPERATIVE_INTERN_job_role.md)
-- [Liaison Intern](./Job_Descriptions/LIAISON_INTERN/LIAISON_INTERN_job_role.md)
-- [Liaison Personnel](./Job_Descriptions/LIAISON_PERSONNEL/LIAISON_PERSONNEL_job_role.md)
-- [Creative & Design Director](./Job_Descriptions/CREATIVE_AND_DESIGN_DIRECTOR/CREATIVE_AND_DESIGN_DIRECTOR_job_role.md)
-- [Graphic Designer](./Job_Descriptions/GRAPHIC_DESIGNER/GRAPHIC_DESIGNER_job_role.md)
-- [Media Producer](./Job_Descriptions/MEDIA_PRODUCER/MEDIA_PRODUCER_job_role.md)
-- [Podcast Developer](./Job_Descriptions/PODCAST_DEVELOPER/PODCAST_DEVELOPER_job_role.md)
-- [Talent PR A&R Manager](./Job_Descriptions/TALENT_PR_AANDR_MANAGER/TALENT_PR_AANDR_MANAGER_job_role.md)
-- [Grooming Manager](./Job_Descriptions/GROOMING_MANAGER/GROOMING_MANAGER_job_role.md)
-- [Stylists & Prep Coordinator](./Job_Descriptions/STYLISTS_AND_PREP_COORDINATOR/STYLISTS_AND_PREP_COORDINATOR_job_role.md)
-- [Hairdressers](./Job_Descriptions/HAIRDRESSERS/HAIRDRESSERS_job_role.md)
-- [Makeup Artists](./Job_Descriptions/MAKEUP_ARTISTS/MAKEUP_ARTISTS_job_role.md)
-- [Barbers](./Job_Descriptions/BARBERS/BARBERS_job_role.md)
-- [Tailors](./Job_Descriptions/TAILORS/TAILORS_job_role.md)
-- [Nail Technicians](./Job_Descriptions/NAIL_TECHNICIANS/NAIL_TECHNICIANS_job_role.md)
-- [Enterprise Architect](./Job_Descriptions/ENTERPRISE_ARCHITECT/ENTERPRISE_ARCHITECT_job_role.md)
-- [Platform Developer](./Job_Descriptions/PLATFORM_DEVELOPER/PLATFORM_DEVELOPER_job_role.md)
-- [Lifestyle Cartographer](./Job_Descriptions/LIFESTYLE_CARTOGRAPHER/LIFESTYLE_CARTOGRAPHER_job_role.md)
-- [Director of Research & Development](./Job_Descriptions/DIRECTOR_OF_RESEARCH_AND_DEVELOPMENT/DIRECTOR_OF_RESEARCH_AND_DEVELOPMENT_job_role.md)
-- [R&D Lab Specialist](./Job_Descriptions/RANDD_LAB_SPECIALIST/RANDD_LAB_SPECIALIST_job_role.md)
-- [Liaison Technician](./Job_Descriptions/LIAISON_TECHNICIAN/LIAISON_TECHNICIAN_job_role.md)
-- [Human & Employment Resources Manager](./Job_Descriptions/HUMAN_AND_EMPLOYMENT_RESOURCES_MANAGER/HUMAN_AND_EMPLOYMENT_RESOURCES_MANAGER_job_role.md)
-- [Health & Safety Technician](./Job_Descriptions/HEALTH_AND_SAFETY_TECHNICIAN/HEALTH_AND_SAFETY_TECHNICIAN_job_role.md)
-- [Cooking Chef](./Job_Descriptions/COOKING_CHEF/COOKING_CHEF_job_role.md)
-- [Cleaning Technician](./Job_Descriptions/CLEANING_TECHNICIAN/CLEANING_TECHNICIAN_job_role.md)
-- [Maid](./Job_Descriptions/MAID/MAID_job_role.md)
-- [Janitor](./Job_Descriptions/JANITOR/JANITOR_job_role.md)
-- [Liaison General](./Job_Descriptions/LIAISON_GENERAL/LIAISON_GENERAL_job_role.md)
-- [Technical Support & Operations Manager](./Job_Descriptions/TECHNICAL_SUPPORT_AND_OPERATIONS_MANAGER/TECHNICAL_SUPPORT_AND_OPERATIONS_MANAGER_job_role.md)
-- [Student Affairs & Services Support](./Job_Descriptions/STUDENT_AFFAIRS_AND_SERVICES_SUPPORT/STUDENT_AFFAIRS_AND_SERVICES_SUPPORT_job_role.md)
-- [Recovery Community Coordinator](./Job_Descriptions/RECOVERY_COMMUNITY_COORDINATOR/RECOVERY_COMMUNITY_COORDINATOR_job_role.md)
-- [Concierge Liaison](./Job_Descriptions/CONCIERGE_LIAISON/CONCIERGE_LIAISON_job_role.md)
-- [Director of Academic Programs](./Job_Descriptions/DIRECTOR_OF_ACADEMIC_PROGRAMS/DIRECTOR_OF_ACADEMIC_PROGRAMS_job_role.md)
-- [Academic Registrar](./Job_Descriptions/ACADEMIC_REGISTRAR/ACADEMIC_REGISTRAR_job_role.md)
-- [Academic Partnerships & Outreach Officer](./Job_Descriptions/ACADEMIC_PARTNERSHIPS_AND_OUTREACH_OFFICER/ACADEMIC_PARTNERSHIPS_AND_OUTREACH_OFFICER_job_role.md)
-- [Faculty Coordinator](./Job_Descriptions/FACULTY_COORDINATOR/FACULTY_COORDINATOR_job_role.md)
-- [Liaison Tutor](./Job_Descriptions/LIAISON_TUTOR/LIAISON_TUTOR_job_role.md)
-- [Quality Assurance & Compliance Manager](./Job_Descriptions/QUALITY_ASSURANCE_AND_COMPLIANCE_MANAGER/QUALITY_ASSURANCE_AND_COMPLIANCE_MANAGER_job_role.md)
-- [Programme Manager](./Job_Descriptions/PROGRAMME_MANAGER/PROGRAMME_MANAGER_job_role.md)
-- [Director of Operations](./Job_Descriptions/DIRECTOR_OF_OPERATIONS/DIRECTOR_OF_OPERATIONS_job_role.md)
-- [Production Coordinator](./Job_Descriptions/PRODUCTION_COORDINATOR/PRODUCTION_COORDINATOR_job_role.md)
-- [Facility Manager](./Job_Descriptions/FACILITY_MANAGER/FACILITY_MANAGER_job_role.md)
-- [Facility Butler](./Job_Descriptions/FACILITY_BUTLER/FACILITY_BUTLER_job_role.md)
-- [Landscape Gardener](./Job_Descriptions/LANDSCAPE_GARDENER/LANDSCAPE_GARDENER_job_role.md)
-- [Public Relations & Press Coordinator](./Job_Descriptions/PUBLIC_RELATIONS_AND_PRESS_COORDINATOR/PUBLIC_RELATIONS_AND_PRESS_COORDINATOR_job_role.md)
-- [Marketing Manager](./Job_Descriptions/MARKETING_MANAGER/MARKETING_MANAGER_job_role.md)
-- [International Relations Coordinator](./Job_Descriptions/INTERNATIONAL_RELATIONS_COORDINATOR/INTERNATIONAL_RELATIONS_COORDINATOR_job_role.md)
-- [Global Partnerships Registrar](./Job_Descriptions/GLOBAL_PARTNERSHIPS_REGISTRAR/GLOBAL_PARTNERSHIPS_REGISTRAR_job_role.md)
-- [Global Partnerships Liaison](./Job_Descriptions/GLOBAL_PARTNERSHIPS_LIAISON/GLOBAL_PARTNERSHIPS_LIAISON_job_role.md)
-- [Events & Tours Coordinator](./Job_Descriptions/EVENTS_AND_TOURS_COORDINATOR/EVENTS_AND_TOURS_COORDINATOR_job_role.md)
-- [Community Outreach Officer](./Job_Descriptions/COMMUNITY_OUTREACH_OFFICER/COMMUNITY_OUTREACH_OFFICER_job_role.md)
-- [Booking Agent](./Job_Descriptions/BOOKING_AGENT/BOOKING_AGENT_job_role.md)
+- [Job Description Standard](./JOB_DESCRIPTION_DOCUMENT_STANDARD.md)
+- [Refactor and Source Audit](./JOB_DESCRIPTIONS_REFACTOR_AUDIT.md)
+- [Governance Chart Interpretations](./Governance_References/GOVERNANCE_STRUCTURE_SOURCE_NOTES.md)
 
-## Governance charters
-- [Governing Committee](./Governance_Charters/Governing_Committee/Governing_Committee_charter.md)
-- [Board of Directors](./Governance_Charters/Board_of_Directors/Board_of_Directors_charter.md)
-- [Members Representative](./Governance_Charters/Members_Representative/Members_Representative_charter.md)
+## Individual job descriptions — exact chart order
 
-## Interpretation and controls
+| # | Chart line | Position | Reports to | Role document |
+|---:|---:|---|---|---|
+| 1 | 5 | Corporate Secretary | Governing Committee | [Open](./Job_Descriptions/CORPORATE_SECRETARY/CORPORATE_SECRETARY_job_role.md) |
+| 2 | 6 | Department Secretary | Corporate Secretary | [Open](./Job_Descriptions/DEPARTMENT_SECRETARY/DEPARTMENT_SECRETARY_job_role.md) |
+| 3 | 7 | Corporate Administrator | Corporate Secretary | [Open](./Job_Descriptions/CORPORATE_ADMINISTRATOR/CORPORATE_ADMINISTRATOR_job_role.md) |
+| 4 | 8 | Administrative Auditor | Governing Committee | [Open](./Job_Descriptions/ADMINISTRATIVE_AUDITOR/ADMINISTRATIVE_AUDITOR_job_role.md) |
+| 5 | 9 | Accounts & Finance Executive | Administrative Auditor | [Open](./Job_Descriptions/ACCOUNTS_AND_FINANCE_EXECUTIVE/ACCOUNTS_AND_FINANCE_EXECUTIVE_job_role.md) |
+| 6 | 10 | Assets & Records Coordinator | Administrative Auditor | [Open](./Job_Descriptions/ASSETS_AND_RECORDS_COORDINATOR/ASSETS_AND_RECORDS_COORDINATOR_job_role.md) |
+| 7 | 11 | Legal Journalist (Law/Legislation vested Pastor/Theologian) | Governing Committee | [Open](./Job_Descriptions/LEGAL_JOURNALIST/LEGAL_JOURNALIST_job_role.md) |
+| 8 | 12 | Corporate Manager | Legal Journalist (Law/Legislation vested Pastor/Theologian) | [Open](./Job_Descriptions/CORPORATE_MANAGER/CORPORATE_MANAGER_job_role.md) |
+| 9 | 13 | Liaison Officer | Corporate Manager | [Open](./Job_Descriptions/LIAISON_OFFICER/LIAISON_OFFICER_job_role.md) |
+| 10 | 14 | Liaison Assistant — Corporate Manager office | Corporate Manager | [Open](./Job_Descriptions/LIAISON_ASSISTANT/LIAISON_ASSISTANT_job_role.md) |
+| 11 | 15 | Cooperative Intern | Legal Journalist (Law/Legislation vested Pastor/Theologian) | [Open](./Job_Descriptions/COOPERATIVE_INTERN/COOPERATIVE_INTERN_job_role.md) |
+| 12 | 16 | Liaison Intern | Cooperative Intern | [Open](./Job_Descriptions/LIAISON_INTERN/LIAISON_INTERN_job_role.md) |
+| 13 | 17 | Liaison Personnel | Cooperative Intern | [Open](./Job_Descriptions/LIAISON_PERSONNEL/LIAISON_PERSONNEL_job_role.md) |
+| 14 | 18 | Creative & Design Director | Governing Committee | [Open](./Job_Descriptions/CREATIVE_AND_DESIGN_DIRECTOR/CREATIVE_AND_DESIGN_DIRECTOR_job_role.md) |
+| 15 | 19 | Graphic Designer | Creative & Design Director | [Open](./Job_Descriptions/GRAPHIC_DESIGNER/GRAPHIC_DESIGNER_job_role.md) |
+| 16 | 20 | Media Producer | Creative & Design Director | [Open](./Job_Descriptions/MEDIA_PRODUCER/MEDIA_PRODUCER_job_role.md) |
+| 17 | 21 | Podcast Developer | Creative & Design Director | [Open](./Job_Descriptions/PODCAST_DEVELOPER/PODCAST_DEVELOPER_job_role.md) |
+| 18 | 22 | Talent PR A&R Manager | Governing Committee | [Open](./Job_Descriptions/TALENT_PR_AANDR_MANAGER/TALENT_PR_AANDR_MANAGER_job_role.md) |
+| 19 | 23 | Grooming Manager | Talent PR A&R Manager | [Open](./Job_Descriptions/GROOMING_MANAGER/GROOMING_MANAGER_job_role.md) |
+| 20 | 24 | Stylists & Prep Coordinator | Grooming Manager | [Open](./Job_Descriptions/STYLISTS_AND_PREP_COORDINATOR/STYLISTS_AND_PREP_COORDINATOR_job_role.md) |
+| 21 | 25 | Hairdressers | Stylists & Prep Coordinator | [Open](./Job_Descriptions/HAIRDRESSERS/HAIRDRESSERS_job_role.md) |
+| 22 | 26 | Makeup Artists | Stylists & Prep Coordinator | [Open](./Job_Descriptions/MAKEUP_ARTISTS/MAKEUP_ARTISTS_job_role.md) |
+| 23 | 27 | Barbers | Stylists & Prep Coordinator | [Open](./Job_Descriptions/BARBERS/BARBERS_job_role.md) |
+| 24 | 28 | Tailors | Stylists & Prep Coordinator | [Open](./Job_Descriptions/TAILORS/TAILORS_job_role.md) |
+| 25 | 29 | Nail Technicians | Stylists & Prep Coordinator | [Open](./Job_Descriptions/NAIL_TECHNICIANS/NAIL_TECHNICIANS_job_role.md) |
+| 26 | 30 | Enterprise Architect | Governing Committee | [Open](./Job_Descriptions/ENTERPRISE_ARCHITECT/ENTERPRISE_ARCHITECT_job_role.md) |
+| 27 | 31 | Platform Developer | Enterprise Architect | [Open](./Job_Descriptions/PLATFORM_DEVELOPER/PLATFORM_DEVELOPER_job_role.md) |
+| 28 | 32 | Lifestyle Cartographer | Enterprise Architect | [Open](./Job_Descriptions/LIFESTYLE_CARTOGRAPHER/LIFESTYLE_CARTOGRAPHER_job_role.md) |
+| 29 | 33 | Director of Research & Development | Governing Committee | [Open](./Job_Descriptions/DIRECTOR_OF_RESEARCH_AND_DEVELOPMENT/DIRECTOR_OF_RESEARCH_AND_DEVELOPMENT_job_role.md) |
+| 30 | 34 | R&D Lab Specialist | Director of Research & Development | [Open](./Job_Descriptions/RANDD_LAB_SPECIALIST/RANDD_LAB_SPECIALIST_job_role.md) |
+| 31 | 35 | Liaison Technician | Director of Research & Development | [Open](./Job_Descriptions/LIAISON_TECHNICIAN/LIAISON_TECHNICIAN_job_role.md) |
+| 32 | 36 | Human & Employment Resources Manager | Governing Committee | [Open](./Job_Descriptions/HUMAN_AND_EMPLOYMENT_RESOURCES_MANAGER/HUMAN_AND_EMPLOYMENT_RESOURCES_MANAGER_job_role.md) |
+| 33 | 37 | Health & Safety Technician | Human & Employment Resources Manager | [Open](./Job_Descriptions/HEALTH_AND_SAFETY_TECHNICIAN/HEALTH_AND_SAFETY_TECHNICIAN_job_role.md) |
+| 34 | 38 | Cooking Chef | Health & Safety Technician | [Open](./Job_Descriptions/COOKING_CHEF/COOKING_CHEF_job_role.md) |
+| 35 | 39 | Cleaning Technician | Health & Safety Technician | [Open](./Job_Descriptions/CLEANING_TECHNICIAN/CLEANING_TECHNICIAN_job_role.md) |
+| 36 | 40 | Maid | Cleaning Technician | [Open](./Job_Descriptions/MAID/MAID_job_role.md) |
+| 37 | 41 | Janitor | Cleaning Technician | [Open](./Job_Descriptions/JANITOR/JANITOR_job_role.md) |
+| 38 | 42 | Liaison General | Health & Safety Technician | [Open](./Job_Descriptions/LIAISON_GENERAL/LIAISON_GENERAL_job_role.md) |
+| 39 | 43 | Technical Support & Operations Manager | Human & Employment Resources Manager | [Open](./Job_Descriptions/TECHNICAL_SUPPORT_AND_OPERATIONS_MANAGER/TECHNICAL_SUPPORT_AND_OPERATIONS_MANAGER_job_role.md) |
+| 40 | 44 | Student Affairs & Services Support | Technical Support & Operations Manager | [Open](./Job_Descriptions/STUDENT_AFFAIRS_AND_SERVICES_SUPPORT/STUDENT_AFFAIRS_AND_SERVICES_SUPPORT_job_role.md) |
+| 41 | 45 | Recovery Community Coordinator | Technical Support & Operations Manager | [Open](./Job_Descriptions/RECOVERY_COMMUNITY_COORDINATOR/RECOVERY_COMMUNITY_COORDINATOR_job_role.md) |
+| 42 | 46 | Concierge Liaison | Technical Support & Operations Manager | [Open](./Job_Descriptions/CONCIERGE_LIAISON/CONCIERGE_LIAISON_job_role.md) |
+| 43 | 47 | Director of Academic Programs | Governing Committee | [Open](./Job_Descriptions/DIRECTOR_OF_ACADEMIC_PROGRAMS/DIRECTOR_OF_ACADEMIC_PROGRAMS_job_role.md) |
+| 44 | 48 | Academic Registrar | Director of Academic Programs | [Open](./Job_Descriptions/ACADEMIC_REGISTRAR/ACADEMIC_REGISTRAR_job_role.md) |
+| 45 | 49 | Academic Partnerships & Outreach Officer | Director of Academic Programs | [Open](./Job_Descriptions/ACADEMIC_PARTNERSHIPS_AND_OUTREACH_OFFICER/ACADEMIC_PARTNERSHIPS_AND_OUTREACH_OFFICER_job_role.md) |
+| 46 | 50 | Faculty Coordinator | Academic Partnerships & Outreach Officer | [Open](./Job_Descriptions/FACULTY_COORDINATOR/FACULTY_COORDINATOR_job_role.md) |
+| 47 | 51 | Liaison Tutor | Academic Partnerships & Outreach Officer | [Open](./Job_Descriptions/LIAISON_TUTOR/LIAISON_TUTOR_job_role.md) |
+| 48 | 52 | Quality Assurance & Compliance Manager | Director of Academic Programs | [Open](./Job_Descriptions/QUALITY_ASSURANCE_AND_COMPLIANCE_MANAGER/QUALITY_ASSURANCE_AND_COMPLIANCE_MANAGER_job_role.md) |
+| 49 | 53 | Programme Manager | Governing Committee | [Open](./Job_Descriptions/PROGRAMME_MANAGER/PROGRAMME_MANAGER_job_role.md) |
+| 50 | 54 | Director of Operations | Programme Manager | [Open](./Job_Descriptions/DIRECTOR_OF_OPERATIONS/DIRECTOR_OF_OPERATIONS_job_role.md) |
+| 51 | 55 | Production Coordinator | Programme Manager | [Open](./Job_Descriptions/PRODUCTION_COORDINATOR/PRODUCTION_COORDINATOR_job_role.md) |
+| 52 | 56 | Facility Manager | Governing Committee | [Open](./Job_Descriptions/FACILITY_MANAGER/FACILITY_MANAGER_job_role.md) |
+| 53 | 57 | Facility Butler | Facility Manager | [Open](./Job_Descriptions/FACILITY_BUTLER/FACILITY_BUTLER_job_role.md) |
+| 54 | 58 | Landscape Gardener | Facility Manager | [Open](./Job_Descriptions/LANDSCAPE_GARDENER/LANDSCAPE_GARDENER_job_role.md) |
+| 55 | 59 | Public Relations & Press Coordinator | Governing Committee | [Open](./Job_Descriptions/PUBLIC_RELATIONS_AND_PRESS_COORDINATOR/PUBLIC_RELATIONS_AND_PRESS_COORDINATOR_job_role.md) |
+| 56 | 60 | Marketing Manager | Governing Committee | [Open](./Job_Descriptions/MARKETING_MANAGER/MARKETING_MANAGER_job_role.md) |
+| 57 | 61 | International Relations Coordinator | Governing Committee | [Open](./Job_Descriptions/INTERNATIONAL_RELATIONS_COORDINATOR/INTERNATIONAL_RELATIONS_COORDINATOR_job_role.md) |
+| 58 | 62 | Global Partnerships Registrar | International Relations Coordinator | [Open](./Job_Descriptions/GLOBAL_PARTNERSHIPS_REGISTRAR/GLOBAL_PARTNERSHIPS_REGISTRAR_job_role.md) |
+| 59 | 63 | Global Partnerships Liaison | International Relations Coordinator | [Open](./Job_Descriptions/GLOBAL_PARTNERSHIPS_LIAISON/GLOBAL_PARTNERSHIPS_LIAISON_job_role.md) |
+| 60 | 64 | Events & Tours Coordinator | Governing Committee | [Open](./Job_Descriptions/EVENTS_AND_TOURS_COORDINATOR/EVENTS_AND_TOURS_COORDINATOR_job_role.md) |
+| 61 | 65 | Community Outreach Officer | Events & Tours Coordinator | [Open](./Job_Descriptions/COMMUNITY_OUTREACH_OFFICER/COMMUNITY_OUTREACH_OFFICER_job_role.md) |
+| 62 | 66 | Booking Agent | Events & Tours Coordinator | [Open](./Job_Descriptions/BOOKING_AGENT/BOOKING_AGENT_job_role.md) |
 
-- Collection version 0.2.0 adds exact source-line and reporting metadata to all 62 individual job descriptions, role-specific responsibilities and proposed KPI categories, and explicit position-specific authority boundaries.
-- The chart contains 62 individual positions on source lines 5–66. Stakeholders and shareholders are not employees; Members Representative, Governing Committee and Board of Directors are treated as governance roles.
-- The source chart identifies 62 individual positions. Each is represented by an individual role document.
-- Stakeholders and shareholders are not employment positions; their rights and obligations remain governed by approved constitutional and legal instruments.
-- Collective governance structures receive charters, not employee job descriptions.
-- Reporting relationships follow the hierarchy in the source chart. Direct-report fields are limited to roles shown beneath a position.
-- The chart does not establish salary, employment classification, work hours, benefits, location, approval limits, signing authority, statutory powers or minimum years of experience. Those items remain for formal approval.
-- Personal aliases are not proof of identity, qualifications, appointment or employment status.
-- Legal Journalist is scoped as research and policy coordination, not legal practice or regulated legal advice. Administrative Auditor is separated from accounting operations. Health and safety, recovery support and domestic roles include competence and referral boundaries.
+## Governance charters (not employee descriptions)
 
-## Approval checklist
-1. Verify titles and reporting lines against the latest approved chart.
-2. Confirm actual department mandates and operational workflows.
-3. Approve delegations, financial limits, signing powers and escalation routes separately.
-4. Review Ghanaian employment, tax, data protection, safety, safeguarding and professional licensing requirements.
-5. Validate qualifications and set measurable targets based on workload and resources.
-6. Obtain HR, departmental, governance and legal review before adoption or recruitment use.
+- [Members Representative — representative mandate](./Governance_Charters/Members_Representative/Members_Representative_charter.md)
+- [Governing Committee — governance charter](./Governance_Charters/Governing_Committee/Governing_Committee_charter.md)
+- [Board of Directors — governance charter](./Governance_Charters/Board_of_Directors/Board_of_Directors_charter.md)
 
-**Count:** 62 individual job descriptions; 3 governance charters; 1 index.
+## Migration note
+
+The source chart shows **Liaison Assistant** at line **14** (reports to Corporate Manager) and **Liaison Personnel** at line **17** (reports to Cooperative Intern). The earlier cross-platform guidance conflicted on the second title; this package follows the verified live chart and **retains both existing distinct folders and filenames**. No Liaison Personnel deletion or new cooperative-assistant variant is required.
+
+**Do not merge as authoritative employment policy until authorised human review.** Role records deliberately omit unverified personal aliases and any invented salary, workdays, credentials, signatures or delegated powers.

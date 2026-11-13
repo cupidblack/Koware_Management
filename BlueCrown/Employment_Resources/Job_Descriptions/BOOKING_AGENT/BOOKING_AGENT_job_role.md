@@ -1,85 +1,118 @@
 ---
 document_id: KOWARE-JD-BOOKING_AGENT
-position_title: "Booking Agent"
-department: "Bookings & Reservations"
+position_title: Booking Agent
+functional_area: Events, tours and community engagement
 document_type: job-description
-document_version: 0.2.0
+document_version: 0.4.0
 document_status: DRAFT_AWAITING_HUMAN_REVIEW
-reports_to: "Events & Tours Coordinator"
+source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
 source_chart_branch: main
 source_chart_line: 66
-source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
-direct_reports:
-  - "None shown in source chart"
-source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
+source_chart_parent_line: 64
+source_chart_heading: Booking Agent
+reports_to: Events & Tours Coordinator
+reports_to_role_id: KOWARE-JD-EVENTS_AND_TOURS_COORDINATOR
+direct_reports: []
 approval_required: true
+review_date: '2026-11-13'
+aliases_included: false
 ---
-# Booking Agent
+# Booking Agent — Job Description
 
-## Position purpose
-Administer approved bookings and reservations accurately, transparently and with clear customer communication.
+**Koware Group / BlueCrown · Employment Resources · Draft v0.4.0 · 2026-11-13**
 
-## Reporting
-**Department:** Bookings & Reservations  
-**Reports to:** Events & Tours Coordinator  
-**Direct reports:** As explicitly shown beneath the position in the source chart; otherwise none specified.
+> **Draft status and source integrity:** This defines the role, not a named person, employment contract or authorised appointment. Chart aliases, names and the 20-day check sequence are planning metadata only; neither verifies an incumbent nor establishes working hours. All powers, employment terms, legal requirements and operating policies require the relevant authorised instrument.
 
-## Key responsibilities
-- Receive enquiries and capture dates, capacity and service requirements
-- verify availability and approved prices before confirmation
-- issue booking references and manage changes/cancellations
-- process deposits/refunds only through authorised finance procedures
-- maintain booking, no-show and complaint records.
+## 01 · Role purpose and expected contribution
 
-## Deliverables and performance measures
-- Accurate and timely completion of approved work plans and service commitments.
-- Complete, secure records and clear handovers.
-- Stakeholder/customer feedback and issue resolution tracked.
-- Compliance with applicable policies, safety, privacy and safeguarding requirements.
-- Supervisor-agreed measurable targets based on actual workload and resources.
+Manage accurate reservations, capacity and service confirmations for approved tours and events without taking unapproved financial commitments.
 
-## Qualifications and experience
-Customer service/reservations experience; digital recordkeeping. Any required professional credential or licence must be verified before relevant duties are assigned. Chart aliases are not credential evidence.
+The principal contribution is to deliver reliable, evidence-backed work in **Events, tours and community engagement**, protect the interests of people affected by that work and support the next authorised decision-maker with an accurate handover.
 
-## Authority and boundaries
-No implied authority to commit funds, sign agreements, hire staff, alter policy or make unapproved public commitments. Operate within written delegation and escalate significant risks, conflicts, complaints and incidents.
+## 02 · Position placement, accountability and interfaces
 
-## Competencies and conduct
-Communication; organisation; service orientation; integrity; teamwork; judgement; accurate recordkeeping; confidentiality; respect for consent and cultural differences.
+- **Chart reporting line:** Events & Tours Coordinator (source line 64).
+- **Direct reports shown in chart:** No positions directly beneath this entry in the chart.
+- **Functional area:** Events, tours and community engagement.
+- **Working interfaces:** the charted supervisor, dependent service owners, Human & Employment Resources, finance or records custodians when relevant, and external parties only with the permissions required for the interaction.
+- **Reporting interpretation:** This is a position-description reporting edge inferred from source indentation, not a separate grant of managerial or financial authority.
 
-## Safety, privacy and employment conditions
-Follow site-specific safety and incident procedures and protect personal and commercial information. Hours, location, travel, benefits and other terms are governed by approved contract and policy.
+## 03 · Specific duties and operational accountabilities
 
-## Review and approval
-Performance is reviewed against agreed outcomes, quality and conduct. Induction and role-specific training must be completed before independent duties.
+- Receive and verify booking requests against published capacity and eligibility.
+- Explain approved price, cancellation, accessibility and service conditions accurately.
+- Enter reservations, changes and cancellations with audit trail.
+- Coordinate availability, itineraries and special requests with event organisers.
+- Route payments and refunds only through approved financial systems.
+- Issue authorised confirmation details and reminders.
+- Reconcile booking counts and investigate duplicate or unfulfilled reservations.
 
-| Approval | Name/signature | Date |
+### Operating cadence
+
+- **Each assignment or service cycle:** check the authorising brief and current risk controls, complete the relevant duties above, and record decisions and exceptions using reservation system, event capacity grid, approved payments portal and confirmation templates.
+- **Weekly or at a suitable operational interval:** reconcile outstanding items, confirm responsible owners and hand over incomplete actions with dates and supporting evidence.
+- **Monthly, milestone or event-driven:** provide a concise supervisor-ready review of the outputs below, with performance evidence, lessons and unresolved material risks. The actual reporting cadence must be authorised for the service.
+
+## 04 · Required deliverables and record controls
+
+- Accurate booking ledger and guest confirmations.
+- Capacity and cancellation reconciliation.
+- Weekly exception and no-show report.
+
+Each deliverable must identify its responsible owner, period or case, source evidence, revision or approval status, access classification and next action. Maintain retention and transfer practices under approved rules, including a clear correction history where records can affect legal, financial, academic, safety or personal rights.
+
+## 05 · Responsibility, decision rights and boundaries
+
+- **Responsible for:** the role-specific work and deliverables in §§03–04, performing documented checks and alerting the relevant supervisor to problems.
+- **Routine discretion:** sequence assigned tasks and propose solutions only within competence, safety procedures and a written delegation where one exists.
+- **Specific limits:** Cannot independently change refund policies, accept off-system funds, oversell capacity or guarantee unapproved travel services.
+- **Approval reserved elsewhere:** expenditure, appointments, staff discipline, public representations, binding contracts, sensitive-data access, regulated practice and exceptions to policy are not conferred by this description.
+- **Escalation:** promptly raise any out-of-scope request, apparent fraud, material compliance issue, conflict of interest, safeguarding concern, serious incident or suspected privacy/security breach through the designated authorised channel. Preserve evidence without conducting an unauthorised investigation.
+
+## 06 · Qualifications, professional capabilities and selection
+
+Reservation/customer-service capability, precise data entry, calm handling of changes and basic financial-process awareness.
+
+Selection should assess role-relevant work samples, demonstrable judgement, communication, accurate recordkeeping, ethical conduct and ability to follow safe and lawful procedures. Equivalent experience should be considered where proportionate and lawful. Verify licences, certifications and safeguarding clearances **only if actually required** for assigned functions. No claimed alias is an appointment, qualification or employment history.
+
+## 07 · Performance indicators and review evidence
+
+| Proposed indicator | Evidence and review approach |
+|---|---|
+| Booking error and duplicate rate | Compare dated records against the approved work brief or acceptance standard, examine exceptions and review monthly or per service cycle. |
+| Confirmation timeliness | Sample the relevant completed deliverables, record corrections and confirm independently resolved exceptions. |
+| Unresolved payment or capacity exceptions | Examine trend, consent/compliance records and follow-up to determine whether corrective actions were effective. |
+
+**No numerical target is implied.** The supervisor and Human & Employment Resources must agree measure definitions, denominators, review period and realistic thresholds after staffing, resources and initial baselines are confirmed. Safety, fair treatment and record integrity must not be sacrificed for speed.
+
+## 08 · Risks, safeguarding, professional conduct and assurance
+
+- **Principal role-specific risks:** Overselling, fraud, lost payments and private guest-data leakage.
+- **Controls:** follow authorised hazard assessments, privacy and confidentiality rules, consent and accessibility procedures, anti-harassment requirements and appropriate incident escalation.
+- **Segregation of duties:** do not self-approve high-risk transactions, assessments or exceptions where independent review is required. Retain decision provenance and decline instructions that would conceal a material risk.
+- **Safe delivery:** use appropriate training, equipment and personal protective measures. Halt or report work that presents an imminent safety concern under applicable emergency procedures; seek qualified assistance for regulated or emergency activities.
+
+## 09 · Systems, tools and information stewardship
+
+Reservation system, event capacity grid, approved payments portal and confirmation templates.
+
+Request only role-appropriate access. Use approved organisation-controlled systems, recorded custody and auditable storage. Do not move private, commercially sensitive, student, patient or employment information to unapproved devices or messaging channels.
+
+## 10 · Learning, handover and employment conditions
+
+- **Induction focus:** core processes described in §03, specialist tools in §09 and the occupational risks in §08.
+- **Continuing development:** refresh technical methods, quality expectations and relevant professional requirements; incorporate independently validated corrective actions into work instructions.
+- **Handover:** maintain enough dated evidence for a trained successor to continue work without relying on informal personal knowledge.
+- **Employment conditions:** duties and seniority here do not define pay, benefits, grade, weekly hours, attendance days, work location, contractor/employee status or travel entitlements. Set these in the applicable approved appointment or service contract and law. No role requires uninterrupted work simply because accommodation or equipment is provided.
+
+## 11 · Governance, approval and revision control
+
+**Prepared as an operational draft; NOT adopted or effective.** Review sequence: chart owner → immediate supervisor / function specialist → Human & Employment Resources → legal, audit, finance, safety or academic specialist as needed → authorised approving office. Acknowledgement of receipt is not a substitute for a contract or delegated authority. Approval names, dates and signatures are not fabricated.
+
+- **Source:** [Koware organisational chart](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt), line **66** (1-based).
+- **Related chart lines:** parent **64**; direct reports **none**.
+- **Source snapshot:** Earlier branch cited blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`. The source was independently checked against the live chart on 2026-11-13; recheck the chart at merge/adoption. The earlier-branch SHA is a historical reference, not a claim about the current source revision.
+
+| Version | Date | Material change |
 |---|---|---|
-| Departmental review | | |
-| HR review | | |
-| Authorised approval | | |
-| Employee acknowledgement (receipt only) | | |
-
-**Status:** Draft 0.1.0 — awaiting human review.
-
-## Role-specific performance indicators
-
-- Booking accuracy and double-booking rate
-- response and confirmation turnaround
-- cancellation/refund reconciliation and customer feedback.
-Targets require workload, resource and baseline confirmation.
-
-## Position-specific authority boundary
-
-No cash retention, unauthorised refund, price variation or confirmation of unverified availability; protect payment and personal data.
-
-## Source traceability
-
-- Source chart line: 66; reports to: Events & Tours Coordinator; direct reports: None shown.
-- Source aliases are planning references only, not identity, qualification or appointment evidence.
-
-## Revision history
-
-| Version | Date | Change |
-|---|---|---|
-| 0.2.0 | 2026-11-13 | Added source traceability, reporting metadata, role-specific duties, KPIs and authority boundary |
+| 0.4.0 | 2026-11-13 | Full role-specific refactor with corrected line mapping, duties, outputs, authority, performance and source controls. |

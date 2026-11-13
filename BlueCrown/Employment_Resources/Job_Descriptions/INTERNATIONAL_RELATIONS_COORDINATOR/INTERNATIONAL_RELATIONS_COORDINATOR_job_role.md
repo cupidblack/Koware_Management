@@ -1,86 +1,124 @@
 ---
 document_id: KOWARE-JD-INTERNATIONAL_RELATIONS_COORDINATOR
-position_title: "International Relations Coordinator"
-department: "International Relations"
+position_title: International Relations Coordinator
+functional_area: International relations and partnerships
 document_type: job-description
-document_version: 0.2.0
+document_version: 0.4.0
 document_status: DRAFT_AWAITING_HUMAN_REVIEW
-reports_to: "Governing Committee"
+source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
 source_chart_branch: main
 source_chart_line: 61
-source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
+source_chart_parent_line: 4
+source_chart_heading: International Relations Coordinator
+reports_to: Governing Committee
+reports_to_role_id: KOWARE-GOV-GOVERNING_COMMITTEE
 direct_reports:
-  - "Global Partnerships Registrar"
-  - "Global Partnerships Liaison"
-source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
+- role_id: KOWARE-JD-GLOBAL_PARTNERSHIPS_REGISTRAR
+  title: Global Partnerships Registrar
+  chart_line: 62
+- role_id: KOWARE-JD-GLOBAL_PARTNERSHIPS_LIAISON
+  title: Global Partnerships Liaison
+  chart_line: 63
 approval_required: true
+review_date: '2026-11-13'
+aliases_included: false
 ---
-# International Relations Coordinator
+# International Relations Coordinator — Job Description
 
-## Position purpose
-Coordinate international institutional relationships and cross-border engagement in support of approved organisational objectives.
+**Koware Group / BlueCrown · Employment Resources · Draft v0.4.0 · 2026-11-13**
 
-## Reporting
-**Department:** International Relations  
-**Reports to:** Governing Committee  
-**Direct reports:** As explicitly shown beneath the position in the source chart; otherwise none specified.
+> **Draft status and source integrity:** This defines the role, not a named person, employment contract or authorised appointment. Chart aliases, names and the 20-day check sequence are planning metadata only; neither verifies an incumbent nor establishes working hours. All powers, employment terms, legal requirements and operating policies require the relevant authorised instrument.
 
-## Key responsibilities
-- Identify international institutions and stakeholders
-- prepare country and partner briefs and engagement plans
-- coordinate Global Partnerships Registrar and Liaison
-- support cross-border project and meeting logistics
-- flag immigration, sanctions, tax, data-transfer and reputational questions for specialist review.
+## 01 · Role purpose and expected contribution
 
-## Deliverables and performance measures
-- Accurate and timely completion of approved work plans and service commitments.
-- Complete, secure records and clear handovers.
-- Stakeholder/customer feedback and issue resolution tracked.
-- Compliance with applicable policies, safety, privacy and safeguarding requirements.
-- Supervisor-agreed measurable targets based on actual workload and resources.
+Develop legitimate cross-border relationships and safe collaboration pathways within approved diplomatic and organisational protocols.
 
-## Qualifications and experience
-International relations, diplomacy or business experience. Any required professional credential or licence must be verified before relevant duties are assigned. Chart aliases are not credential evidence.
+The principal contribution is to deliver reliable, evidence-backed work in **International relations and partnerships**, protect the interests of people affected by that work and support the next authorised decision-maker with an accurate handover.
 
-## Authority and boundaries
-No implied authority to commit funds, sign agreements, hire staff, alter policy or make unapproved public commitments. Operate within written delegation and escalate significant risks, conflicts, complaints and incidents.
+## 02 · Position placement, accountability and interfaces
 
-## Competencies and conduct
-Communication; organisation; service orientation; integrity; teamwork; judgement; accurate recordkeeping; confidentiality; respect for consent and cultural differences.
+- **Chart reporting line:** Governing Committee (source line 4).
+- **Direct reports shown in chart:** Global Partnerships Registrar (chart line 62); Global Partnerships Liaison (chart line 63)
+- **Functional area:** International relations and partnerships.
+- **Working interfaces:** the charted supervisor, dependent service owners, Human & Employment Resources, finance or records custodians when relevant, and external parties only with the permissions required for the interaction.
+- **Reporting interpretation:** The chart places this function under the Governing Committee; lawful authority remains defined by governing instruments and delegations.
 
-## Safety, privacy and employment conditions
-Follow site-specific safety and incident procedures and protect personal and commercial information. Hours, location, travel, benefits and other terms are governed by approved contract and policy.
+## 03 · Specific duties and operational accountabilities
 
-## Review and approval
-Performance is reviewed against agreed outcomes, quality and conduct. Induction and role-specific training must be completed before independent duties.
+- Maintain a country and institution engagement strategy tied to approved objectives.
+- Research partner legitimacy, sanctions, regulatory and cultural context with specialists.
+- Coordinate formal correspondence and international meetings.
+- Review draft cooperation scopes and request legal, privacy and export-control screening.
+- Oversee Global Partnerships Registrar and Liaison work plans and records.
+- Provide briefings on protocol, translation, travel and country risks.
+- Report partnership risks and requested commitments for governance decision.
 
-| Approval | Name/signature | Date |
+### Operating cadence
+
+- **Each assignment or service cycle:** check the authorising brief and current risk controls, complete the relevant duties above, and record decisions and exceptions using partner due diligence log, country risk register and correspondence archive.
+- **Weekly or at a suitable operational interval:** reconcile outstanding items, confirm responsible owners and hand over incomplete actions with dates and supporting evidence.
+- **Monthly, milestone or event-driven:** provide a concise supervisor-ready review of the outputs below, with performance evidence, lessons and unresolved material risks. The actual reporting cadence must be authorised for the service.
+
+## 04 · Required deliverables and record controls
+
+- International engagement map and risk briefs.
+- Reviewed partnership proposal pipeline.
+- Cross-border meeting and decision record.
+
+Each deliverable must identify its responsible owner, period or case, source evidence, revision or approval status, access classification and next action. Maintain retention and transfer practices under approved rules, including a clear correction history where records can affect legal, financial, academic, safety or personal rights.
+
+## 05 · Responsibility, decision rights and boundaries
+
+- **Responsible for:** the role-specific work and deliverables in §§03–04, performing documented checks and alerting the relevant supervisor to problems.
+- **Routine discretion:** sequence assigned tasks and propose solutions only within competence, safety procedures and a written delegation where one exists.
+- **Specific limits:** No diplomatic status, visa or immigration promises, treaty-making authority or signature on behalf of Koware by title.
+- **Approval reserved elsewhere:** expenditure, appointments, staff discipline, public representations, binding contracts, sensitive-data access, regulated practice and exceptions to policy are not conferred by this description.
+- **Escalation:** promptly raise any out-of-scope request, apparent fraud, material compliance issue, conflict of interest, safeguarding concern, serious incident or suspected privacy/security breach through the designated authorised channel. Preserve evidence without conducting an unauthorised investigation.
+
+## 06 · Qualifications, professional capabilities and selection
+
+International programme or partnership experience, intercultural communication, due diligence and formal protocol literacy.
+
+Selection should assess role-relevant work samples, demonstrable judgement, communication, accurate recordkeeping, ethical conduct and ability to follow safe and lawful procedures. Equivalent experience should be considered where proportionate and lawful. Verify licences, certifications and safeguarding clearances **only if actually required** for assigned functions. No claimed alias is an appointment, qualification or employment history.
+
+## 07 · Performance indicators and review evidence
+
+| Proposed indicator | Evidence and review approach |
+|---|---|
+| Due diligence completeness | Compare dated records against the approved work brief or acceptance standard, examine exceptions and review monthly or per service cycle. |
+| Timely approval routing of international proposals | Sample the relevant completed deliverables, record corrections and confirm independently resolved exceptions. |
+| Quality of follow-up and risk escalation | Examine trend, consent/compliance records and follow-up to determine whether corrective actions were effective. |
+
+**No numerical target is implied.** The supervisor and Human & Employment Resources must agree measure definitions, denominators, review period and realistic thresholds after staffing, resources and initial baselines are confirmed. Safety, fair treatment and record integrity must not be sacrificed for speed.
+
+## 08 · Risks, safeguarding, professional conduct and assurance
+
+- **Principal role-specific risks:** Political exposure, sanctions risks, travel safety and cross-border data transfer.
+- **Controls:** follow authorised hazard assessments, privacy and confidentiality rules, consent and accessibility procedures, anti-harassment requirements and appropriate incident escalation.
+- **Segregation of duties:** do not self-approve high-risk transactions, assessments or exceptions where independent review is required. Retain decision provenance and decline instructions that would conceal a material risk.
+- **Safe delivery:** use appropriate training, equipment and personal protective measures. Halt or report work that presents an imminent safety concern under applicable emergency procedures; seek qualified assistance for regulated or emergency activities.
+
+## 09 · Systems, tools and information stewardship
+
+Partner due diligence log, country risk register and correspondence archive.
+
+Request only role-appropriate access. Use approved organisation-controlled systems, recorded custody and auditable storage. Do not move private, commercially sensitive, student, patient or employment information to unapproved devices or messaging channels.
+
+## 10 · Learning, handover and employment conditions
+
+- **Induction focus:** core processes described in §03, specialist tools in §09 and the occupational risks in §08.
+- **Continuing development:** refresh technical methods, quality expectations and relevant professional requirements; incorporate independently validated corrective actions into work instructions.
+- **Handover:** maintain enough dated evidence for a trained successor to continue work without relying on informal personal knowledge.
+- **Employment conditions:** duties and seniority here do not define pay, benefits, grade, weekly hours, attendance days, work location, contractor/employee status or travel entitlements. Set these in the applicable approved appointment or service contract and law. No role requires uninterrupted work simply because accommodation or equipment is provided.
+
+## 11 · Governance, approval and revision control
+
+**Prepared as an operational draft; NOT adopted or effective.** Review sequence: chart owner → immediate supervisor / function specialist → Human & Employment Resources → legal, audit, finance, safety or academic specialist as needed → authorised approving office. Acknowledgement of receipt is not a substitute for a contract or delegated authority. Approval names, dates and signatures are not fabricated.
+
+- **Source:** [Koware organisational chart](https://github.com/cupidblack/Koware_Management/blob/main/Organizational_Chart_Structure-Aliased_Checks.txt), line **61** (1-based).
+- **Related chart lines:** parent **4**; direct reports **62, 63**.
+- **Source snapshot:** Earlier branch cited blob `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`. The source was independently checked against the live chart on 2026-11-13; recheck the chart at merge/adoption. The earlier-branch SHA is a historical reference, not a claim about the current source revision.
+
+| Version | Date | Material change |
 |---|---|---|
-| Departmental review | | |
-| HR review | | |
-| Authorised approval | | |
-| Employee acknowledgement (receipt only) | | |
-
-**Status:** Draft 0.1.0 — awaiting human review.
-
-## Role-specific performance indicators
-
-- Qualified engagement pipeline
-- partner follow-up completion
-- timely escalation of cross-border legal/compliance issues.
-Targets require workload, resource and baseline confirmation.
-
-## Position-specific authority boundary
-
-No diplomatic representation, visa/legal advice, treaty commitment or cross-border contract signature without authority.
-
-## Source traceability
-
-- Source chart line: 61; reports to: Governing Committee; direct reports: Global Partnerships Registrar; Global Partnerships Liaison.
-- Source aliases are planning references only, not identity, qualification or appointment evidence.
-
-## Revision history
-
-| Version | Date | Change |
-|---|---|---|
-| 0.2.0 | 2026-11-13 | Added source traceability, reporting metadata, role-specific duties, KPIs and authority boundary |
+| 0.4.0 | 2026-11-13 | Full role-specific refactor with corrected line mapping, duties, outputs, authority, performance and source controls. |
