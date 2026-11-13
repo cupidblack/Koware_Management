@@ -7,6 +7,10 @@
 **Authoritative source blob SHA:** `7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8`
 **Last refactored:** 2026-11-13
 
+## Document standard
+
+- [Job Description Document Standard](./JOB_DESCRIPTION_DOCUMENT_STANDARD.md)
+
 ## Individual job descriptions
 
 - [Corporate Secretary](./Job_Descriptions/CORPORATE_SECRETARY/CORPORATE_SECRETARY_job_role.md)
