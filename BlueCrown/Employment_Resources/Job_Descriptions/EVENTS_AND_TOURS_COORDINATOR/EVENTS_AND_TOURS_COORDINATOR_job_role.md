@@ -1,0 +1,86 @@
+---
+document_id: KOWARE-JD-EVENTS_AND_TOURS_COORDINATOR
+position_title: "Events & Tours Coordinator"
+department: "Events & Tours"
+document_type: job-description
+document_version: 0.2.0
+document_status: DRAFT_AWAITING_HUMAN_REVIEW
+reports_to: "Governing Committee"
+source_chart_branch: main
+source_chart_line: 64
+source_chart_blob_sha: 7b6ed7f1c9ce4d162832f96eadb4c6140c5211f8
+direct_reports:
+  - "Community Outreach Officer"
+  - "Booking Agent"
+source_chart: Organizational_Chart_Structure-Aliased_Checks.txt
+approval_required: true
+---
+# Events & Tours Coordinator
+
+## Position purpose
+Plan and coordinate approved events, tours and visitor experiences with safe logistics and accountable suppliers.
+
+## Reporting
+**Department:** Events & Tours  
+**Reports to:** Governing Committee  
+**Direct reports:** As explicitly shown beneath the position in the source chart; otherwise none specified.
+
+## Key responsibilities
+- Develop event/tour briefs, itineraries, schedules, capacity plans and risk assessments
+- coordinate venues, transport, suppliers and permits
+- manage registration, staffing and contingency plans
+- coordinate Community Outreach Officer and Booking Agent
+- close activities with attendance, feedback, incident and supplier records.
+
+## Deliverables and performance measures
+- Accurate and timely completion of approved work plans and service commitments.
+- Complete, secure records and clear handovers.
+- Stakeholder/customer feedback and issue resolution tracked.
+- Compliance with applicable policies, safety, privacy and safeguarding requirements.
+- Supervisor-agreed measurable targets based on actual workload and resources.
+
+## Qualifications and experience
+Events, tourism or hospitality experience. Any required professional credential or licence must be verified before relevant duties are assigned. Chart aliases are not credential evidence.
+
+## Authority and boundaries
+No implied authority to commit funds, sign agreements, hire staff, alter policy or make unapproved public commitments. Operate within written delegation and escalate significant risks, conflicts, complaints and incidents.
+
+## Competencies and conduct
+Communication; organisation; service orientation; integrity; teamwork; judgement; accurate recordkeeping; confidentiality; respect for consent and cultural differences.
+
+## Safety, privacy and employment conditions
+Follow site-specific safety and incident procedures and protect personal and commercial information. Hours, location, travel, benefits and other terms are governed by approved contract and policy.
+
+## Review and approval
+Performance is reviewed against agreed outcomes, quality and conduct. Induction and role-specific training must be completed before independent duties.
+
+| Approval | Name/signature | Date |
+|---|---|---|
+| Departmental review | | |
+| HR review | | |
+| Authorised approval | | |
+| Employee acknowledgement (receipt only) | | |
+
+**Status:** Draft 0.1.0 — awaiting human review.
+
+## Role-specific performance indicators
+
+- On-time readiness and delivery
+- booking/budget accuracy and supplier performance
+- participant feedback, safety and closeout completeness.
+Targets require workload, resource and baseline confirmation.
+
+## Position-specific authority boundary
+
+No event confirmation, travel sale, permit representation or unbudgeted commitment without approval.
+
+## Source traceability
+
+- Source chart line: 64; reports to: Governing Committee; direct reports: Community Outreach Officer; Booking Agent.
+- Source aliases are planning references only, not identity, qualification or appointment evidence.
+
+## Revision history
+
+| Version | Date | Change |
+|---|---|---|
+| 0.2.0 | 2026-11-13 | Added source traceability, reporting metadata, role-specific duties, KPIs and authority boundary |
